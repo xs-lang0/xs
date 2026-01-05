@@ -3375,9 +3375,12 @@ static Value *eval_binop(Interp *i, Node *n) {
         if (op[0]=='*' && op[1]=='\0') {
             result = xs_safe_mul(a, b); goto done;
         }
-        if (op[0]=='/' && op[1]=='\0') { result=b?xs_int(a/b):xs_int(0); goto done; }
+        if (op[0]=='/' && op[1]=='\0') {
+            if (!b) { xs_runtime_error(n->span, "division by zero", NULL, "cannot divide by zero"); result=value_incref(XS_NULL_VAL); goto done; }
+            result=xs_int(a/b); goto done;
+        }
         if (op[0]=='%' && op[1]=='\0') {
-            if (!b) { result=xs_int(0); goto done; }
+            if (!b) { xs_runtime_error(n->span, "modulo by zero", NULL, "cannot take remainder with divisor zero"); result=value_incref(XS_NULL_VAL); goto done; }
             int64_t r = a % b;
             if (r != 0 && ((r ^ b) < 0)) r += b; /* math modulo */
             result=xs_int(r); goto done;
@@ -3387,7 +3390,7 @@ static Value *eval_binop(Interp *i, Node *n) {
             result = xs_safe_pow(a, b); goto done;
         }
         if (op[0]=='/' && op[1]=='/') {
-            if (!b) { result=xs_int(0); goto done; }
+            if (!b) { xs_runtime_error(n->span, "division by zero", NULL, "cannot floor-divide by zero"); result=value_incref(XS_NULL_VAL); goto done; }
             int64_t q = a / b;
             if ((a ^ b) < 0 && a % b != 0) q--; /* floor toward -inf */
             result=xs_int(q); goto done;
@@ -3425,7 +3428,10 @@ static Value *eval_binop(Interp *i, Node *n) {
         if (op[0]=='+') { result=xs_float(a+b2); goto done; }
         if (op[0]=='-') { result=xs_float(a-b2); goto done; }
         if (op[0]=='*' && op[1]=='\0') { result=xs_float(a*b2); goto done; }
-        if (op[0]=='/' && op[1]=='\0') { result=b2?xs_float(a/b2):xs_float(0.0/0.0); goto done; }
+        if (op[0]=='/' && op[1]=='\0') {
+            if (b2==0.0) { xs_runtime_error(n->span, "division by zero", NULL, "cannot divide by zero"); result=value_incref(XS_NULL_VAL); goto done; }
+            result=xs_float(a/b2); goto done;
+        }
         if (op[0]=='%') { result=xs_float(fmod(a,b2)); goto done; }
         if (op[0]=='*' && op[1]=='*') { result=xs_float(pow(a,b2)); goto done; }
         if (op[0]=='/' && op[1]=='/') { result=xs_float(floor(a/b2)); goto done; }
@@ -4033,8 +4039,8 @@ Value *interp_eval(Interp *i, Node *n) {
                 if (opbuf[0]=='+') computed=xs_int(a+b);
                 else if(opbuf[0]=='-') computed=xs_int(a-b);
                 else if(opbuf[0]=='*'&&opbuf[1]=='\0') computed=xs_int(a*b);
-                else if(opbuf[0]=='/'&&opbuf[1]=='\0') computed=b?xs_int(a/b):xs_int(0);
-                else if(opbuf[0]=='%') computed=b?xs_int(a%b):xs_int(0);
+                else if(opbuf[0]=='/'&&opbuf[1]=='\0') { if(!b){xs_runtime_error(n->span,"division by zero",NULL,"cannot divide by zero");computed=value_incref(XS_NULL_VAL);}else computed=xs_int(a/b); }
+                else if(opbuf[0]=='%') { if(!b){xs_runtime_error(n->span,"modulo by zero",NULL,"cannot take remainder with divisor zero");computed=value_incref(XS_NULL_VAL);}else computed=xs_int(a%b); }
                 else if(opbuf[0]=='&') computed=xs_int(a&b);
                 else if(opbuf[0]=='|') computed=xs_int(a|b);
                 else if(opbuf[0]=='^') computed=xs_int(a^b);

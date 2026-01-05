@@ -224,8 +224,8 @@ Node *opt_constant_fold(Node *node, int *count) {
                 if      (strcmp(op, "+") == 0)  result = l + r;
                 else if (strcmp(op, "-") == 0)  result = l - r;
                 else if (strcmp(op, "*") == 0)  result = l * r;
-                else if (strcmp(op, "/") == 0 && r != 0)  result = l / r;
-                else if (strcmp(op, "%") == 0 && r != 0)  result = l % r;
+                else if (strcmp(op, "/") == 0) { if (r == 0) folded = 0; else result = l / r; }
+                else if (strcmp(op, "%") == 0) { if (r == 0) folded = 0; else result = l % r; }
                 else if (strcmp(op, "**") == 0) result = (int64_t)pow((double)l, (double)r);
                 else if (strcmp(op, "&") == 0)  result = l & r;
                 else if (strcmp(op, "|") == 0)  result = l | r;
@@ -264,7 +264,7 @@ Node *opt_constant_fold(Node *node, int *count) {
                 if      (strcmp(op, "+") == 0) result = l + r;
                 else if (strcmp(op, "-") == 0) result = l - r;
                 else if (strcmp(op, "*") == 0) result = l * r;
-                else if (strcmp(op, "/") == 0 && r != 0.0) result = l / r;
+                else if (strcmp(op, "/") == 0) { if (r == 0.0) folded = 0; else result = l / r; }
                 else if (strcmp(op, "**") == 0) result = pow(l, r);
                 else folded = 0;
                 if (folded) {
