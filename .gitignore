@@ -1,0 +1,6 @@
+*.o
+/xs
+/xs.exe
+/xs_*
+*.wasm
+/core

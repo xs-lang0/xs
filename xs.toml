@@ -1,0 +1,16 @@
+[package]
+name = "xs"
+version = "0.1.0"
+xs_version = ">=1.0"
+description = "The XS programming language"
+license = "Apache-2.0"
+authors = ["xslang9"]
+repository = "https://github.com/xslang9/xs"
+
+[dependencies]
+
+[dev-dependencies]
+
+[build]
+entry = "src/main.c"
+targets = ["native", "wasm32", "wasi"]

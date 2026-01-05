@@ -1,0 +1,8 @@
+assert((1 <=> 2) == -1, "1 <=> 2 == -1")
+assert((2 <=> 2) == 0, "2 <=> 2 == 0")
+assert((3 <=> 2) == 1, "3 <=> 2 == 1")
+assert((1.0 <=> 2.0) == -1, "float spaceship")
+assert(("a" <=> "b") == -1, "string spaceship")
+assert(("b" <=> "a") == 1, "string spaceship reverse")
+assert(("a" <=> "a") == 0, "string spaceship equal")
+println("All spaceship operator tests passed!")
