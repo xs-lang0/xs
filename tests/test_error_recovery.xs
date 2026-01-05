@@ -15,20 +15,16 @@ fn check(cond, label) {
     }
 }
 
--- === 1. Division by zero returns 0 (not an exception) ===
--- Integer division by zero produces 0 in this interpreter
+-- === 1. Division by zero produces runtime error and null ===
 let div0_result = 1 / 0
-check(div0_result == 0, "int div by zero returns 0")
+check(div0_result == null, "int div by zero returns null")
 
--- Float division by zero produces special values
 let fdiv_pos = 1.0 / 0.0
 let fdiv_neg = -1.0 / 0.0
 let fdiv_nan = 0.0 / 0.0
-check(type(fdiv_pos) == "float", "float div by zero is float")
-check(type(fdiv_neg) == "float", "neg float div by zero is float")
-check(type(fdiv_nan) == "float", "0/0 float is float")
--- NaN != NaN
-check(fdiv_nan != fdiv_nan, "NaN != NaN")
+check(fdiv_pos == null, "float div by zero returns null")
+check(fdiv_neg == null, "neg float div by zero returns null")
+check(fdiv_nan == null, "0/0 returns null")
 
 -- === 2. Throw string is catchable ===
 var caught_str = null

@@ -122,7 +122,8 @@ assert_eq(math.factorial(5), 120, "factorial(5)")
 assert_eq(math.factorial(0), 1, "factorial(0)")
 
 -- is_nan / is_inf
-assert_true(math.is_nan(0.0 / 0.0), "is_nan(0/0)")
+-- 0.0/0.0 is now a runtime error, so test is_nan with math.nan instead
+assert_true(math.is_nan(math.nan), "is_nan(math.nan)")
 assert_false(math.is_nan(1.0), "is_nan(1.0)")
 assert_true(math.is_inf(math.inf), "is_inf(inf)")
 assert_false(math.is_inf(1.0), "is_inf(1.0)")

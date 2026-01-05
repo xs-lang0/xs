@@ -47,17 +47,17 @@ check(0 % 1 == 0, "zero mod one")
 check(5 % 5 == 0, "n mod n is 0")
 check(1 % 3 == 1, "small mod large")
 
--- === 6. Float special values ===
+-- === 6. Division by zero produces null (runtime error) ===
 let inf = 1.0 / 0.0
 let neg_inf = -1.0 / 0.0
 let nan_val = 0.0 / 0.0
 
-check(type(inf) == "float", "infinity is float")
-check(type(neg_inf) == "float", "neg infinity is float")
-check(type(nan_val) == "float", "NaN is float")
+check(inf == null, "float div by zero gives null")
+check(neg_inf == null, "neg float div by zero gives null")
+check(nan_val == null, "0/0 gives null")
 
--- NaN is not equal to itself
-check(nan_val != nan_val, "NaN != NaN")
+let int_div0 = 1 / 0
+check(int_div0 == null, "int div by zero gives null")
 
 -- === 7. Negative zero ===
 let neg_zero = -0.0
