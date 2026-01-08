@@ -91,11 +91,6 @@ static char ladvance(Lexer *l) {
     return ch;
 }
 
-static int lmatch(Lexer *l, char expected) {
-    if (l->source[l->pos] == expected) { ladvance(l); return 1; }
-    return 0;
-}
-
 static Span make_span(Lexer *l, int sl, int sc, int sp) {
     Span s;
     s.file     = l->filename;
@@ -579,7 +574,7 @@ static Token lex_ident(Lexer *l, int sl, int sc, int sp) {
                 char styles_copy[256];
                 int style_len = (int)strlen(styles_str);
                 if (style_len > 250) style_len = 250;
-                strncpy(styles_copy, styles_str, style_len); styles_copy[style_len] = '\0';
+                memcpy(styles_copy, styles_str, style_len); styles_copy[style_len] = '\0';
                 char *tok2 = strtok(styles_copy, ";");
                 while (tok2) {
                     /* trim leading whitespace */

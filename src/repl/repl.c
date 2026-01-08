@@ -119,17 +119,7 @@ static const char *xs_modules[] = {
     NULL
 };
 
-static int is_keyword(const char *word) {
-    for (int i = 0; xs_keywords[i]; i++)
-        if (strcmp(xs_keywords[i], word) == 0) return 1;
-    return 0;
-}
 
-static int is_builtin(const char *word) {
-    for (int i = 0; xs_builtins[i]; i++)
-        if (strcmp(xs_builtins[i], word) == 0) return 1;
-    return 0;
-}
 
 static void colorize_line(const char *line, char *out, size_t outsz) {
     diag_colorize_line(line, out, outsz);
@@ -487,7 +477,7 @@ static char *read_line_with_completion(const char *prompt, Interp *interp, Histo
                 if (seq[1] == 'A' && hist) {
                     if (hist_idx > 0) {
                         if (hist_idx == hist->count) {
-                            strncpy(saved_line, buf, sizeof(saved_line) - 1);
+                            memcpy(saved_line, buf, sizeof(saved_line) - 1);
                             saved_line[sizeof(saved_line) - 1] = '\0';
                         }
                         hist_idx--;

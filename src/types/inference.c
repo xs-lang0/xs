@@ -802,14 +802,6 @@ static void ntmap_set(NodeTypeMap *m, Node *node, RType rt) {
     m->len++;
 }
 
-static RType *ntmap_get(NodeTypeMap *m, int node_id) {
-    for (int i = 0; i < m->len; i++) {
-        if (m->entries[i].node_id == node_id)
-            return &m->entries[i].rtype;
-    }
-    return NULL;
-}
-
 /*
  * constraint gen context
  */

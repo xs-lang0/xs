@@ -1075,35 +1075,32 @@ int main(int argc, char **argv) {
                 node_free(prog);
 
             } else {
-                typedef struct { char paths[4096][512]; int count; } FileList;
+                typedef struct { char paths[4096][PATH_MAX]; int count; } FileList;
                 FileList *fl = (FileList *)xs_calloc(1, sizeof(FileList));
 
-                struct { char dir[512]; } stack[256];
+                struct { char dir[PATH_MAX]; } stack[256];
                 int sp = 0;
                 const char *scan_root = is_directory ? sub_arg(0) : ".";
-                strncpy(stack[sp].dir, scan_root, sizeof(stack[sp].dir));
-                stack[sp].dir[sizeof(stack[sp].dir)-1] = '\0';
+                snprintf(stack[sp].dir, sizeof(stack[sp].dir), "%s", scan_root);
                 sp++;
 
                 while (sp > 0 && fl->count < 4096) {
                     sp--;
-                    char cur_dir[512];
-                    strncpy(cur_dir, stack[sp].dir, sizeof(cur_dir));
-                    cur_dir[sizeof(cur_dir)-1] = '\0';
+                    char cur_dir[PATH_MAX];
+                    snprintf(cur_dir, sizeof(cur_dir), "%s", stack[sp].dir);
                     DIR *d = opendir(cur_dir);
                     if (!d) continue;
                     struct dirent *ent;
                     while ((ent = readdir(d)) != NULL && fl->count < 4096) {
                         if (ent->d_name[0] == '.') continue;
-                        char fullpath[512];
-                        snprintf(fullpath, sizeof(fullpath), "%s/%s", cur_dir, ent->d_name);
+                        char fullpath[PATH_MAX];
+                        snprintf(fullpath, sizeof(fullpath), "%.*s/%s", (int)(sizeof(fullpath) - 258), cur_dir, ent->d_name);
 
                         DIR *sub_d = opendir(fullpath);
                         if (sub_d) {
                             closedir(sub_d);
                             if (sp < 256) {
-                                strncpy(stack[sp].dir, fullpath, sizeof(stack[sp].dir));
-                                stack[sp].dir[sizeof(stack[sp].dir)-1] = '\0';
+                                snprintf(stack[sp].dir, sizeof(stack[sp].dir), "%s", fullpath);
                                 sp++;
                             }
                             continue;
@@ -1118,8 +1115,7 @@ int main(int argc, char **argv) {
                         else if (strstr(ent->d_name, pattern) != NULL) match = 1;
 
                         if (match) {
-                            strncpy(fl->paths[fl->count], fullpath, sizeof(fl->paths[fl->count]));
-                            fl->paths[fl->count][sizeof(fl->paths[fl->count])-1] = '\0';
+                            snprintf(fl->paths[fl->count], sizeof(fl->paths[fl->count]), "%s", fullpath);
                             fl->count++;
                         }
                     }
@@ -1167,8 +1163,6 @@ int main(int argc, char **argv) {
                             const char *display = strrchr(tpath, '/');
                             display = display ? display + 1 : tpath;
 
-                            clock_t t_end_parse = clock();
-                            double elapsed_parse = (double)(t_end_parse - t_start) / CLOCKS_PER_SEC;
                             printf("  %s (%d test functions)\n", display, tl2.cnt);
 
                             for (int k = 0; k < tl2.cnt; k++) {
@@ -1262,33 +1256,31 @@ int main(int argc, char **argv) {
             printf("Running benchmarks...\n\n");
 
             {
-                typedef struct { char paths[4096][512]; int count; } FileList;
+                typedef struct { char paths[4096][PATH_MAX]; int count; } FileList;
                 FileList *fl = (FileList *)xs_calloc(1, sizeof(FileList));
 
-                struct { char dir[512]; } stack[256];
+                struct { char dir[PATH_MAX]; } stack[256];
                 int sp = 0;
-                strncpy(stack[sp].dir, ".", sizeof(stack[sp].dir));
+                snprintf(stack[sp].dir, sizeof(stack[sp].dir), "%s", ".");
                 sp++;
 
                 while (sp > 0 && fl->count < 4096) {
                     sp--;
-                    char cur_dir[512];
-                    strncpy(cur_dir, stack[sp].dir, sizeof(cur_dir));
-                    cur_dir[sizeof(cur_dir)-1] = '\0';
+                    char cur_dir[PATH_MAX];
+                    snprintf(cur_dir, sizeof(cur_dir), "%s", stack[sp].dir);
                     DIR *d = opendir(cur_dir);
                     if (!d) continue;
                     struct dirent *ent;
                     while ((ent = readdir(d)) != NULL && fl->count < 4096) {
                         if (ent->d_name[0] == '.') continue;
-                        char fullpath[512];
-                        snprintf(fullpath, sizeof(fullpath), "%s/%s", cur_dir, ent->d_name);
+                        char fullpath[PATH_MAX];
+                        snprintf(fullpath, sizeof(fullpath), "%.*s/%s", (int)(sizeof(fullpath) - 258), cur_dir, ent->d_name);
 
                         DIR *sub_d = opendir(fullpath);
                         if (sub_d) {
                             closedir(sub_d);
                             if (sp < 256) {
-                                strncpy(stack[sp].dir, fullpath, sizeof(stack[sp].dir));
-                                stack[sp].dir[sizeof(stack[sp].dir)-1] = '\0';
+                                snprintf(stack[sp].dir, sizeof(stack[sp].dir), "%s", fullpath);
                                 sp++;
                             }
                             continue;
@@ -1303,8 +1295,7 @@ int main(int argc, char **argv) {
                         else if (strstr(ent->d_name, pattern) != NULL) match = 1;
 
                         if (match) {
-                            strncpy(fl->paths[fl->count], fullpath, sizeof(fl->paths[fl->count]));
-                            fl->paths[fl->count][sizeof(fl->paths[fl->count])-1] = '\0';
+                            snprintf(fl->paths[fl->count], sizeof(fl->paths[fl->count]), "%s", fullpath);
                             fl->count++;
                         }
                     }

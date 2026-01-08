@@ -105,8 +105,8 @@ static int ty_kind_canonical(const XsType *t) {
 
 int ty_equal(const XsType *a, const XsType *b) {
     if (!a || !b) return a == b;
-    int ka = ty_kind_canonical(a);
-    int kb = ty_kind_canonical(b);
+    TyKind ka = (TyKind)ty_kind_canonical(a);
+    TyKind kb = (TyKind)ty_kind_canonical(b);
     if (ka == TY_DYN || kb == TY_DYN) return 1;
     if (ka != kb) return 0;
     if (ka != a->kind || kb != b->kind) return 1;
