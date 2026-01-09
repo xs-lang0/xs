@@ -173,7 +173,7 @@ release: LDFLAGS += -flto -s
 release: clean $(TARGET)
 
 test: $(TARGET)
-	@bash tests/run_smoke.sh
+	@bash tests/run.sh
 
 install: release
 	install -m 755 $(TARGET) /usr/local/bin/xs

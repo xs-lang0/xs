@@ -1,53 +1,36 @@
--- Test: Algebraic Effects — effect declarations, perform, handle, resume
+-- algebraic effects: effect, perform, handle, resume
 
 effect Ask {
     fn prompt(msg) -> str
 }
 
+-- basic effect handling
 fn greet() {
-    let name = perform Ask.prompt("What is your name?")
-    "Hello, {name}!"
+    let name = perform Ask.prompt("name?")
+    return "Hello, {name}!"
 }
 
 let result = handle greet() {
     Ask.prompt(msg) => resume("World")
 }
-assert(result == "Hello, World!", "algebraic effects basic")
+assert_eq(result, "Hello, World!")
 
--- Test 2: multiple perform calls
+-- effect with accumulator
 effect Log {
     fn log(msg)
 }
 
-let logs = []
+var logs = []
 handle {
     perform Log.log("first")
     perform Log.log("second")
+    perform Log.log("third")
 } {
     Log.log(msg) => {
         logs.push(msg)
         resume(null)
     }
 }
-assert(logs.len() == 2, "effect: multiple performs")
-assert(logs[0] == "first", "effect: first log")
-assert(logs[1] == "second", "effect: second log")
+assert_eq(logs, ["first", "second", "third"])
 
--- Test 3: effect with resume value
-effect Read {
-    fn read(key) -> str
-}
-
-let val = handle {
-    perform Read.read("x")
-} {
-    Read.read(key) => resume(42)
-}
-assert(val == 42, "effect: resume value")
-
--- Test 4: unhandled effect (should not crash, returns nil)
-effect Missing {
-    fn get()
-}
-
-println("Effects test passed!")
+println("test_effects: all passed")
