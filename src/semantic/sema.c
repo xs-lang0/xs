@@ -9,27 +9,37 @@
 #include "semantic/symtable.h"
 #include "semantic/typecheck.h"
 
-#define BIND_MAX 2048
+/* growable bind stack */
 typedef struct { const char *name; int mutable; } Bind;
-static Bind  g_binds[BIND_MAX];
+static Bind *g_binds = NULL;
 static int   g_nbinds = 0;
+static int   g_binds_cap = 0;
 static void  bind_push(const char *n, int m) {
-    if (g_nbinds < BIND_MAX) { g_binds[g_nbinds].name = n; g_binds[g_nbinds++].mutable = m; }
+    if (g_nbinds >= g_binds_cap) {
+        g_binds_cap = g_binds_cap ? g_binds_cap * 2 : 64;
+        g_binds = realloc(g_binds, g_binds_cap * sizeof(Bind));
+    }
+    g_binds[g_nbinds].name = n;
+    g_binds[g_nbinds++].mutable = m;
 }
 static int   bind_is_mut(const char *n) {
     for (int i = g_nbinds-1; i >= 0; i--)
         if (g_binds[i].name && strcmp(g_binds[i].name, n) == 0) return g_binds[i].mutable;
-    return 1; /* default: mutable */
+    return 1;
 }
 static int   bind_save(void)      { return g_nbinds; }
 static void  bind_restore(int s)  { g_nbinds = s; }
 
-/* defined-names set (orphan rule) */
-#define DEFNAME_MAX 512
-static const char *g_defnames[DEFNAME_MAX];
-static int         g_ndefnames = 0;
+/* growable defined-names set */
+static const char **g_defnames = NULL;
+static int          g_ndefnames = 0;
+static int          g_defnames_cap = 0;
 static void defname_add(const char *n) {
-    if (g_ndefnames < DEFNAME_MAX) g_defnames[g_ndefnames++] = n;
+    if (g_ndefnames >= g_defnames_cap) {
+        g_defnames_cap = g_defnames_cap ? g_defnames_cap * 2 : 32;
+        g_defnames = realloc(g_defnames, g_defnames_cap * sizeof(char *));
+    }
+    g_defnames[g_ndefnames++] = n;
 }
 static int  defname_has(const char *n) {
     for (int i = 0; i < g_ndefnames; i++)
@@ -37,28 +47,32 @@ static int  defname_has(const char *n) {
     return 0;
 }
 
-
-/* impl registry */
-#define IMPL_MAX 256
+/* growable impl registry */
 typedef struct { const char *trait_name; const char *type_name; } ImplRec;
-static ImplRec g_impls[IMPL_MAX];
-static int     g_nimpls = 0;
+static ImplRec *g_impls = NULL;
+static int      g_nimpls = 0;
+static int      g_impls_cap = 0;
 static void impl_add(const char *tr, const char *ty) {
-    if (g_nimpls < IMPL_MAX) { g_impls[g_nimpls].trait_name=tr; g_impls[g_nimpls++].type_name=ty; }
+    if (g_nimpls >= g_impls_cap) {
+        g_impls_cap = g_impls_cap ? g_impls_cap * 2 : 32;
+        g_impls = realloc(g_impls, g_impls_cap * sizeof(ImplRec));
+    }
+    g_impls[g_nimpls].trait_name = tr;
+    g_impls[g_nimpls++].type_name = ty;
 }
 
-/* trait registry */
-#define TRAIT_MAX 128
+/* growable trait registry */
 typedef struct {
     const char  *name;
     const char **methods;     int n_methods;
-    int         *method_param_counts; /* param count per method, -1 = unknown */
-    const char **method_ret_types;    /* return type name per method, NULL = unknown */
+    int         *method_param_counts;
+    const char **method_ret_types;
     const char **assoc_types; int n_assoc;
-    Node       **method_nodes;        /* FN_DECL nodes for trait methods */
+    Node       **method_nodes;
 } TraitInfo;
-static TraitInfo g_traits[TRAIT_MAX];
-static int       g_ntraits = 0;
+static TraitInfo *g_traits = NULL;
+static int        g_ntraits = 0;
+static int        g_traits_cap = 0;
 
 static int g_in_pure = 0;
 
@@ -271,7 +285,11 @@ static void collect_decls(SemaCtx *ctx, Node *prog) {
         if (s->tag == NODE_ENUM_DECL    && s->enum_decl.name)   defname_add(s->enum_decl.name);
         if (s->tag == NODE_TRAIT_DECL   && s->trait_decl.name) {
             defname_add(s->trait_decl.name);
-            if (g_ntraits < TRAIT_MAX) {
+            {
+                if (g_ntraits >= g_traits_cap) {
+                    g_traits_cap = g_traits_cap ? g_traits_cap * 2 : 16;
+                    g_traits = realloc(g_traits, g_traits_cap * sizeof(TraitInfo));
+                }
                 TraitInfo *ti = &g_traits[g_ntraits++];
                 ti->name        = s->trait_decl.name;
                 ti->methods     = (const char **)s->trait_decl.method_names;
