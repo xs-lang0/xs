@@ -465,7 +465,7 @@ static Token lex_number(Lexer *l, int sl, int sc, int sp) {
             }
             char *s=sb_finish(&sb);
             errno = 0;
-            t.ival = strtoll(s, NULL, 8);
+            t.ival = strtoll(s+2, NULL, 8);
             if (errno == ERANGE) { t.kind = TK_BIGINT; t.sval = xs_strdup(s); }
             else { t.kind = TK_INT; }
             free(s); t.span=make_span(l,sl,sc,sp); return t;

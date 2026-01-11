@@ -1,50 +1,51 @@
 -- VM backend tests (run with: xs --vm tests/test_vm.xs)
 
 -- arithmetic
-assert(6 * 7 == 42, "mul")
-assert(10 + 20 == 30, "add")
-assert(100 - 37 == 63, "sub")
-assert(10 / 2 == 5, "div")
-assert(10 % 3 == 1, "mod")
+assert_eq(6 * 7, 42)
+assert_eq(10 + 20, 30)
+assert_eq(100 - 37, 63)
+assert_eq(10 / 2, 5)
+assert_eq(10 % 3, 1)
+assert_eq(2 ** 10, 1024)
 
 -- strings
-assert("hello" ++ " " ++ "world" == "hello world", "concat")
+assert_eq("hello" ++ " " ++ "world", "hello world")
 let name = "vm"
-assert("hi {name}" == "hi vm", "interp")
+assert_eq("hi {name}", "hi vm")
 
 -- variables
 let x = 42
-assert(x == 42, "let")
+assert_eq(x, 42)
 var y = 0
 y = y + 1
-assert(y == 1, "var mut")
+assert_eq(y, 1)
 
 -- control flow
 var sum = 0
 for i in 0..10 { sum = sum + i }
-assert(sum == 45, "for loop")
+assert_eq(sum, 45)
 
 var w = 0
 while w < 5 { w = w + 1 }
-assert(w == 5, "while")
+assert_eq(w, 5)
 
 -- functions and closures
 fn fib(n) {
     if n <= 1 { return n }
     return fib(n - 1) + fib(n - 2)
 }
-assert(fib(15) == 610, "fib")
+assert_eq(fib(15), 610)
 
 fn make_adder(n) {
     return fn(x) { return n + x }
 }
 let add10 = make_adder(10)
-assert(add10(5) == 15, "closure")
+assert_eq(add10(5), 15)
 
 -- arrays
 let arr = [1, 2, 3, 4, 5]
-assert(len(arr) == 5, "array len")
-assert(arr[0] == 1, "array index")
+assert_eq(len(arr), 5)
+assert_eq(arr[0], 1)
 
 -- match
 let r = match 3 {
@@ -53,12 +54,12 @@ let r = match 3 {
     3 => "three"
     _ => "other"
 }
-assert(r == "three", "match")
+assert_eq(r, "three")
 
 -- structs
 struct Vec2 { x, y }
 let v = Vec2 { x: 1, y: 2 }
-assert(v.x == 1, "struct field")
+assert_eq(v.x, 1)
 
 -- enums
 enum Dir { North, South, East, West }
@@ -72,20 +73,20 @@ try {
 } catch e {
     caught = e
 }
-assert(caught == "vm error", "try/catch")
+assert_eq(caught, "vm error")
 
 -- compound assignment
 var n = 10
 n += 5
-assert(n == 15, "+=")
+assert_eq(n, 15)
 n -= 3
-assert(n == 12, "-=")
+assert_eq(n, 12)
 n *= 2
-assert(n == 24, "*=")
+assert_eq(n, 24)
 
 -- destructuring
 let (a, b) = (10, 20)
-assert(a == 10, "destr a")
-assert(b == 20, "destr b")
+assert_eq(a, 10)
+assert_eq(b, 20)
 
 println("test_vm: all passed")

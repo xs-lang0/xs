@@ -82,7 +82,7 @@ assert(true is bool, "is bool")
 -- numeric literals
 assert_eq(0xFF, 255)
 assert_eq(0b1010, 10)
--- assert_eq(0o17, 15) -- TODO: octal literals broken in lexer
+assert_eq(0o17, 15)
 assert_eq(1_000_000, 1000000)
 
 -- division by zero

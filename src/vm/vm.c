@@ -207,6 +207,24 @@ static Value *vm_assert(Interp *interp, Value **args, int argc) {
     return xs_null();
 }
 
+static Value *vm_assert_eq(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 2) {
+        fprintf(stderr, "xs: assert_eq requires 2 arguments\n");
+        exit(1);
+    }
+    if (!value_equal(args[0], args[1])) {
+        char *a = value_repr(args[0]);
+        char *b = value_repr(args[1]);
+        const char *msg = (argc >= 3 && args[2]->tag == XS_STR) ? args[2]->s : "";
+        fprintf(stderr, "xs: assertion failed: assert_eq(%s, %s)%s%s\n",
+                a, b, msg[0] ? " — " : "", msg);
+        free(a); free(b);
+        exit(1);
+    }
+    return xs_null();
+}
+
 static Value *vm_panic(Interp *interp, Value **args, int argc) {
     (void)interp;
     const char *msg = (argc >= 1 && args[0]->tag == XS_STR) ? args[0]->s : "panic";
@@ -595,8 +613,9 @@ static void vm_register_stdlib(VM *vm) {
     REG("cos",     vm_cos);
     REG("tan",     vm_tan);
     REG("log",     vm_log_fn);
-    REG("assert",  vm_assert);
-    REG("panic",   vm_panic);
+    REG("assert",     vm_assert);
+    REG("assert_eq",  vm_assert_eq);
+    REG("panic",      vm_panic);
     REG("exit",    vm_exit_fn);
     REG("input",   vm_input);
     REG("contains", vm_contains);
