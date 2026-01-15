@@ -442,8 +442,51 @@ static Value *builtin_array(Interp *i, Value **args, int argc) {
 }
 
 static Value *builtin_map(Interp *i, Value **args, int argc) {
-    (void)i; (void)args; (void)argc;
+    /* map() -> empty map, map(arr, fn) -> mapped array */
+    if (argc == 0) return xs_map_new();
+    if (argc >= 2 && (args[0]->tag == XS_ARRAY || args[0]->tag == XS_TUPLE) &&
+        (args[1]->tag == XS_FUNC || args[1]->tag == XS_NATIVE || args[1]->tag == XS_CLOSURE)) {
+        Value *arr = args[0], *fn = args[1];
+        Value *result = xs_array_new();
+        for (int j = 0; j < arr->arr->len; j++) {
+            Value *elem = arr->arr->items[j];
+            Value *call_args[] = { elem };
+            Value *mapped = call_value(i, fn, call_args, 1, "map");
+            array_push(result->arr, mapped);
+        }
+        return result;
+    }
     return xs_map_new();
+}
+
+static Value *builtin_filter(Interp *i, Value **args, int argc) {
+    if (argc < 2) return xs_array_new();
+    Value *arr = args[0], *fn = args[1];
+    if (arr->tag != XS_ARRAY && arr->tag != XS_TUPLE) return xs_array_new();
+    Value *result = xs_array_new();
+    for (int j = 0; j < arr->arr->len; j++) {
+        Value *elem = arr->arr->items[j];
+        Value *call_args[] = { elem };
+        Value *keep = call_value(i, fn, call_args, 1, "filter");
+        if (value_truthy(keep)) array_push(result->arr, value_incref(elem));
+        value_decref(keep);
+    }
+    return result;
+}
+
+static Value *builtin_reduce(Interp *i, Value **args, int argc) {
+    if (argc < 2) return value_incref(XS_NULL_VAL);
+    Value *arr = args[0], *fn = args[1];
+    if (arr->tag != XS_ARRAY && arr->tag != XS_TUPLE) return value_incref(XS_NULL_VAL);
+    Value *acc = (argc >= 3) ? value_incref(args[2]) : (arr->arr->len > 0 ? value_incref(arr->arr->items[0]) : value_incref(XS_NULL_VAL));
+    int start = (argc >= 3) ? 0 : 1;
+    for (int j = start; j < arr->arr->len; j++) {
+        Value *call_args[] = { acc, arr->arr->items[j] };
+        Value *next = call_value(i, fn, call_args, 2, "reduce");
+        value_decref(acc);
+        acc = next;
+    }
+    return acc;
 }
 
 static Value *builtin_keys(Interp *i, Value **args, int argc) {
@@ -3569,6 +3612,8 @@ void stdlib_register(Interp *i) {
     interp_define_native(i, "range",     builtin_range);
     interp_define_native(i, "array",     builtin_array);
     interp_define_native(i, "map",       builtin_map);
+    interp_define_native(i, "filter",    builtin_filter);
+    interp_define_native(i, "reduce",    builtin_reduce);
     interp_define_native(i, "keys",      builtin_keys);
     interp_define_native(i, "values",    builtin_values);
     interp_define_native(i, "entries",   builtin_entries);

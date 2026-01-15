@@ -36,7 +36,7 @@ static int is_builtin_name(const char *name) {
         "assert","assert_eq","panic","exit","todo","unreachable",
         "len","push","pop","keys","values","has","entries","flatten",
         "array","map","vec","sorted","copy","clone",
-        "zip","enumerate","sum","contains",
+        "zip","enumerate","sum","contains","filter","reduce",
         "starts_with","ends_with","split","join","trim",
         "to_upper","to_lower","to_string","to_int","to_float","chars","bytes",
         "replace","find","substr","format","parse_int","parse_float",
