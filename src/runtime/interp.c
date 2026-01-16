@@ -712,9 +712,13 @@ tail_call_entry: ;
                 int is_variadic = fn->variadic_flags && fn->variadic_flags[j];
                 if (is_variadic) break;
                 if (fn->param_type_names[j] && !value_matches_type(cur_args[arg_idx2], fn->param_type_names[j])) {
-                    fprintf(stderr, "xs: type error: argument %d of '%s' expected '%s', got '%s'\n",
-                            j + 1, fn->name ? fn->name : "<anonymous>",
-                            fn->param_type_names[j], value_type_str(cur_args[arg_idx2]));
+                    xs_runtime_error(i->current_span, "type mismatch", NULL,
+                        "argument %d of '%s' expected '%s', got '%s'",
+                        j + 1, fn->name ? fn->name : "<anonymous>",
+                        fn->param_type_names[j], value_type_str(cur_args[arg_idx2]));
+                    i->cf.signal = CF_PANIC;
+                    i->cf.value = xs_str("type error");
+                    break;
                 }
                 arg_idx2++;
             }
@@ -724,6 +728,13 @@ tail_call_entry: ;
             for (int j = 0; j < tc_argc; j++) value_decref(tc_args[j]);
             free(tc_args);
             tc_args = NULL; owns_args = 0;
+        }
+
+        if (i->cf.signal) {
+            pop_env(i);
+            i->depth--;
+            interp_pop_frame(i);
+            return value_incref(XS_NULL_VAL);
         }
 
         int defer_base = i->defers.len;
@@ -819,9 +830,12 @@ tail_call_entry: ;
         i->defers.len = defer_base;
 
         if (fn->ret_type_name && !value_matches_type(result, fn->ret_type_name)) {
-            fprintf(stderr, "xs: type error: function '%s' expected return type '%s', got '%s'\n",
-                    fn->name ? fn->name : "<anonymous>",
-                    fn->ret_type_name, value_type_str(result));
+            xs_runtime_error(i->current_span, "type mismatch", NULL,
+                "function '%s' expected return type '%s', got '%s'",
+                fn->name ? fn->name : "<anonymous>",
+                fn->ret_type_name, value_type_str(result));
+            i->cf.signal = CF_PANIC;
+            i->cf.value = xs_str("type error");
         }
 
         env_decref(i->env);
@@ -5281,10 +5295,11 @@ void interp_exec(Interp *i, Node *stmt) {
         Value *val = stmt->let.value ? EVAL(i, stmt->let.value) : value_incref(XS_NULL_VAL);
         if (stmt->let.type_ann && stmt->let.type_ann->name) {
             if (!value_matches_type(val, stmt->let.type_ann->name)) {
-                fprintf(stderr, "xs: type error at %s:%d:%d: expected '%s', got '%s'\n",
-                        stmt->span.file ? stmt->span.file : "<unknown>",
-                        stmt->span.line, stmt->span.col,
-                        stmt->let.type_ann->name, value_type_str(val));
+                xs_runtime_error(stmt->span, "type mismatch", NULL,
+                    "expected '%s', got '%s'",
+                    stmt->let.type_ann->name, value_type_str(val));
+                i->cf.signal = CF_PANIC;
+                i->cf.value = xs_str("type error");
             }
         }
         int mutable = (stmt->tag == NODE_VAR) || stmt->let.mutable;
@@ -5301,10 +5316,11 @@ void interp_exec(Interp *i, Node *stmt) {
         Value *val = EVAL(i, stmt->const_.value);
         if (stmt->const_.type_ann && stmt->const_.type_ann->name) {
             if (!value_matches_type(val, stmt->const_.type_ann->name)) {
-                fprintf(stderr, "xs: type error at %s:%d:%d: expected '%s', got '%s'\n",
-                        stmt->span.file ? stmt->span.file : "<unknown>",
-                        stmt->span.line, stmt->span.col,
-                        stmt->const_.type_ann->name, value_type_str(val));
+                xs_runtime_error(stmt->span, "type mismatch", NULL,
+                    "expected '%s', got '%s'",
+                    stmt->const_.type_ann->name, value_type_str(val));
+                i->cf.signal = CF_PANIC;
+                i->cf.value = xs_str("type error");
             }
         }
         env_define(i->env, stmt->const_.name, val, 0);
