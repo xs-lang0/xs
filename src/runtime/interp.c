@@ -2367,6 +2367,11 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
                     if (strcmp(method,"len")==0) return xs_int(da->len);
                     if (strcmp(method,"is_empty")==0)
                         return da->len==0?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                    if (strcmp(method,"is_full")==0) {
+                        Value *cap_v = map_get(m, "_cap");
+                        int cap = cap_v ? (int)cap_v->i : 0;
+                        return (cap > 0 && da->len >= cap)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                    }
                 }
                 /* Counter is now routed via the early goto above */
             }
