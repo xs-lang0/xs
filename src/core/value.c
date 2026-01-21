@@ -560,11 +560,19 @@ int value_cmp(Value *a, Value *b) {
         if (a->f > db) return  1;
         return 0;
     }
-    double fa = (a->tag == XS_FLOAT) ? a->f : (double)a->i;
-    double fb = (b->tag == XS_FLOAT) ? b->f : (double)b->i;
-    if (fa < fb) return -1;
-    if (fa > fb) return  1;
-    return 0;
+    if (a->tag == XS_STR && b->tag == XS_STR) {
+        return strcmp(a->s, b->s);
+    }
+    if ((a->tag == XS_INT || a->tag == XS_FLOAT) &&
+        (b->tag == XS_INT || b->tag == XS_FLOAT)) {
+        double fa = (a->tag == XS_FLOAT) ? a->f : (double)a->i;
+        double fb = (b->tag == XS_FLOAT) ? b->f : (double)b->i;
+        if (fa < fb) return -1;
+        if (fa > fb) return  1;
+        return 0;
+    }
+    /* fallback: compare by type tag */
+    return (a->tag > b->tag) - (a->tag < b->tag);
 }
 
 Value *value_copy(Value *v) {
