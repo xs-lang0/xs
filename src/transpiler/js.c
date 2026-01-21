@@ -727,6 +727,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
             sb_add(s, " catch (__e) {\n");
             for (int i = 0; i < n->try_.catch_arms.len; i++) {
                 MatchArm *arm = &n->try_.catch_arms.items[i];
+                emit_pattern_bindings(s, arm->pattern, "__e", depth + 1);
                 if (arm->body && arm->body->tag == NODE_BLOCK) {
                     emit_block_body(s, arm->body, depth + 1);
                     if (arm->body->block.expr) {
@@ -1100,9 +1101,18 @@ static void emit_pattern_bindings(SB *s, Node *pat, const char *subject, int dep
 
 /* emit block body (statements inside { }) */
 static void emit_block_body(SB *s, Node *block, int depth) {
-    if (!block || block->tag != NODE_BLOCK) return;
+    if (!block) return;
+    if (block->tag != NODE_BLOCK) {
+        emit_stmt(s, block, depth);
+        return;
+    }
     for (int i = 0; i < block->block.stmts.len; i++) {
         emit_stmt(s, block->block.stmts.items[i], depth);
+    }
+    if (block->block.expr) {
+        sb_indent(s, depth);
+        emit_expr(s, block->block.expr, depth);
+        sb_add(s, ";\n");
     }
 }
 
@@ -1662,11 +1672,20 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         emit_expr(s, n->assign.value, depth);
         sb_add(s, ";\n");
         break;
-    case NODE_EXPR_STMT:
-        sb_indent(s, depth);
-        emit_expr(s, n->expr_stmt.expr, depth);
-        sb_add(s, ";\n");
+    case NODE_EXPR_STMT: {
+        Node *inner = n->expr_stmt.expr;
+        if (inner && (inner->tag == NODE_IF || inner->tag == NODE_MATCH ||
+                      inner->tag == NODE_FOR || inner->tag == NODE_WHILE ||
+                      inner->tag == NODE_LOOP || inner->tag == NODE_TRY ||
+                      inner->tag == NODE_BLOCK)) {
+            emit_stmt(s, inner, depth);
+        } else {
+            sb_indent(s, depth);
+            emit_expr(s, inner, depth);
+            sb_add(s, ";\n");
+        }
         break;
+    }
     case NODE_BLOCK:
         sb_indent(s, depth);
         sb_add(s, "{\n");
