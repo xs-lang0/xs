@@ -708,13 +708,13 @@ static void emit_expr(SB *s, Node *n, int depth) {
     case NODE_EXPR_STMT:
         emit_expr(s, n->expr_stmt.expr, depth);
         break;
-    case NODE_NURSERY:
-    case NODE_HANDLE:
-    case NODE_DEFER:
-    case NODE_TRY:
     case NODE_WHILE:
     case NODE_FOR:
     case NODE_LOOP:
+    case NODE_TRY:
+    case NODE_NURSERY:
+    case NODE_HANDLE:
+    case NODE_DEFER:
     case NODE_BREAK:
     case NODE_CONTINUE:
     case NODE_PROGRAM:
@@ -873,9 +873,18 @@ static void emit_pattern_bindings(SB *s, Node *pat, const char *subject, int dep
 
 /* emit block body */
 static void emit_block_body(SB *s, Node *block, int depth) {
-    if (!block || block->tag != NODE_BLOCK) return;
+    if (!block) return;
+    if (block->tag != NODE_BLOCK) {
+        emit_stmt(s, block, depth);
+        return;
+    }
     for (int i = 0; i < block->block.stmts.len; i++) {
         emit_stmt(s, block->block.stmts.items[i], depth);
+    }
+    if (block->block.expr) {
+        sb_indent(s, depth);
+        emit_expr(s, block->block.expr, depth);
+        sb_add(s, ";\n");
     }
 }
 
@@ -1549,11 +1558,20 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         emit_expr(s, n->assign.value, depth);
         sb_add(s, ";\n");
         break;
-    case NODE_EXPR_STMT:
-        sb_indent(s, depth);
-        emit_expr(s, n->expr_stmt.expr, depth);
-        sb_add(s, ";\n");
+    case NODE_EXPR_STMT: {
+        Node *inner = n->expr_stmt.expr;
+        if (inner && (inner->tag == NODE_IF || inner->tag == NODE_MATCH ||
+                      inner->tag == NODE_FOR || inner->tag == NODE_WHILE ||
+                      inner->tag == NODE_LOOP || inner->tag == NODE_TRY ||
+                      inner->tag == NODE_BLOCK)) {
+            emit_stmt(s, inner, depth);
+        } else {
+            sb_indent(s, depth);
+            emit_expr(s, inner, depth);
+            sb_add(s, ";\n");
+        }
         break;
+    }
     case NODE_BLOCK:
         sb_indent(s, depth);
         sb_add(s, "{\n");
