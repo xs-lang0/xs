@@ -142,11 +142,25 @@ static void walk(SemaCtx *ctx, Node *n) {
     switch (n->tag) {
 
     case NODE_LET:
+        if (ctx->strict && n->let.name && !n->let.type_ann) {
+            Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_SEMANTIC, "S0010",
+                "missing type annotation for '%s' in strict mode", n->let.name);
+            diag_annotate(d, n->span, 1, "add a type annotation here");
+            diag_hint(d, "use 'let %s: <type> = ...'", n->let.name);
+            diag_emit(ctx->diag, d);
+        }
         if (n->let.name) bind_push(n->let.name, 0);
         if (n->let.value) walk(ctx, n->let.value);
         break;
 
     case NODE_VAR:
+        if (ctx->strict && n->let.name && !n->let.type_ann) {
+            Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_SEMANTIC, "S0010",
+                "missing type annotation for '%s' in strict mode", n->let.name);
+            diag_annotate(d, n->span, 1, "add a type annotation here");
+            diag_hint(d, "use 'var %s: <type> = ...'", n->let.name);
+            diag_emit(ctx->diag, d);
+        }
         if (n->let.name) bind_push(n->let.name, 1);
         if (n->let.value) walk(ctx, n->let.value);
         break;
@@ -168,6 +182,26 @@ static void walk(SemaCtx *ctx, Node *n) {
         break;
 
     case NODE_FN_DECL: {
+        if (ctx->strict) {
+            for (int i = 0; i < n->fn_decl.params.len; i++) {
+                Param *pm = &n->fn_decl.params.items[i];
+                if (pm->name && !pm->type_ann) {
+                    Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_SEMANTIC, "S0010",
+                        "missing type annotation for parameter '%s' in strict mode", pm->name);
+                    diag_annotate(d, pm->span, 1, "add a type annotation here");
+                    diag_hint(d, "use '%s: <type>'", pm->name);
+                    diag_emit(ctx->diag, d);
+                }
+            }
+            if (n->fn_decl.body && !n->fn_decl.ret_type) {
+                Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_SEMANTIC, "S0010",
+                    "missing return type annotation for function '%s' in strict mode",
+                    n->fn_decl.name ? n->fn_decl.name : "<anonymous>");
+                diag_annotate(d, n->span, 1, "add a return type annotation");
+                diag_hint(d, "use 'fn %s(...) -> <type>'", n->fn_decl.name ? n->fn_decl.name : "<anonymous>");
+                diag_emit(ctx->diag, d);
+            }
+        }
         int saved_pure  = g_in_pure;
         int saved_binds = bind_save();
         if (n->fn_decl.is_pure) g_in_pure++;
@@ -266,6 +300,17 @@ static void walk(SemaCtx *ctx, Node *n) {
         bind_restore(saved);
         break;
     }
+
+    case NODE_CONST:
+        if (ctx->strict && n->const_.name && !n->const_.type_ann) {
+            Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_SEMANTIC, "S0010",
+                "missing type annotation for '%s' in strict mode", n->const_.name);
+            diag_annotate(d, n->span, 1, "add a type annotation here");
+            diag_hint(d, "use 'const %s: <type> = ...'", n->const_.name);
+            diag_emit(ctx->diag, d);
+        }
+        if (n->const_.value) walk(ctx, n->const_.value);
+        break;
 
     default:
         walk_children(ctx, n);
@@ -435,9 +480,10 @@ static void check_impls(SemaCtx *ctx, Node *prog) {
     }
 }
 
-void sema_init(SemaCtx *ctx, int lenient) {
+void sema_init(SemaCtx *ctx, int lenient, int strict) {
     memset(ctx, 0, sizeof *ctx);
     ctx->lenient = lenient;
+    ctx->strict = strict;
     ctx->st = symtab_new();
     g_nbinds = 0; g_ndefnames = 0; g_nimpls = 0; g_ntraits = 0; g_in_pure = 0;
 }

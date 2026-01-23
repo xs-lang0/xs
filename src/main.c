@@ -399,6 +399,7 @@ static void usage(void) {
         "Flags:\n"
         "  --check              Type-check only, no execution\n"
         "  --lenient            Enable lenient mode\n"
+        "  --strict             Require type annotations everywhere\n"
         "  --optimize           Run AST optimizer before execution\n"
         "  --backend <interp|vm|jit>  Select execution backend\n"
         "  --vm                 Use bytecode VM (alias: --backend vm)\n"
@@ -443,7 +444,7 @@ static int watch_and_run(const char *filename, int file_arg, int argc, char **ar
             }
             diag_context_set_lenient(dctx, 1);
             SemaCtx sema;
-            sema_init(&sema, 1);
+            sema_init(&sema, 1, 0);
             sema.diag = dctx;
             int sema_errors = sema_analyze(&sema, program, filename);
             diag_render_all(dctx);
@@ -587,6 +588,7 @@ int main(int argc, char **argv) {
     if (!g_sema_cache) g_sema_cache = cache_new();
     int do_check    = 0;
     int lenient     = 0;
+    int strict      = 0;
     int do_watch    = 0;
     int do_optimize = 0;
     int emit_ir_ssa = 0;
@@ -808,6 +810,9 @@ int main(int argc, char **argv) {
                 H("--lenient",  "Flag: --lenient\n\n"
                                 "Downgrade semantic errors to warnings.\n"
                                 "Code will still execute even if the type checker flags issues.\n")
+                H("--strict",   "Flag: --strict\n\n"
+                                "Enable strict typing mode.\n"
+                                "All variable declarations and function parameters/returns must have type annotations.\n")
                 H("--no-color", "Flag: --no-color\n\n"
                                 "Disable ANSI color codes in all output.\n"
                                 "Useful for piping output or terminals without color support.\n")
@@ -1488,6 +1493,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if      (strcmp(argv[i], "--check")    == 0) do_check = 1;
         else if (strcmp(argv[i], "--lenient")  == 0) lenient  = 1;
+        else if (strcmp(argv[i], "--strict")   == 0) strict   = 1;
         else if (strcmp(argv[i], "--no-color") == 0) g_no_color = 1;
         else if (strcmp(argv[i], "--optimize") == 0) do_optimize = 1;
         else if (strcmp(argv[i], "--watch")    == 0) do_watch = 1;
@@ -1644,7 +1650,33 @@ int main(int argc, char **argv) {
                 cache_free(g_sema_cache);
                 return 1;
             }
+            if (strict || do_check) {
+                if (lenient) diag_context_set_lenient(dctx, 1);
+                SemaCtx sema;
+                sema_init(&sema, lenient, strict);
+                sema.diag = dctx;
+                int sema_errors = sema_analyze(&sema, prog, "<eval>");
+                diag_render_all(dctx);
+                sema_free(&sema);
+                if (sema_errors > 0) {
+                    fprintf(stderr, "\n%d error%s found.\n", sema_errors, sema_errors > 1 ? "s" : "");
+                    diag_context_free(dctx);
+                    node_free(prog);
+                    token_array_free(&ta);
+                    comment_list_free(&lex.comments);
+                    cache_free(g_sema_cache);
+                    return 1;
+                }
+            }
             diag_context_free(dctx);
+            if (do_check) {
+                printf("No errors found in <eval>\n");
+                node_free(prog);
+                token_array_free(&ta);
+                comment_list_free(&lex.comments);
+                cache_free(g_sema_cache);
+                return 0;
+            }
             Interp *interp = interp_new("<eval>");
             interp_run(interp, prog);
             int had_err = (interp->cf.signal == CF_ERROR || interp->cf.signal == CF_PANIC);
@@ -1771,7 +1803,7 @@ run_file:;
                 diag_context_add_source(dctx, filename, src_for_cache);
                 if (lenient) diag_context_set_lenient(dctx, 1);
                 SemaCtx sema;
-                sema_init(&sema, lenient);
+                sema_init(&sema, lenient, strict);
                 sema.diag = dctx;
                 sema_errors = sema_analyze(&sema, program, filename);
                 diag_render_all(dctx);
@@ -1839,7 +1871,7 @@ run_file:;
             diag_context_add_source(dctx, filename, src_for_cache);
             if (lenient) diag_context_set_lenient(dctx, 1);
             SemaCtx sema;
-            sema_init(&sema, lenient);
+            sema_init(&sema, lenient, strict);
             sema.diag = dctx;
             sema_errors = sema_analyze(&sema, program, filename);
             diag_render_all(dctx);

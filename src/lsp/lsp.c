@@ -449,7 +449,7 @@ static int parse_and_analyze(LspDocument *doc, LspDiag *diags, int max_diags) {
     collect_idents(doc, program);
 
     SemaCtx sema;
-    sema_init(&sema, 1); /* lenient mode */
+    sema_init(&sema, 1, 0); /* lenient mode */
     sema_analyze(&sema, program, doc->uri ? doc->uri : "<lsp>");
 
     if (sema.diag) {

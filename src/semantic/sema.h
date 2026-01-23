@@ -8,11 +8,12 @@
 typedef struct {
     DiagContext *diag;
     int       lenient;
+    int       strict;
     int       n_errors;
     SymTab   *st;
 } SemaCtx;
 
-void sema_init(SemaCtx *ctx, int lenient);
+void sema_init(SemaCtx *ctx, int lenient, int strict);
 void sema_free(SemaCtx *ctx);
 int  sema_analyze(SemaCtx *ctx, Node *program, const char *filename);
 
