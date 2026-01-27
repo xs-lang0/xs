@@ -1510,6 +1510,42 @@ static Value *native_str_similarity(Interp *i, Value **a, int n) {
     int d=levenshtein_dist(a[0]->s,a[1]->s);
     return xs_float(1.0-(double)d/maxlen);
 }
+static Value *native_str_repeat(Interp *i, Value **a, int n) {
+    (void)i;
+    if (n<2||a[0]->tag!=XS_STR||a[1]->tag!=XS_INT) return value_incref(XS_NULL_VAL);
+    const char *s=a[0]->s; int count=(int)a[1]->i;
+    if (count<=0) return xs_str("");
+    int slen=(int)strlen(s);
+    int rlen=slen*count;
+    char *r=xs_malloc(rlen+1);
+    for(int j=0;j<count;j++) memcpy(r+j*slen,s,slen);
+    r[rlen]='\0';
+    Value *v=xs_str(r); free(r); return v;
+}
+static Value *native_str_chars(Interp *i, Value **a, int n) {
+    (void)i;
+    if (n<1||a[0]->tag!=XS_STR) return value_incref(XS_NULL_VAL);
+    const char *s=a[0]->s; int slen=(int)strlen(s);
+    Value *arr=xs_array_new();
+    char buf[2]; buf[1]='\0';
+    for(int j=0;j<slen;j++){
+        buf[0]=s[j];
+        Value *ch=xs_str(buf);
+        array_push(arr->arr,ch);
+    }
+    return arr;
+}
+static Value *native_str_bytes(Interp *i, Value **a, int n) {
+    (void)i;
+    if (n<1||a[0]->tag!=XS_STR) return value_incref(XS_NULL_VAL);
+    const unsigned char *s=(const unsigned char*)a[0]->s; int slen=(int)strlen(a[0]->s);
+    Value *arr=xs_array_new();
+    for(int j=0;j<slen;j++){
+        Value *b=xs_int((int64_t)s[j]);
+        array_push(arr->arr,b);
+    }
+    return arr;
+}
 Value *make_string_module(void) {
     XSMap *m=map_new();
     map_set(m,"pad_left",       xs_native(native_str_pad_left));
@@ -1523,6 +1559,9 @@ Value *make_string_module(void) {
     map_set(m,"words",          xs_native(native_str_words));
     map_set(m,"levenshtein",    xs_native(native_str_levenshtein));
     map_set(m,"similarity",     xs_native(native_str_similarity));
+    map_set(m,"repeat",         xs_native(native_str_repeat));
+    map_set(m,"chars",          xs_native(native_str_chars));
+    map_set(m,"bytes",          xs_native(native_str_bytes));
     return xs_module(m);
 }
 
@@ -1903,6 +1942,43 @@ static Value *collections_ordered_map_new(Interp *ig, Value **a, int n) {
     return om;
 }
 
+static Value *collections_set_simple(Interp *ig, Value **a, int n) {
+    (void)ig;
+    Value *result=xs_array_new();
+    if (n<1||a[0]->tag!=XS_ARRAY) return result;
+    XSArray *arr=a[0]->arr;
+    /* track seen keys in a temporary map for dedup */
+    XSMap *seen=map_new();
+    for(int j=0;j<arr->len;j++){
+        char *k=value_str(arr->items[j]);
+        if (!map_get(seen,k)){
+            Value *tv=value_incref(XS_TRUE_VAL);
+            map_set(seen,k,tv); value_decref(tv);
+            array_push(result->arr,value_incref(arr->items[j]));
+        }
+        free(k);
+    }
+    map_free(seen);
+    return result;
+}
+static Value *collections_deque_simple(Interp *ig, Value **a, int n) {
+    (void)ig;(void)a;(void)n;
+    return xs_array_new();
+}
+static Value *collections_counter_simple(Interp *ig, Value **a, int n) {
+    (void)ig;
+    Value *result=xs_map_new();
+    if (n<1||a[0]->tag!=XS_ARRAY) return result;
+    XSArray *arr=a[0]->arr;
+    for(int j=0;j<arr->len;j++){
+        char *key=value_str(arr->items[j]);
+        Value *cur=map_get(result->map,key);
+        Value *next=xs_int(cur?(cur->tag==XS_INT?cur->i:0)+1:1);
+        map_set(result->map,key,next); value_decref(next);
+        free(key);
+    }
+    return result;
+}
 Value *make_collections_module(void) {
     XSMap *m=map_new();
     map_set(m,"Counter",      xs_native(collections_counter));
@@ -1911,6 +1987,9 @@ Value *make_collections_module(void) {
     map_set(m,"Deque",        xs_native(collections_deque_new));
     map_set(m,"Set",          xs_native(collections_set_new));
     map_set(m,"OrderedMap",   xs_native(collections_ordered_map_new));
+    map_set(m,"set",          xs_native(collections_set_simple));
+    map_set(m,"deque",        xs_native(collections_deque_simple));
+    map_set(m,"counter",      xs_native(collections_counter_simple));
     return xs_module(m);
 }
 
@@ -2538,13 +2617,12 @@ Value *make_os_module(Interp *ig) {
     { Value *v=xs_str("linux"); map_set(m,"platform",v); value_decref(v); }
 #endif
     { Value *v=xs_str("/"); map_set(m,"sep",v); value_decref(v); }
-    /* env sub-module */
-    Value *env_m=xs_map_new();
-    map_set(env_m->map,"get",xs_native(native_os_env_get));
-    map_set(env_m->map,"set",xs_native(native_os_env_set));
-    map_set(env_m->map,"has",xs_native(native_os_env_has));
-    map_set(env_m->map,"all",xs_native(native_os_env_all));
-    map_set(m,"env",env_m); value_decref(env_m);
+    /* env as a callable (getenv) + helper functions at top level */
+    map_set(m,"env",      xs_native(native_os_env_get));
+    map_set(m,"getenv",   xs_native(native_os_env_get));
+    map_set(m,"setenv",   xs_native(native_os_env_set));
+    map_set(m,"hasenv",   xs_native(native_os_env_has));
+    map_set(m,"environ",  xs_native(native_os_env_all));
     (void)ig;
     return xs_module(m);
 }
@@ -3471,6 +3549,7 @@ static Value *native_re_groups(Interp *ig, Value **a, int n) {
 Value *make_re_module(void) {
     XSMap *m=map_new();
     map_set(m,"test",        xs_native(native_re_test));
+    map_set(m,"is_match",    xs_native(native_re_test));
     map_set(m,"match",       xs_native(native_re_match));
     map_set(m,"find_all",    xs_native(native_re_find_all));
     map_set(m,"replace",     xs_native(native_re_replace));
