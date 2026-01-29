@@ -3049,11 +3049,110 @@ static Value *native_fmt_pluralize(Interp *ig, Value **a, int n) {
     else snprintf(buf,sizeof(buf),"%lld %ss",(long long)cnt,word);
     return xs_str(buf);
 }
+static Value *native_fmt_sprintf(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return xs_str("");
+    const char *fmt = a[0]->s;
+    int flen = (int)strlen(fmt);
+    /* estimate output size */
+    int cap = flen + 256;
+    char *buf = xs_malloc(cap);
+    int bi = 0, ai = 1;
+    for (int i = 0; i < flen; i++) {
+        if (fmt[i] == '{' && i+1 < flen && fmt[i+1] == '}') {
+            if (ai < n) {
+                char *s = value_repr(a[ai++]);
+                int slen = (int)strlen(s);
+                /* strip quotes from string repr */
+                if (slen >= 2 && s[0] == '"' && s[slen-1] == '"') {
+                    s[slen-1] = '\0';
+                    char *inner = s + 1;
+                    slen -= 2;
+                    while (bi + slen + 1 > cap) { cap *= 2; buf = realloc(buf, cap); }
+                    memcpy(buf + bi, inner, slen); bi += slen;
+                } else {
+                    while (bi + slen + 1 > cap) { cap *= 2; buf = realloc(buf, cap); }
+                    memcpy(buf + bi, s, slen); bi += slen;
+                }
+                free(s);
+            }
+            i++; /* skip the '}' */
+        } else {
+            if (bi + 2 > cap) { cap *= 2; buf = realloc(buf, cap); }
+            buf[bi++] = fmt[i];
+        }
+    }
+    buf[bi] = '\0';
+    Value *r = xs_str(buf); free(buf); return r;
+}
+
+static Value *native_fmt_pad_left(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 2) return n > 0 ? value_incref(a[0]) : xs_str("");
+    const char *s = (a[0]->tag == XS_STR) ? a[0]->s : "";
+    int width = (a[1]->tag == XS_INT) ? (int)a[1]->i : 0;
+    char fill = (n >= 3 && a[2]->tag == XS_STR && a[2]->s[0]) ? a[2]->s[0] : ' ';
+    int slen = (int)strlen(s);
+    if (slen >= width) return xs_str(s);
+    char *r = xs_malloc(width + 1);
+    int pad = width - slen;
+    for (int j = 0; j < pad; j++) r[j] = fill;
+    memcpy(r + pad, s, slen); r[width] = '\0';
+    Value *v = xs_str(r); free(r); return v;
+}
+
+static Value *native_fmt_pad_right(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 2) return n > 0 ? value_incref(a[0]) : xs_str("");
+    const char *s = (a[0]->tag == XS_STR) ? a[0]->s : "";
+    int width = (a[1]->tag == XS_INT) ? (int)a[1]->i : 0;
+    char fill = (n >= 3 && a[2]->tag == XS_STR && a[2]->s[0]) ? a[2]->s[0] : ' ';
+    int slen = (int)strlen(s);
+    if (slen >= width) return xs_str(s);
+    char *r = xs_malloc(width + 1);
+    memcpy(r, s, slen);
+    for (int j = slen; j < width; j++) r[j] = fill;
+    r[width] = '\0';
+    Value *v = xs_str(r); free(r); return v;
+}
+
+static Value *native_fmt_center(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 2) return n > 0 ? value_incref(a[0]) : xs_str("");
+    const char *s = (a[0]->tag == XS_STR) ? a[0]->s : "";
+    int width = (a[1]->tag == XS_INT) ? (int)a[1]->i : 0;
+    char fill = (n >= 3 && a[2]->tag == XS_STR && a[2]->s[0]) ? a[2]->s[0] : ' ';
+    int slen = (int)strlen(s);
+    if (slen >= width) return xs_str(s);
+    char *r = xs_malloc(width + 1);
+    int total_pad = width - slen;
+    int left_pad = total_pad / 2;
+    int right_pad = total_pad - left_pad;
+    for (int j = 0; j < left_pad; j++) r[j] = fill;
+    memcpy(r + left_pad, s, slen);
+    for (int j = 0; j < right_pad; j++) r[left_pad + slen + j] = fill;
+    r[width] = '\0';
+    Value *v = xs_str(r); free(r); return v;
+}
+
+static Value *native_fmt_oct(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1) return xs_str("0o0");
+    int64_t v = (a[0]->tag == XS_INT) ? a[0]->i : (int64_t)a[0]->f;
+    char buf[64]; snprintf(buf, sizeof(buf), "0o%llo", (long long)v);
+    return xs_str(buf);
+}
+
 Value *make_fmt_module(void) {
     XSMap *m=map_new();
+    map_set(m,"sprintf",   xs_native(native_fmt_sprintf));
+    map_set(m,"pad_left",  xs_native(native_fmt_pad_left));
+    map_set(m,"pad_right", xs_native(native_fmt_pad_right));
+    map_set(m,"center",    xs_native(native_fmt_center));
     map_set(m,"number",    xs_native(native_fmt_number));
     map_set(m,"hex",       xs_native(native_fmt_hex));
     map_set(m,"bin",       xs_native(native_fmt_bin));
+    map_set(m,"oct",       xs_native(native_fmt_oct));
     map_set(m,"pad",       xs_native(native_fmt_pad));
     map_set(m,"comma",     xs_native(native_fmt_comma));
     map_set(m,"filesize",  xs_native(native_fmt_filesize));
@@ -3659,6 +3758,7 @@ Value *make_ffi_module(void);
 Value *make_reflect_module(void);
 Value *make_gc_module(void);
 Value *make_reactive_module(void);
+Value *make_fs_module(void);
 
 /* ── register all ────────────────────────────────────────── */
 void stdlib_register(Interp *i) {
@@ -3895,6 +3995,10 @@ void stdlib_register(Interp *i) {
     Value *reactive_mod = make_reactive_module();
     env_define(i->globals, "reactive", reactive_mod, 1);
     value_decref(reactive_mod);
+
+    Value *fs_mod = make_fs_module();
+    env_define(i->globals, "fs", fs_mod, 1);
+    value_decref(fs_mod);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -4208,11 +4312,63 @@ static Value *native_net_resolve(Interp *ig, Value **a, int n) {
 #endif
 }
 
+static Value *native_net_url_parse(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return xs_map_new();
+    Value *m = xs_map_new();
+    const char *url = a[0]->s;
+
+    /* scheme */
+    const char *p = strstr(url, "://");
+    if (p) {
+        Value *v = xs_str_n(url, (int)(p - url)); map_set(m->map, "scheme", v); value_decref(v);
+        url = p + 3;
+    } else {
+        Value *v = xs_str(""); map_set(m->map, "scheme", v); value_decref(v);
+    }
+
+    /* host and port */
+    const char *slash = strchr(url, '/');
+    const char *host_end = slash ? slash : url + strlen(url);
+    char host_buf[512];
+    int hlen = (int)(host_end - url);
+    if (hlen >= (int)sizeof(host_buf)) hlen = (int)sizeof(host_buf) - 1;
+    memcpy(host_buf, url, hlen); host_buf[hlen] = '\0';
+
+    const char *colon = strchr(host_buf, ':');
+    if (colon) {
+        Value *hv = xs_str_n(host_buf, (int)(colon - host_buf));
+        map_set(m->map, "host", hv); value_decref(hv);
+        Value *pv = xs_int(atoi(colon + 1));
+        map_set(m->map, "port", pv); value_decref(pv);
+    } else {
+        Value *hv = xs_str(host_buf);
+        map_set(m->map, "host", hv); value_decref(hv);
+        Value *pv = xs_int(0);
+        map_set(m->map, "port", pv); value_decref(pv);
+    }
+
+    url = host_end;
+
+    /* path and query */
+    const char *qm = strchr(url, '?');
+    if (qm) {
+        Value *pv = xs_str_n(url, (int)(qm - url)); map_set(m->map, "path", pv); value_decref(pv);
+        Value *qv = xs_str(qm + 1); map_set(m->map, "query", qv); value_decref(qv);
+    } else {
+        Value *pv = xs_str(url); map_set(m->map, "path", pv); value_decref(pv);
+        Value *qv = xs_str(""); map_set(m->map, "query", qv); value_decref(qv);
+    }
+
+    return m;
+}
+
 Value *make_net_module(void) {
     XSMap *m = map_new();
     map_set(m, "tcp_connect", xs_native(native_net_tcp_connect));
     map_set(m, "tcp_listen",  xs_native(native_net_tcp_listen));
     map_set(m, "resolve",     xs_native(native_net_resolve));
+    map_set(m, "url_parse",   xs_native(native_net_url_parse));
     return xs_module(m);
 }
 
@@ -4471,13 +4627,98 @@ static Value *native_crypto_uuid4(Interp *ig, Value **a, int n) {
     return xs_str(uuid);
 }
 
+static Value *native_crypto_hash(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return xs_int(0);
+    /* djb2 hash */
+    const char *s = a[0]->s;
+    uint64_t h = 5381;
+    while (*s) h = ((h << 5) + h) + (unsigned char)*s++;
+    return xs_int((int64_t)h);
+}
+
+static Value *native_crypto_hex_encode(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return xs_str("");
+    const char *s = a[0]->s;
+    int slen = (int)strlen(s);
+    char *hex = xs_malloc(slen * 2 + 1);
+    for (int i = 0; i < slen; i++) sprintf(hex + i*2, "%02x", (unsigned char)s[i]);
+    hex[slen * 2] = '\0';
+    Value *r = xs_str(hex); free(hex); return r;
+}
+
+static Value *native_crypto_hex_decode(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return xs_str("");
+    const char *s = a[0]->s;
+    int slen = (int)strlen(s);
+    if (slen % 2 != 0) return xs_str("");
+    int olen = slen / 2;
+    char *out = xs_malloc(olen + 1);
+    for (int i = 0; i < olen; i++) {
+        unsigned int byte;
+        if (sscanf(s + i*2, "%2x", &byte) != 1) { free(out); return xs_str(""); }
+        out[i] = (char)byte;
+    }
+    out[olen] = '\0';
+    Value *r = xs_str(out); free(out); return r;
+}
+
+static Value *native_crypto_base64_encode(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return xs_str("");
+    const unsigned char *s = (const unsigned char*)a[0]->s;
+    int slen = (int)strlen(a[0]->s);
+    int rlen = ((slen + 2) / 3) * 4;
+    char *r = xs_malloc(rlen + 1); int ri = 0;
+    for (int j = 0; j < slen; j += 3) {
+        unsigned int v = (unsigned)s[j]<<16 | (j+1<slen?(unsigned)s[j+1]:0)<<8 | (j+2<slen?(unsigned)s[j+2]:0);
+        r[ri++] = b64_table[(v>>18)&63]; r[ri++] = b64_table[(v>>12)&63];
+        r[ri++] = (j+1<slen) ? b64_table[(v>>6)&63] : '=';
+        r[ri++] = (j+2<slen) ? b64_table[v&63] : '=';
+    }
+    r[ri] = '\0'; Value *v2 = xs_str(r); free(r); return v2;
+}
+
+static Value *native_crypto_base64_decode(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return xs_str("");
+    const char *s = a[0]->s; int slen = (int)strlen(s);
+    static const signed char inv[256] = {
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
+        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+        -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+    };
+    char *r = xs_malloc(slen); int ri = 0;
+    for (int j = 0; j+3 < slen; j += 4) {
+        int a0=inv[(unsigned char)s[j]], a1=inv[(unsigned char)s[j+1]];
+        int a2=inv[(unsigned char)s[j+2]], a3=inv[(unsigned char)s[j+3]];
+        if (a0<0||a1<0) break;
+        r[ri++] = (char)((a0<<2)|(a1>>4));
+        if (a2>=0) r[ri++] = (char)((a1<<4)|(a2>>2));
+        if (a3>=0) r[ri++] = (char)((a2<<6)|a3);
+    }
+    r[ri] = '\0'; Value *v2 = xs_str(r); free(r); return v2;
+}
+
 Value *make_crypto_module(void) {
     XSMap *m = map_new();
-    map_set(m, "sha256",       xs_native(native_crypto_sha256));
-    map_set(m, "md5",          xs_native(native_crypto_md5));
-    map_set(m, "random_bytes", xs_native(native_crypto_random_bytes));
-    map_set(m, "random_int",   xs_native(native_crypto_random_int));
-    map_set(m, "uuid4",        xs_native(native_crypto_uuid4));
+    map_set(m, "sha256",        xs_native(native_crypto_sha256));
+    map_set(m, "md5",           xs_native(native_crypto_md5));
+    map_set(m, "hash",          xs_native(native_crypto_hash));
+    map_set(m, "hex_encode",    xs_native(native_crypto_hex_encode));
+    map_set(m, "hex_decode",    xs_native(native_crypto_hex_decode));
+    map_set(m, "base64_encode", xs_native(native_crypto_base64_encode));
+    map_set(m, "base64_decode", xs_native(native_crypto_base64_decode));
+    map_set(m, "random_bytes",  xs_native(native_crypto_random_bytes));
+    map_set(m, "random_int",    xs_native(native_crypto_random_int));
+    map_set(m, "uuid4",         xs_native(native_crypto_uuid4));
     return xs_module(m);
 }
 
@@ -5732,5 +5973,104 @@ Value *make_reactive_module(void) {
     map_set(m, "signal",  xs_native(native_reactive_signal));
     map_set(m, "derived", xs_native(native_reactive_derived));
     map_set(m, "effect",  xs_native(native_reactive_effect));
+    return xs_module(m);
+}
+
+/* ── fs module ───────────────────────────────────────────── */
+
+static Value *native_fs_read(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return value_incref(XS_NULL_VAL);
+    FILE *f = fopen(a[0]->s, "r");
+    if (!f) return value_incref(XS_NULL_VAL);
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    char *buf = xs_malloc(sz + 1);
+    long nr = (long)fread(buf, 1, sz, f); fclose(f); buf[nr] = '\0';
+    Value *v = xs_str(buf); free(buf); return v;
+}
+
+static Value *native_fs_write(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 2 || a[0]->tag != XS_STR || a[1]->tag != XS_STR) return value_incref(XS_FALSE_VAL);
+    FILE *f = fopen(a[0]->s, "w");
+    if (!f) return value_incref(XS_FALSE_VAL);
+    fputs(a[1]->s, f); fclose(f);
+    return value_incref(XS_TRUE_VAL);
+}
+
+static Value *native_fs_append(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 2 || a[0]->tag != XS_STR || a[1]->tag != XS_STR) return value_incref(XS_FALSE_VAL);
+    FILE *f = fopen(a[0]->s, "a");
+    if (!f) return value_incref(XS_FALSE_VAL);
+    fputs(a[1]->s, f); fclose(f);
+    return value_incref(XS_TRUE_VAL);
+}
+
+static Value *native_fs_exists(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return value_incref(XS_FALSE_VAL);
+    return (access(a[0]->s, F_OK) == 0) ? value_incref(XS_TRUE_VAL) : value_incref(XS_FALSE_VAL);
+}
+
+static Value *native_fs_remove(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return value_incref(XS_FALSE_VAL);
+    return (unlink(a[0]->s) == 0) ? value_incref(XS_TRUE_VAL) : value_incref(XS_FALSE_VAL);
+}
+
+static Value *native_fs_mkdir(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return value_incref(XS_FALSE_VAL);
+    int r = io_mkdirs(a[0]->s);
+    return (r == 0 || errno == EEXIST) ? value_incref(XS_TRUE_VAL) : value_incref(XS_FALSE_VAL);
+}
+
+static Value *native_fs_ls(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return xs_array_new();
+    DIR *d = opendir(a[0]->s); if (!d) return xs_array_new();
+    Value *arr = xs_array_new();
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        array_push(arr->arr, xs_str(ent->d_name));
+    }
+    closedir(d); return arr;
+}
+
+static Value *native_fs_is_dir(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return value_incref(XS_FALSE_VAL);
+    struct stat st; if (stat(a[0]->s, &st) != 0) return value_incref(XS_FALSE_VAL);
+    return S_ISDIR(st.st_mode) ? value_incref(XS_TRUE_VAL) : value_incref(XS_FALSE_VAL);
+}
+
+static Value *native_fs_is_file(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return value_incref(XS_FALSE_VAL);
+    struct stat st; if (stat(a[0]->s, &st) != 0) return value_incref(XS_FALSE_VAL);
+    return S_ISREG(st.st_mode) ? value_incref(XS_TRUE_VAL) : value_incref(XS_FALSE_VAL);
+}
+
+static Value *native_fs_size(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_STR) return xs_int(-1);
+    struct stat st; if (stat(a[0]->s, &st) != 0) return xs_int(-1);
+    return xs_int((int64_t)st.st_size);
+}
+
+Value *make_fs_module(void) {
+    XSMap *m = map_new();
+    map_set(m, "read",    xs_native(native_fs_read));
+    map_set(m, "write",   xs_native(native_fs_write));
+    map_set(m, "append",  xs_native(native_fs_append));
+    map_set(m, "exists",  xs_native(native_fs_exists));
+    map_set(m, "remove",  xs_native(native_fs_remove));
+    map_set(m, "mkdir",   xs_native(native_fs_mkdir));
+    map_set(m, "ls",      xs_native(native_fs_ls));
+    map_set(m, "is_dir",  xs_native(native_fs_is_dir));
+    map_set(m, "is_file", xs_native(native_fs_is_file));
+    map_set(m, "size",    xs_native(native_fs_size));
     return xs_module(m);
 }
