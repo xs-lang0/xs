@@ -4363,12 +4363,394 @@ static Value *native_net_url_parse(Interp *ig, Value **a, int n) {
     return m;
 }
 
+/* ---- HTTP client helpers ---- */
+
+#ifndef __MINGW32__
+
+/* Parse a URL into host, port, path. Returns 0 on success, -1 on error. */
+static int http_parse_url(const char *url, char *host, int hostlen,
+                          int *port, char *path, int pathlen) {
+    if (strncmp(url, "https://", 8) == 0) {
+        fprintf(stderr, "error: https:// not supported (TLS not yet implemented). Use http:// instead.\n");
+        return -1;
+    }
+    const char *start = url;
+    if (strncmp(url, "http://", 7) == 0) start = url + 7;
+
+    *port = 80;
+
+    const char *slash = strchr(start, '/');
+    const char *host_end = slash ? slash : start + strlen(start);
+
+    /* extract host:port */
+    int hlen = (int)(host_end - start);
+    char hbuf[512];
+    if (hlen >= (int)sizeof(hbuf)) hlen = (int)sizeof(hbuf) - 1;
+    memcpy(hbuf, start, hlen);
+    hbuf[hlen] = '\0';
+
+    const char *colon = strchr(hbuf, ':');
+    if (colon) {
+        int nlen = (int)(colon - hbuf);
+        if (nlen >= hostlen) nlen = hostlen - 1;
+        memcpy(host, hbuf, nlen);
+        host[nlen] = '\0';
+        *port = atoi(colon + 1);
+    } else {
+        if (hlen >= hostlen) hlen = hostlen - 1;
+        memcpy(host, hbuf, hlen);
+        host[hlen] = '\0';
+    }
+
+    if (slash) {
+        int plen = (int)strlen(slash);
+        if (plen >= pathlen) plen = pathlen - 1;
+        memcpy(path, slash, plen);
+        path[plen] = '\0';
+    } else {
+        path[0] = '/'; path[1] = '\0';
+    }
+    return 0;
+}
+
+/* Connect to host:port via TCP. Returns fd or -1. */
+static int http_connect(const char *host, int port) {
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    char port_str[16];
+    snprintf(port_str, sizeof port_str, "%d", port);
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) return -1;
+
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); return -1; }
+    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+        close(fd); freeaddrinfo(res); return -1;
+    }
+    freeaddrinfo(res);
+    return fd;
+}
+
+/* Dynamic buffer for reading response */
+typedef struct { char *data; size_t len; size_t cap; } HttpBuf;
+
+static void httpbuf_init(HttpBuf *b) { b->data = NULL; b->len = 0; b->cap = 0; }
+
+static void httpbuf_append(HttpBuf *b, const char *src, size_t n) {
+    if (b->len + n + 1 > b->cap) {
+        size_t newcap = (b->cap == 0) ? 4096 : b->cap * 2;
+        while (newcap < b->len + n + 1) newcap *= 2;
+        b->data = realloc(b->data, newcap);
+        b->cap = newcap;
+    }
+    memcpy(b->data + b->len, src, n);
+    b->len += n;
+    b->data[b->len] = '\0';
+}
+
+static void httpbuf_free(HttpBuf *b) { free(b->data); b->data = NULL; b->len = b->cap = 0; }
+
+/* Read entire response from fd into buf */
+static void http_read_all(int fd, HttpBuf *buf) {
+    char tmp[4096];
+    ssize_t nr;
+    while ((nr = read(fd, tmp, sizeof tmp)) > 0)
+        httpbuf_append(buf, tmp, (size_t)nr);
+}
+
+/* Parse HTTP response and return XS map: #{ status, headers, body } */
+static Value *http_parse_response(HttpBuf *buf) {
+    Value *result = xs_map_new();
+    if (!buf->data || buf->len == 0) {
+        Value *sv = xs_int(0); map_set(result->map, "status", sv); value_decref(sv);
+        Value *hv = xs_map_new(); map_set(result->map, "headers", hv); value_decref(hv);
+        Value *bv = xs_str(""); map_set(result->map, "body", bv); value_decref(bv);
+        return result;
+    }
+
+    /* find end of status line */
+    char *p = buf->data;
+    char *end = buf->data + buf->len;
+    char *line_end = strstr(p, "\r\n");
+    if (!line_end) line_end = strstr(p, "\n");
+    if (!line_end) {
+        Value *sv = xs_int(0); map_set(result->map, "status", sv); value_decref(sv);
+        Value *hv = xs_map_new(); map_set(result->map, "headers", hv); value_decref(hv);
+        Value *bv = xs_str(""); map_set(result->map, "body", bv); value_decref(bv);
+        return result;
+    }
+
+    /* parse status code from "HTTP/1.x NNN ..." */
+    int status = 0;
+    {
+        char *sp = strchr(p, ' ');
+        if (sp && sp < line_end) status = atoi(sp + 1);
+    }
+    Value *sv = xs_int(status); map_set(result->map, "status", sv); value_decref(sv);
+
+    /* advance past status line */
+    p = line_end;
+    if (*p == '\r') p++;
+    if (*p == '\n') p++;
+
+    /* parse headers */
+    Value *headers = xs_map_new();
+    int chunked = 0;
+    long content_length = -1;
+    while (p < end) {
+        /* blank line = end of headers */
+        if (*p == '\r' || *p == '\n') {
+            if (*p == '\r') p++;
+            if (*p == '\n') p++;
+            break;
+        }
+        char *hline_end = strstr(p, "\r\n");
+        if (!hline_end) hline_end = strstr(p, "\n");
+        if (!hline_end) hline_end = end;
+
+        char *colon = memchr(p, ':', (size_t)(hline_end - p));
+        if (colon) {
+            int klen = (int)(colon - p);
+            char key[256];
+            if (klen >= (int)sizeof(key)) klen = (int)sizeof(key) - 1;
+            memcpy(key, p, klen);
+            key[klen] = '\0';
+            /* lowercase the key for easier matching */
+            char lkey[256];
+            for (int i = 0; i <= klen; i++) lkey[i] = (char)tolower((unsigned char)key[i]);
+
+            const char *val = colon + 1;
+            while (val < hline_end && *val == ' ') val++;
+            int vlen = (int)(hline_end - val);
+
+            Value *vv = xs_str_n(val, vlen);
+            map_set(headers->map, key, vv);
+            value_decref(vv);
+
+            /* detect chunked / content-length */
+            if (strcmp(lkey, "transfer-encoding") == 0) {
+                char vbuf[128];
+                int cl = vlen < (int)sizeof(vbuf) - 1 ? vlen : (int)sizeof(vbuf) - 1;
+                memcpy(vbuf, val, cl); vbuf[cl] = '\0';
+                for (int i = 0; vbuf[i]; i++) vbuf[i] = (char)tolower((unsigned char)vbuf[i]);
+                if (strstr(vbuf, "chunked")) chunked = 1;
+            } else if (strcmp(lkey, "content-length") == 0) {
+                content_length = atol(val);
+            }
+        }
+        p = hline_end;
+        if (*p == '\r') p++;
+        if (*p == '\n') p++;
+    }
+    map_set(result->map, "headers", headers);
+    value_decref(headers);
+
+    /* extract body */
+    size_t body_offset = (size_t)(p - buf->data);
+    size_t body_avail = (body_offset < buf->len) ? buf->len - body_offset : 0;
+
+    if (chunked) {
+        /* decode chunked transfer encoding */
+        HttpBuf decoded;
+        httpbuf_init(&decoded);
+        char *cp = p;
+        while (cp < end) {
+            /* read chunk size (hex) */
+            char *chunk_end = strstr(cp, "\r\n");
+            if (!chunk_end) break;
+            long chunk_size = strtol(cp, NULL, 16);
+            if (chunk_size <= 0) break;
+            cp = chunk_end + 2; /* skip \r\n after size */
+            if (cp + chunk_size > end) chunk_size = (long)(end - cp);
+            httpbuf_append(&decoded, cp, (size_t)chunk_size);
+            cp += chunk_size;
+            if (cp + 2 <= end && cp[0] == '\r' && cp[1] == '\n') cp += 2;
+        }
+        Value *bv = xs_str_n(decoded.data ? decoded.data : "", (int)decoded.len);
+        map_set(result->map, "body", bv);
+        value_decref(bv);
+        httpbuf_free(&decoded);
+    } else if (content_length >= 0) {
+        size_t blen = (size_t)content_length;
+        if (blen > body_avail) blen = body_avail;
+        Value *bv = xs_str_n(p, (int)blen);
+        map_set(result->map, "body", bv);
+        value_decref(bv);
+    } else {
+        /* read until close */
+        Value *bv = xs_str_n(p, (int)body_avail);
+        map_set(result->map, "body", bv);
+        value_decref(bv);
+    }
+
+    return result;
+}
+
+/* Core: perform an HTTP request. Returns XS map. */
+static Value *http_do_request(const char *method, const char *url,
+                              XSMap *extra_headers, const char *body,
+                              size_t body_len) {
+    char host[512], path[2048];
+    int port;
+    if (http_parse_url(url, host, sizeof host, &port, path, sizeof path) < 0)
+        return value_incref(XS_NULL_VAL);
+
+    int fd = http_connect(host, port);
+    if (fd < 0) {
+        fprintf(stderr, "error: could not connect to %s:%d\n", host, port);
+        return value_incref(XS_NULL_VAL);
+    }
+
+    /* build request */
+    HttpBuf req;
+    httpbuf_init(&req);
+
+    /* request line */
+    httpbuf_append(&req, method, strlen(method));
+    httpbuf_append(&req, " ", 1);
+    httpbuf_append(&req, path, strlen(path));
+    httpbuf_append(&req, " HTTP/1.1\r\n", 11);
+
+    /* Host header */
+    httpbuf_append(&req, "Host: ", 6);
+    httpbuf_append(&req, host, strlen(host));
+    if (port != 80) {
+        char pbuf[16];
+        snprintf(pbuf, sizeof pbuf, ":%d", port);
+        httpbuf_append(&req, pbuf, strlen(pbuf));
+    }
+    httpbuf_append(&req, "\r\n", 2);
+
+    /* Connection: close */
+    httpbuf_append(&req, "Connection: close\r\n", 19);
+
+    /* Content-Length if body present */
+    if (body && body_len > 0) {
+        char clbuf[64];
+        snprintf(clbuf, sizeof clbuf, "Content-Length: %zu\r\n", body_len);
+        httpbuf_append(&req, clbuf, strlen(clbuf));
+    }
+
+    /* extra headers from map */
+    if (extra_headers) {
+        for (int i = 0; i < extra_headers->cap; i++) {
+            if (extra_headers->keys[i] && extra_headers->vals[i]) {
+                const char *k = extra_headers->keys[i];
+                Value *v = extra_headers->vals[i];
+                if (v->tag == XS_STR) {
+                    httpbuf_append(&req, k, strlen(k));
+                    httpbuf_append(&req, ": ", 2);
+                    httpbuf_append(&req, v->s, strlen(v->s));
+                    httpbuf_append(&req, "\r\n", 2);
+                }
+            }
+        }
+    }
+
+    /* end of headers */
+    httpbuf_append(&req, "\r\n", 2);
+
+    /* send request */
+    {
+        size_t sent = 0;
+        while (sent < req.len) {
+            ssize_t w = write(fd, req.data + sent, req.len - sent);
+            if (w <= 0) { close(fd); httpbuf_free(&req); return value_incref(XS_NULL_VAL); }
+            sent += (size_t)w;
+        }
+    }
+    httpbuf_free(&req);
+
+    /* send body */
+    if (body && body_len > 0) {
+        size_t sent = 0;
+        while (sent < body_len) {
+            ssize_t w = write(fd, body + sent, body_len - sent);
+            if (w <= 0) { close(fd); return value_incref(XS_NULL_VAL); }
+            sent += (size_t)w;
+        }
+    }
+
+    /* read response */
+    HttpBuf resp;
+    httpbuf_init(&resp);
+    http_read_all(fd, &resp);
+    close(fd);
+
+    Value *result = http_parse_response(&resp);
+    httpbuf_free(&resp);
+    return result;
+}
+
+#endif /* __MINGW32__ */
+
+/* net.http_get(url) */
+static Value *native_net_http_get(Interp *ig, Value **a, int n) {
+    (void)ig;
+#ifndef __MINGW32__
+    if (n < 1 || a[0]->tag != XS_STR) return value_incref(XS_NULL_VAL);
+    return http_do_request("GET", a[0]->s, NULL, NULL, 0);
+#else
+    (void)a; (void)n;
+    return value_incref(XS_NULL_VAL);
+#endif
+}
+
+/* net.http_post(url, body, content_type) */
+static Value *native_net_http_post(Interp *ig, Value **a, int n) {
+    (void)ig;
+#ifndef __MINGW32__
+    if (n < 3 || a[0]->tag != XS_STR || a[1]->tag != XS_STR || a[2]->tag != XS_STR)
+        return value_incref(XS_NULL_VAL);
+
+    /* build a temporary headers map with Content-Type */
+    XSMap *hdrs = map_new();
+    Value *ct = xs_str(a[2]->s);
+    map_set(hdrs, "Content-Type", ct);
+    value_decref(ct);
+
+    Value *result = http_do_request("POST", a[0]->s, hdrs, a[1]->s, strlen(a[1]->s));
+    map_free(hdrs);
+    return result;
+#else
+    (void)a; (void)n;
+    return value_incref(XS_NULL_VAL);
+#endif
+}
+
+/* net.http(method, url, headers_map, body) */
+static Value *native_net_http(Interp *ig, Value **a, int n) {
+    (void)ig;
+#ifndef __MINGW32__
+    if (n < 2 || a[0]->tag != XS_STR || a[1]->tag != XS_STR)
+        return value_incref(XS_NULL_VAL);
+
+    XSMap *hdrs = NULL;
+    if (n >= 3 && a[2]->tag == XS_MAP) hdrs = a[2]->map;
+    const char *body = NULL;
+    size_t body_len = 0;
+    if (n >= 4 && a[3]->tag == XS_STR) {
+        body = a[3]->s;
+        body_len = strlen(a[3]->s);
+    }
+
+    return http_do_request(a[0]->s, a[1]->s, hdrs, body, body_len);
+#else
+    (void)a; (void)n;
+    return value_incref(XS_NULL_VAL);
+#endif
+}
+
 Value *make_net_module(void) {
     XSMap *m = map_new();
     map_set(m, "tcp_connect", xs_native(native_net_tcp_connect));
     map_set(m, "tcp_listen",  xs_native(native_net_tcp_listen));
     map_set(m, "resolve",     xs_native(native_net_resolve));
     map_set(m, "url_parse",   xs_native(native_net_url_parse));
+    map_set(m, "http_get",    xs_native(native_net_http_get));
+    map_set(m, "http_post",   xs_native(native_net_http_post));
+    map_set(m, "http",        xs_native(native_net_http));
     return xs_module(m);
 }
 
