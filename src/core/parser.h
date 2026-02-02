@@ -17,6 +17,9 @@ typedef struct {
     const char *filename;
     ParseError  error;
     int         had_error;
+    int         error_count;     /* total parse errors reported */
+    int         max_errors;      /* stop after this many (default 10) */
+    int         panic_mode;      /* in panic mode, suppress new errors until sync */
     int         no_arrow_lambda; /* when set, (expr) => is NOT a lambda */
     DiagContext *diag;     /* unified diagnostic engine (may be NULL) */
 } Parser;

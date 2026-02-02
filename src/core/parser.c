@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <stdarg.h>
 
 typedef struct { const char *typo; const char *suggestion; } TypoEntry;
 static const TypoEntry KEYWORD_TYPOS[] = {
@@ -113,12 +114,15 @@ static const char *assign_op_str(TokenKind k) {
 }
 
 void parser_init(Parser *p, TokenArray *ta, const char *filename) {
-    p->tokens    = ta->items;
-    p->ntokens   = ta->len;
-    p->pos       = 0;
-    p->filename  = filename ? filename : "<stdin>";
-    p->had_error = 0;
-    p->diag      = NULL;
+    p->tokens      = ta->items;
+    p->ntokens     = ta->len;
+    p->pos         = 0;
+    p->filename    = filename ? filename : "<stdin>";
+    p->had_error   = 0;
+    p->error_count = 0;
+    p->max_errors  = 10;
+    p->panic_mode  = 0;
+    p->diag        = NULL;
     memset(&p->error, 0, sizeof(p->error));
 }
 
@@ -201,61 +205,84 @@ static const char *pp_suggest(TokenKind expected, TokenKind got, const char *got
     return "";
 }
 
-static Token *pp_expect(Parser *p, TokenKind k, const char *msg) {
+static Token *pp_expect_ex(Parser *p, TokenKind k, const char *msg, int open_line) {
     if (pp_check(p, k)) return pp_advance(p);
+    if (p->panic_mode) return pp_peek(p, 0);
+
     Token *t = pp_peek(p, 0);
-    if (!p->had_error) {
-        const char *expected_name = token_display_name(k);
-        const char *got_name = t->sval ? t->sval : token_display_name(t->kind);
-        const char *hint_str = pp_suggest(k, t->kind, t->sval);
+    const char *expected_name = token_display_name(k);
+    const char *got_name = t->sval ? t->sval : token_display_name(t->kind);
+    const char *hint_str = pp_suggest(k, t->kind, t->sval);
 
-        snprintf(p->error.msg, sizeof(p->error.msg),
-                 "%s: expected %s, got %s%s",
-                 msg ? msg : "parse error",
-                 expected_name,
-                 got_name,
-                 hint_str);
-        p->error.span = t->span;
+    p->panic_mode = 1;
+    p->had_error  = 1;
+    p->error_count++;
 
+    if (p->error_count > p->max_errors) return t;
+
+    snprintf(p->error.msg, sizeof(p->error.msg),
+             "%s: expected %s, got %s%s",
+             msg ? msg : "parse error",
+             expected_name, got_name, hint_str);
+    p->error.span = t->span;
+
+    if (p->error_count == p->max_errors) {
         if (p->diag) {
-            const char *code = "P0001";
-            if (k == TK_SEMICOLON)
-                code = "P0010";
-            else if ((k == TK_RBRACE && t->kind == TK_EOF) ||
-                     (k == TK_RPAREN && t->kind == TK_SEMICOLON) ||
-                     (k == TK_RBRACKET && (t->kind == TK_EOF || t->kind == TK_SEMICOLON)))
-                code = "P0012";
-
-            Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_PARSER, code,
-                                     "expected %s, found %s",
-                                     expected_name, got_name);
-            diag_annotate(d, t->span, 1, "unexpected %s here", got_name);
-
-            if (k == TK_SEMICOLON)
-                diag_hint(d, "add a ';' at the end of the previous statement");
-            else if (k == TK_RPAREN && t->kind == TK_SEMICOLON)
-                diag_hint(d, "you may have an unmatched '('");
-            else if (k == TK_RBRACE && t->kind == TK_EOF)
-                diag_hint(d, "you may have an unmatched '{'");
-            else if (k == TK_RBRACKET && (t->kind == TK_EOF || t->kind == TK_SEMICOLON))
-                diag_hint(d, "you may have an unmatched '['");
-            else if (k == TK_ASSIGN && t->kind == TK_EQ)
-                diag_hint(d, "did you mean '=' instead of '=='?");
-            else if (k == TK_FAT_ARROW && t->kind == TK_ASSIGN)
-                diag_hint(d, "did you mean '=>' instead of '='?");
-            else if (k == TK_FAT_ARROW && t->kind == TK_ARROW)
-                diag_hint(d, "did you mean '=>' instead of '->'?");
-            else if (k == TK_IN && t->kind == TK_COLON)
-                diag_hint(d, "XS uses 'for x in collection', not ':'");
-            else if (k == TK_IDENT && t->kind >= TK_IF && t->kind <= TK_RESUME)
-                diag_hint(d, "this is a reserved keyword and cannot be used as a name");
-
+            Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_PARSER, "P0099",
+                                     "too many errors, stopping");
+            diag_annotate(d, t->span, 1, "error limit reached");
             diag_emit(p->diag, d);
         }
-
-        p->had_error = 1;
+        return t;
     }
-    return t; /* return it anyway so parsing can continue */
+
+    if (p->diag) {
+        const char *code = "P0001";
+        if (k == TK_SEMICOLON)
+            code = "P0010";
+        else if ((k == TK_RBRACE && t->kind == TK_EOF) ||
+                 (k == TK_RPAREN && (t->kind == TK_SEMICOLON || t->kind == TK_EOF)) ||
+                 (k == TK_RBRACKET && (t->kind == TK_EOF || t->kind == TK_SEMICOLON)))
+            code = "P0012";
+
+        Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_PARSER, code,
+                                 "expected %s, found %s",
+                                 expected_name, got_name);
+        diag_annotate(d, t->span, 1, "unexpected %s here", got_name);
+
+        if (k == TK_RPAREN && open_line > 0)
+            diag_hint(d, "unmatched '(' opened on line %d", open_line);
+        else if (k == TK_RBRACE && open_line > 0)
+            diag_hint(d, "unmatched '{' opened on line %d", open_line);
+        else if (k == TK_RBRACKET && open_line > 0)
+            diag_hint(d, "unmatched '[' opened on line %d", open_line);
+        else if (k == TK_SEMICOLON)
+            diag_hint(d, "add a ';' at the end of the previous statement");
+        else if (k == TK_RPAREN && t->kind == TK_SEMICOLON)
+            diag_hint(d, "you may have an unmatched '('");
+        else if (k == TK_RBRACE && t->kind == TK_EOF)
+            diag_hint(d, "you may have an unmatched '{'");
+        else if (k == TK_RBRACKET && (t->kind == TK_EOF || t->kind == TK_SEMICOLON))
+            diag_hint(d, "you may have an unmatched '['");
+        else if (k == TK_ASSIGN && t->kind == TK_EQ)
+            diag_hint(d, "did you mean '=' instead of '=='?");
+        else if (k == TK_FAT_ARROW && t->kind == TK_ASSIGN)
+            diag_hint(d, "did you mean '=>' instead of '='?");
+        else if (k == TK_FAT_ARROW && t->kind == TK_ARROW)
+            diag_hint(d, "did you mean '=>' instead of '->'?");
+        else if (k == TK_IN && t->kind == TK_COLON)
+            diag_hint(d, "XS uses 'for x in collection', not ':'");
+        else if (k == TK_IDENT && t->kind >= TK_IF && t->kind <= TK_RESUME)
+            diag_hint(d, "this is a reserved keyword and cannot be used as a name");
+
+        diag_emit(p->diag, d);
+    }
+
+    return t;
+}
+
+static Token *pp_expect(Parser *p, TokenKind k, const char *msg) {
+    return pp_expect_ex(p, k, msg, 0);
 }
 
 static int pp_at_end(Parser *p) {
@@ -264,6 +291,61 @@ static int pp_at_end(Parser *p) {
 
 static void skip_semis(Parser *p) {
     while (pp_match(p, TK_SEMICOLON));
+}
+
+static int at_sync_point(TokenKind k) {
+    return k == TK_LET || k == TK_VAR || k == TK_CONST || k == TK_FN ||
+           k == TK_STRUCT || k == TK_ENUM || k == TK_CLASS || k == TK_IF ||
+           k == TK_FOR || k == TK_WHILE || k == TK_RETURN || k == TK_IMPORT ||
+           k == TK_SEMICOLON || k == TK_NEWLINE || k == TK_RBRACE || k == TK_EOF;
+}
+
+static void synchronize(Parser *p) {
+    p->panic_mode = 0;
+    while (!pp_at_end(p)) {
+        TokenKind k = pp_peek(p, 0)->kind;
+        if (k == TK_SEMICOLON || k == TK_NEWLINE) {
+            pp_advance(p);
+            return;
+        }
+        if (at_sync_point(k)) return;
+        pp_advance(p);
+    }
+}
+
+static void parse_error_at(Parser *p, Span span, const char *code,
+                           const char *fmt, ...) {
+    if (p->panic_mode) return;
+    p->panic_mode = 1;
+    p->had_error  = 1;
+    p->error_count++;
+
+    if (p->error_count > p->max_errors) return;
+
+    va_list ap;
+    va_start(ap, fmt);
+    char buf[256];
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    snprintf(p->error.msg, sizeof(p->error.msg), "%s", buf);
+    p->error.span = span;
+
+    if (p->error_count == p->max_errors) {
+        if (p->diag) {
+            Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_PARSER, "P0099",
+                                     "too many errors, stopping");
+            diag_annotate(d, span, 1, "error limit reached");
+            diag_emit(p->diag, d);
+        }
+        return;
+    }
+
+    if (p->diag) {
+        Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_PARSER, code, "%s", buf);
+        diag_annotate(d, span, 1, "%s", buf);
+        diag_emit(p->diag, d);
+    }
 }
 
 static Node *parse_expr(Parser *p, int min_prec);
@@ -660,6 +742,7 @@ static Node *parse_primary(Parser *p) {
 
     /* Parenthesized, tuple, or lambda */
     case TK_LPAREN: {
+        int paren_line = span.line;
         pp_advance(p);
         /* empty () = empty tuple */
         if (pp_match(p, TK_RPAREN)) {
@@ -712,7 +795,7 @@ static Node *parse_primary(Parser *p) {
             n->lit_array.elems = elems;
             return n;
         }
-        pp_expect(p, TK_RPAREN, "expected ')'");
+        pp_expect_ex(p, TK_RPAREN, "expected ')'", paren_line);
         /* Check for single-param lambda: (x) => body — suppressed in pattern expr context */
         if (!p->no_arrow_lambda && pp_check(p, TK_FAT_ARROW)) {
             pp_advance(p);
@@ -742,7 +825,9 @@ static Node *parse_primary(Parser *p) {
 
     /* Array literal */
     case TK_LBRACKET: {
+        int bracket_line = span.line;
         pp_advance(p);
+        (void)bracket_line;
         NodeList elems = nodelist_new();
         Node *first = NULL;
         if (!pp_check2(p, TK_RBRACKET, TK_EOF)) {
@@ -986,46 +1071,22 @@ static Node *parse_primary(Parser *p) {
         return n;
     }
 
-    default:
-        if (!p->had_error) {
-            Token *t = pp_peek(p, 0);
-            const char *tname = t->sval ? t->sval : token_kind_name(t->kind);
-            /* Check if this looks like a misspelled keyword */
-            const char *suggestion = (t->kind == TK_IDENT && t->sval)
-                                   ? suggest_keyword(t->sval) : NULL;
-            if (suggestion) {
-                snprintf(p->error.msg, sizeof(p->error.msg),
-                         "unexpected token '%s' (did you mean '%s'?)",
-                         tname, suggestion);
-            } else {
-                snprintf(p->error.msg, sizeof(p->error.msg),
-                         "unexpected token '%s'",
-                         tname);
-            }
-            p->error.span = t->span;
-
-            /* Emit unified diagnostic */
-            if (p->diag) {
-                if (suggestion) {
-                    Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_PARSER, "P0020",
-                                             "unknown keyword '%s'", tname);
-                    diag_annotate(d, t->span, 1, "not a valid keyword");
-                    diag_hint(d, "did you mean '%s'?", suggestion);
-                    diag_emit(p->diag, d);
-                } else {
-                    Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_PARSER, "P0001",
-                                             "unexpected token '%s'", tname);
-                    diag_annotate(d, t->span, 1, "unexpected token here");
-                    diag_emit(p->diag, d);
-                }
-            }
-
-            p->had_error  = 1;
-        }
-        pp_advance(p); /* consume to avoid infinite loop */
+    default: {
+        Token *t = pp_peek(p, 0);
+        const char *tname = t->sval ? t->sval : token_kind_name(t->kind);
+        const char *suggestion = (t->kind == TK_IDENT && t->sval)
+                               ? suggest_keyword(t->sval) : NULL;
+        if (suggestion)
+            parse_error_at(p, t->span, "P0020",
+                           "unexpected token '%s' (did you mean '%s'?)", tname, suggestion);
+        else
+            parse_error_at(p, t->span, "P0001",
+                           "unexpected token '%s'", tname);
+        pp_advance(p);
         return node_new(NODE_LIT_NULL, span);
     }
-}
+    } /* switch */
+} /* parse_primary */
 
 static void parse_call_args(Parser *p, NodeList *args, NodePairList *kwargs) {
     while (!pp_check2(p, TK_RPAREN, TK_EOF)) {
@@ -1609,15 +1670,10 @@ static Node *parse_handle(Parser *p) {
                     pn->pat_ident.mutable = 0;
                     pm.pattern = pn;
                 } else {
-                    /* Report error for non-identifier handler parameter */
-                    if (!p->had_error) {
-                        snprintf(p->error.msg, sizeof(p->error.msg),
-                                 "expected identifier for handler parameter, got '%s'",
-                                 pt->sval ? pt->sval : token_kind_name(pt->kind));
-                        p->error.span = pt->span;
-                        p->had_error = 1;
-                    }
-                    pp_advance(p); /* skip bad token */
+                    parse_error_at(p, pt->span, "P0001",
+                                   "expected identifier for handler parameter, got '%s'",
+                                   pt->sval ? pt->sval : token_kind_name(pt->kind));
+                    pp_advance(p);
                 }
                 paramlist_push(&params, pm);
                 if (!pp_match(p, TK_COMMA)) break;
@@ -1679,11 +1735,16 @@ static Node *parse_effect_decl(Parser *p) {
 static Node *parse_block(Parser *p) {
     Token *ob = pp_expect(p, TK_LBRACE, "expected '{'");
     Span span = ob->span;
+    int open_line = ob->span.line;
     NodeList stmts = nodelist_new();
     Node *trailing = NULL;
 
     while (!pp_check2(p, TK_RBRACE, TK_EOF)) {
-        if (p->had_error) break;
+        if (p->error_count >= p->max_errors) break;
+        if (p->panic_mode) {
+            synchronize(p);
+            if (pp_check2(p, TK_RBRACE, TK_EOF)) break;
+        }
         Node *stmt = parse_stmt(p);
         if (!stmt) continue;
             if (stmt->tag == NODE_EXPR_STMT && !stmt->expr_stmt.has_semicolon &&
@@ -1695,7 +1756,7 @@ static Node *parse_block(Parser *p) {
         }
         nodelist_push(&stmts, stmt);
     }
-    pp_expect(p, TK_RBRACE, "expected '}'");
+    pp_expect_ex(p, TK_RBRACE, "expected '}'", open_line);
     return make_block(stmts, trailing, span);
 }
 
@@ -2454,9 +2515,10 @@ static Node *parse_fn_decl(Parser *p, int is_pub, int is_async, int is_pure) {
         pp_match(p, TK_GT);
     }
 
-    pp_expect(p, TK_LPAREN, "expected '('");
+    Token *fn_open = pp_expect(p, TK_LPAREN, "expected '('");
+    int fn_paren_line = fn_open->span.line;
     ParamList params = parse_params(p);
-    pp_expect(p, TK_RPAREN, "expected ')'");
+    pp_expect_ex(p, TK_RPAREN, "expected ')'", fn_paren_line);
 
     /* optional return type */
     TypeExpr *ret_type = NULL;
@@ -3154,14 +3216,19 @@ static Node *parse_stmt(Parser *p) {
         pp_advance(p); /* consume 'module' */
         Token *name_tok = pp_expect(p, TK_IDENT, "expected module name");
         char *mod_name = xs_strdup(name_tok->sval ? name_tok->sval : "");
-        pp_expect(p, TK_LBRACE, "expected '{'");
+        Token *ob = pp_expect(p, TK_LBRACE, "expected '{'");
+        int mod_open_line = ob->span.line;
         NodeList body = nodelist_new();
         while (!pp_check2(p, TK_RBRACE, TK_EOF)) {
-            if (p->had_error) break;
+            if (p->error_count >= p->max_errors) break;
+            if (p->panic_mode) {
+                synchronize(p);
+                if (pp_check2(p, TK_RBRACE, TK_EOF)) break;
+            }
             Node *s = parse_stmt(p);
             if (s) nodelist_push(&body, s);
         }
-        pp_expect(p, TK_RBRACE, "expected '}'");
+        pp_expect_ex(p, TK_RBRACE, "expected '}'", mod_open_line);
         Node *n = node_new(NODE_MODULE_DECL, span);
         n->module_decl.name = mod_name;
         n->module_decl.body = body;
@@ -3246,7 +3313,15 @@ static Node *parse_stmt(Parser *p) {
         TypeExpr *ann = NULL;
         if (pp_match(p, TK_COLON)) ann = parse_type_expr(p);
         Node *val = NULL;
-        if (pp_match(p, TK_ASSIGN)) val = parse_expr(p, 0);
+        if (pp_match(p, TK_ASSIGN)) {
+            Token *next = pp_peek(p, 0);
+            if (next->kind == TK_SEMICOLON || next->kind == TK_NEWLINE || next->kind == TK_EOF) {
+                parse_error_at(p, next->span, "P0001", "expected expression after '='");
+                synchronize(p);
+            } else {
+                val = parse_expr(p, 0);
+            }
+        }
         pp_match(p, TK_SEMICOLON);
         Node *n = node_new(NODE_LET, span);
         n->let.pattern  = pat;
@@ -3263,7 +3338,15 @@ static Node *parse_stmt(Parser *p) {
         TypeExpr *ann = NULL;
         if (pp_match(p, TK_COLON)) ann = parse_type_expr(p);
         Node *val = NULL;
-        if (pp_match(p, TK_ASSIGN)) val = parse_expr(p, 0);
+        if (pp_match(p, TK_ASSIGN)) {
+            Token *next = pp_peek(p, 0);
+            if (next->kind == TK_SEMICOLON || next->kind == TK_NEWLINE || next->kind == TK_EOF) {
+                parse_error_at(p, next->span, "P0001", "expected expression after '='");
+                synchronize(p);
+            } else {
+                val = parse_expr(p, 0);
+            }
+        }
         pp_match(p, TK_SEMICOLON);
         Node *n = node_new(NODE_VAR, span);
         n->let.pattern  = pat;
@@ -3280,7 +3363,14 @@ static Node *parse_stmt(Parser *p) {
         TypeExpr *ann = NULL;
         if (pp_match(p, TK_COLON)) ann = parse_type_expr(p);
         pp_expect(p, TK_ASSIGN, "const requires value");
-        Node *val = parse_expr(p, 0);
+        Node *val = NULL;
+        Token *cnext = pp_peek(p, 0);
+        if (cnext->kind == TK_SEMICOLON || cnext->kind == TK_NEWLINE || cnext->kind == TK_EOF) {
+            parse_error_at(p, cnext->span, "P0001", "expected expression after '='");
+            synchronize(p);
+        } else if (!p->panic_mode) {
+            val = parse_expr(p, 0);
+        }
         pp_match(p, TK_SEMICOLON);
         Node *n = node_new(NODE_CONST, span);
         n->const_.name     = xs_strdup(name_tok3->sval ? name_tok3->sval : "");
@@ -3383,28 +3473,16 @@ static Node *parse_stmt(Parser *p) {
        Only trigger when: (1) exact match in typo table, (2) followed by identifier or '('.
        This catches patterns like "function foo()" or "def bar()" early with a helpful message.
        We skip the entire pseudo-declaration to avoid cascading errors. */
-    if (tok->kind == TK_IDENT && tok->sval && !p->had_error) {
+    if (tok->kind == TK_IDENT && tok->sval) {
         const char *suggestion = suggest_keyword_exact(tok->sval);
         if (suggestion) {
             Token *next = pp_peek(p, 1);
             if (next->kind == TK_IDENT || next->kind == TK_LPAREN ||
-                next->kind == TK_STAR /* fn* generator */) {
-                snprintf(p->error.msg, sizeof(p->error.msg),
-                         "'%s' is not a keyword in XS (did you mean '%s'?)",
-                         tok->sval, suggestion);
-                p->error.span = tok->span;
-
-                /* Emit unified diagnostic */
-                if (p->diag) {
-                    Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_PARSER, "P0020",
-                                             "unknown keyword '%s'", tok->sval);
-                    diag_annotate(d, tok->span, 1, "not a valid keyword in XS");
-                    diag_hint(d, "did you mean '%s'?", suggestion);
-                    diag_emit(p->diag, d);
-                }
-
-                p->had_error = 1;
-                /* Skip the rest of this pseudo-declaration including { ... } body */
+                next->kind == TK_STAR) {
+                parse_error_at(p, tok->span, "P0020",
+                               "'%s' is not a keyword in XS (did you mean '%s'?)",
+                               tok->sval, suggestion);
+                /* Skip the pseudo-declaration including { ... } body */
                 int brace_depth = 0;
                 while (!pp_at_end(p)) {
                     TokenKind k = pp_peek(p, 0)->kind;
@@ -3418,6 +3496,7 @@ static Node *parse_stmt(Parser *p) {
                     else pp_advance(p);
                 }
                 pp_match(p, TK_SEMICOLON);
+                p->panic_mode = 0;
                 return node_new(NODE_LIT_NULL, span);
             }
         }
@@ -3441,19 +3520,8 @@ Node *parser_parse(Parser *p) {
     NodeList stmts = nodelist_new();
 
     while (!pp_at_end(p)) {
-        if (p->had_error) {
-            /* simple error recovery: skip to next statement boundary */
-            while (!pp_at_end(p)) {
-                Token *t = pp_peek(p, 0);
-                if (t->kind == TK_FN || t->kind == TK_CLASS || t->kind == TK_LET ||
-                    t->kind == TK_VAR || t->kind == TK_CONST || t->kind == TK_IF ||
-                    t->kind == TK_WHILE || t->kind == TK_FOR || t->kind == TK_RETURN ||
-                    t->kind == TK_IMPORT || t->kind == TK_RBRACE)
-                    break;
-                pp_advance(p);
-            }
-            p->had_error = 0;
-        }
+        if (p->error_count >= p->max_errors) break;
+        if (p->panic_mode) synchronize(p);
         skip_semis(p);
         if (pp_at_end(p)) break;
         Node *stmt = parse_stmt(p);

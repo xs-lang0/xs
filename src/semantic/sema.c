@@ -75,6 +75,60 @@ static int        g_ntraits = 0;
 static int        g_traits_cap = 0;
 
 static int g_in_pure = 0;
+static int g_tc_ran = 0;
+
+/* return type annotation stack for literal return checks */
+#define RET_ANN_MAX 64
+static TypeExpr *g_ret_ann_stack[RET_ANN_MAX];
+static int       g_ret_ann_depth = 0;
+
+static void ret_ann_push(TypeExpr *te) {
+    if (g_ret_ann_depth < RET_ANN_MAX) g_ret_ann_stack[g_ret_ann_depth++] = te;
+}
+static void ret_ann_pop(void) {
+    if (g_ret_ann_depth > 0) g_ret_ann_depth--;
+}
+static TypeExpr *ret_ann_current(void) {
+    return g_ret_ann_depth > 0 ? g_ret_ann_stack[g_ret_ann_depth - 1] : NULL;
+}
+
+/* check if a literal node obviously mismatches a type annotation */
+static const char *literal_type_name(NodeTag tag) {
+    switch (tag) {
+        case NODE_LIT_INT:    return "int";
+        case NODE_LIT_FLOAT:  return "float";
+        case NODE_LIT_STRING: return "string";
+        case NODE_LIT_BOOL:   return "bool";
+        default:              return NULL;
+    }
+}
+
+static int ann_matches_literal(const char *ann, NodeTag tag) {
+    if (!ann) return 1;
+    if (tag == NODE_LIT_INT)
+        return strcmp(ann,"int")==0 || strcmp(ann,"i32")==0 || strcmp(ann,"i64")==0;
+    if (tag == NODE_LIT_FLOAT)
+        return strcmp(ann,"float")==0 || strcmp(ann,"f32")==0 || strcmp(ann,"f64")==0;
+    if (tag == NODE_LIT_STRING)
+        return strcmp(ann,"str")==0 || strcmp(ann,"string")==0;
+    if (tag == NODE_LIT_BOOL)
+        return strcmp(ann,"bool")==0;
+    return 1; /* not a literal we check */
+}
+
+static void check_literal_type(SemaCtx *ctx, TypeExpr *te, Node *val) {
+    if (g_tc_ran) return; /* full type checker already handled this */
+    if (!te || !val) return;
+    if (te->kind != TEXPR_NAMED || !te->name) return;
+    const char *lit = literal_type_name(val->tag);
+    if (!lit) return;
+    if (!ann_matches_literal(te->name, val->tag)) {
+        Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_SEMANTIC, "T0010",
+            "type mismatch: expected '%s', got %s literal", te->name, lit);
+        diag_annotate(d, val->span, 1, "expected '%s'", te->name);
+        diag_emit(ctx->diag, d);
+    }
+}
 
 static void walk(SemaCtx *ctx, Node *n);
 
@@ -149,6 +203,7 @@ static void walk(SemaCtx *ctx, Node *n) {
             diag_hint(d, "use 'let %s: <type> = ...'", n->let.name);
             diag_emit(ctx->diag, d);
         }
+        check_literal_type(ctx, n->let.type_ann, n->let.value);
         if (n->let.name) bind_push(n->let.name, 0);
         if (n->let.value) walk(ctx, n->let.value);
         break;
@@ -161,6 +216,7 @@ static void walk(SemaCtx *ctx, Node *n) {
             diag_hint(d, "use 'var %s: <type> = ...'", n->let.name);
             diag_emit(ctx->diag, d);
         }
+        check_literal_type(ctx, n->let.type_ann, n->let.value);
         if (n->let.name) bind_push(n->let.name, 1);
         if (n->let.value) walk(ctx, n->let.value);
         break;
@@ -205,11 +261,13 @@ static void walk(SemaCtx *ctx, Node *n) {
         int saved_pure  = g_in_pure;
         int saved_binds = bind_save();
         if (n->fn_decl.is_pure) g_in_pure++;
+        ret_ann_push(n->fn_decl.ret_type);
         for (int i = 0; i < n->fn_decl.params.len; i++) {
             Param *pm = &n->fn_decl.params.items[i];
             if (pm->name) bind_push(pm->name, 0);
         }
         if (n->fn_decl.body) walk(ctx, n->fn_decl.body);
+        ret_ann_pop();
         bind_restore(saved_binds);
         g_in_pure = saved_pure;
         break;
@@ -301,6 +359,11 @@ static void walk(SemaCtx *ctx, Node *n) {
         break;
     }
 
+    case NODE_RETURN:
+        check_literal_type(ctx, ret_ann_current(), n->ret.value);
+        if (n->ret.value) walk(ctx, n->ret.value);
+        break;
+
     case NODE_CONST:
         if (ctx->strict && n->const_.name && !n->const_.type_ann) {
             Diagnostic *d = diag_new(DIAG_ERROR, DIAG_PHASE_SEMANTIC, "S0010",
@@ -309,6 +372,7 @@ static void walk(SemaCtx *ctx, Node *n) {
             diag_hint(d, "use 'const %s: <type> = ...'", n->const_.name);
             diag_emit(ctx->diag, d);
         }
+        check_literal_type(ctx, n->const_.type_ann, n->const_.value);
         if (n->const_.value) walk(ctx, n->const_.value);
         break;
 
@@ -485,7 +549,7 @@ void sema_init(SemaCtx *ctx, int lenient, int strict) {
     ctx->lenient = lenient;
     ctx->strict = strict;
     ctx->st = symtab_new();
-    g_nbinds = 0; g_ndefnames = 0; g_nimpls = 0; g_ntraits = 0; g_in_pure = 0;
+    g_nbinds = 0; g_ndefnames = 0; g_nimpls = 0; g_ntraits = 0; g_in_pure = 0; g_ret_ann_depth = 0; g_tc_ran = 0;
 }
 void sema_free(SemaCtx *ctx) {
     if (ctx->st) { symtab_free(ctx->st); ctx->st = NULL; }
@@ -498,11 +562,15 @@ int sema_analyze(SemaCtx *ctx, Node *program, const char *filename) {
     g_nimpls = 0;
     g_ntraits = 0;
     g_in_pure = 0;
+    g_ret_ann_depth = 0;
     resolve_program(program, ctx->st, ctx);
     /* skip typecheck if resolve had errors to avoid cascading noise */
     int resolve_errors = ctx->diag ? diag_context_error_count(ctx->diag) : 0;
-    if (resolve_errors == 0)
+    g_tc_ran = 0;
+    if (resolve_errors == 0) {
         tc_program(program, ctx->st, ctx);
+        g_tc_ran = 1;
+    }
     collect_decls(ctx, program);
     check_orphans(ctx, program);
     check_impls(ctx, program);
