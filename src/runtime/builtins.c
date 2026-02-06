@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "core/xs_compat.h"
 #include "runtime/interp.h"
+#include "tls/xs_tls.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4370,14 +4371,11 @@ static Value *native_net_url_parse(Interp *ig, Value **a, int n) {
 /* Parse a URL into host, port, path. Returns 0 on success, -1 on error. */
 static int http_parse_url(const char *url, char *host, int hostlen,
                           int *port, char *path, int pathlen) {
-    if (strncmp(url, "https://", 8) == 0) {
-        fprintf(stderr, "error: https:// not supported (TLS not yet implemented). Use http:// instead.\n");
-        return -1;
-    }
     const char *start = url;
-    if (strncmp(url, "http://", 7) == 0) start = url + 7;
-
-    *port = 80;
+    int is_https = 0;
+    if (strncmp(url, "https://", 8) == 0) { start = url + 8; is_https = 1; *port = 443; }
+    else if (strncmp(url, "http://", 7) == 0) { start = url + 7; *port = 80; }
+    else { *port = 80; }
 
     const char *slash = strchr(start, '/');
     const char *host_end = slash ? slash : start + strlen(start);
@@ -4596,10 +4594,21 @@ static Value *http_do_request(const char *method, const char *url,
     if (http_parse_url(url, host, sizeof host, &port, path, sizeof path) < 0)
         return value_incref(XS_NULL_VAL);
 
+    int use_tls = (strncmp(url, "https://", 8) == 0);
     int fd = http_connect(host, port);
     if (fd < 0) {
         fprintf(stderr, "error: could not connect to %s:%d\n", host, port);
         return value_incref(XS_NULL_VAL);
+    }
+
+    xs_tls_conn *tls = NULL;
+    if (use_tls) {
+        tls = xs_tls_connect(fd, host);
+        if (!tls) {
+            fprintf(stderr, "error: TLS handshake failed for %s\n", host);
+            close(fd);
+            return value_incref(XS_NULL_VAL);
+        }
     }
 
     /* build request */
@@ -4652,7 +4661,11 @@ static Value *http_do_request(const char *method, const char *url,
     httpbuf_append(&req, "\r\n", 2);
 
     /* send request */
-    {
+    if (tls) {
+        if (xs_tls_write(tls, req.data, (int)req.len) < 0) {
+            xs_tls_close(tls); httpbuf_free(&req); return value_incref(XS_NULL_VAL);
+        }
+    } else {
         size_t sent = 0;
         while (sent < req.len) {
             ssize_t w = write(fd, req.data + sent, req.len - sent);
@@ -4664,19 +4677,33 @@ static Value *http_do_request(const char *method, const char *url,
 
     /* send body */
     if (body && body_len > 0) {
-        size_t sent = 0;
-        while (sent < body_len) {
-            ssize_t w = write(fd, body + sent, body_len - sent);
-            if (w <= 0) { close(fd); return value_incref(XS_NULL_VAL); }
-            sent += (size_t)w;
+        if (tls) {
+            if (xs_tls_write(tls, body, (int)body_len) < 0) {
+                xs_tls_close(tls); return value_incref(XS_NULL_VAL);
+            }
+        } else {
+            size_t sent = 0;
+            while (sent < body_len) {
+                ssize_t w = write(fd, body + sent, body_len - sent);
+                if (w <= 0) { close(fd); return value_incref(XS_NULL_VAL); }
+                sent += (size_t)w;
+            }
         }
     }
 
     /* read response */
     HttpBuf resp;
     httpbuf_init(&resp);
-    http_read_all(fd, &resp);
-    close(fd);
+    if (tls) {
+        char tmp[4096];
+        int nr;
+        while ((nr = xs_tls_read(tls, tmp, sizeof tmp)) > 0)
+            httpbuf_append(&resp, tmp, (size_t)nr);
+        xs_tls_close(tls);
+    } else {
+        http_read_all(fd, &resp);
+        close(fd);
+    }
 
     Value *result = http_parse_response(&resp);
     httpbuf_free(&resp);

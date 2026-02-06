@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -O2 -Wall -Wextra -Wno-unused-parameter -std=c11 -Isrc
+CFLAGS  = -O2 -Wall -Wextra -Wno-unused-parameter -std=c11 -Isrc -Isrc/tls/bearssl
 LDFLAGS = -lm -lpthread
 
 # Feature flags (all enabled by default)
@@ -73,7 +73,9 @@ SEMA_SRCS = src/types/types.c \
             src/semantic/cache.c \
             src/semantic/sema.c
 
-SRCS = $(CORE_SRCS) $(RUNTIME_SRCS) $(REPL_SRCS) $(LINT_SRCS) $(TYPES_EXTRA_SRCS) $(EMBED_SRCS) $(DIAG_SRCS) $(TOOL_SRCS) $(MAIN_SRCS) $(SEMA_SRCS)
+TLS_SRCS = $(wildcard src/tls/*.c) $(wildcard src/tls/bearssl/**/*.c) $(wildcard src/tls/bearssl/*.c)
+
+SRCS = $(CORE_SRCS) $(RUNTIME_SRCS) $(REPL_SRCS) $(LINT_SRCS) $(TYPES_EXTRA_SRCS) $(EMBED_SRCS) $(DIAG_SRCS) $(TOOL_SRCS) $(MAIN_SRCS) $(SEMA_SRCS) $(TLS_SRCS)
 
 # Conditional sources
 ifeq ($(XSC_ENABLE_VM),1)
@@ -185,5 +187,5 @@ wasi:
 	@echo "WASI target not yet implemented (see Phase N)"
 
 clean:
-	rm -f $(OBJS) $(TARGET) xs_*
+	rm -f $(OBJS) $(TARGET)
 	find src -name '*.o' -delete

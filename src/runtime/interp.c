@@ -14,6 +14,7 @@
 #include <ctype.h>
 #include <time.h>
 #include <limits.h>
+#include <sys/stat.h>
 
 Interp *g_current_interp = NULL;
 
@@ -167,6 +168,7 @@ static Value *builtin_struct_eq(Interp *interp, Value **args, int argc) {
 
 #define CF_CLEAR(i)  do { (i)->cf.signal=0; value_decref((i)->cf.value); (i)->cf.value=NULL; free((i)->cf.label); (i)->cf.label=NULL; } while(0)
 
+static void hoist_functions(Interp *i, NodeList *stmts);
 static Value *EVAL(Interp *i, Node *n) {
     if (!n || i->cf.signal) return value_incref(XS_NULL_VAL);
     return interp_eval(i, n);
@@ -300,6 +302,7 @@ static Value *eval_binop(Interp *i, Node *n);
 Value *call_value(Interp *i, Value *callee, Value **args, int argc,
                           const char *call_site);
 static int match_pattern(Interp *i, Node *pat, Value *val, Env *env);
+static void hoist_functions(Interp *i, NodeList *stmts);
 
 static int bind_pattern(Interp *i, Node *pat, Value *val, Env *env, int mutable) {
     if (!pat) return 1;
@@ -5282,6 +5285,80 @@ do_call: ;
     }
 }
 
+static Value *load_xs_module_file(Interp *i, const char *filepath) {
+    FILE *f = fopen(filepath, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *src = xs_malloc((size_t)(sz + 1));
+    if (fread(src, 1, (size_t)sz, f) != (size_t)sz) {
+        free(src);
+        fclose(f);
+        return NULL;
+    }
+    src[sz] = '\0';
+    fclose(f);
+
+    Lexer lex;
+    lexer_init(&lex, src, filepath);
+    TokenArray ta = lexer_tokenize(&lex);
+    Parser p;
+    parser_init(&p, &ta, filepath);
+    Node *prog = parser_parse(&p);
+    token_array_free(&ta);
+    if (!prog || p.had_error) {
+        free(src);
+        if (prog) node_free(prog);
+        return NULL;
+    }
+
+    Env *saved = i->env;
+    i->env = env_new(i->globals);
+    hoist_functions(i, &prog->program.stmts);
+    for (int j = 0; j < prog->program.stmts.len; j++) {
+        interp_exec(i, prog->program.stmts.items[j]);
+        if (i->cf.signal == CF_RETURN) CF_CLEAR(i);
+        else if (i->cf.signal) break;
+    }
+    if (i->cf.signal == CF_ERROR || i->cf.signal == CF_PANIC || i->cf.signal == CF_THROW)
+        CF_CLEAR(i);
+
+    XSMap *m = map_new();
+    for (int j = 0; j < i->env->len; j++)
+        map_set(m, i->env->bindings[j].name, value_incref(i->env->bindings[j].value));
+
+    env_decref(i->env);
+    i->env = saved;
+    node_free(prog);
+    free(src);
+
+    return xs_module(m);
+}
+
+static Value *try_load_xs_module(Interp *i, const char *modname) {
+    char path[2048];
+    struct stat st;
+
+    /* try xs_modules/<name>/main.xs */
+    snprintf(path, sizeof(path), "xs_modules/%s/main.xs", modname);
+    if (stat(path, &st) == 0) return load_xs_module_file(i, path);
+
+    /* try xs_modules/<name>/lib.xs */
+    snprintf(path, sizeof(path), "xs_modules/%s/lib.xs", modname);
+    if (stat(path, &st) == 0) return load_xs_module_file(i, path);
+
+    /* try xs_modules/<name>/src/lib.xs */
+    snprintf(path, sizeof(path), "xs_modules/%s/src/lib.xs", modname);
+    if (stat(path, &st) == 0) return load_xs_module_file(i, path);
+
+    /* try xs_modules/<name>/<name>.xs */
+    snprintf(path, sizeof(path), "xs_modules/%s/%s.xs", modname, modname);
+    if (stat(path, &st) == 0) return load_xs_module_file(i, path);
+
+    return NULL;
+}
+
 void interp_exec(Interp *i, Node *stmt) {
     if (!stmt || i->cf.signal) return;
     i->current_span = stmt->span;
@@ -5676,6 +5753,14 @@ void interp_exec(Interp *i, Node *stmt) {
         if (stmt->import.nparts == 0) break;
         char *modname = stmt->import.path[0];
         Value *mod = env_get(i->env, modname);
+        if (!mod) {
+            mod = try_load_xs_module(i, modname);
+            if (mod) {
+                env_define(i->globals, modname, mod, 1);
+                value_decref(mod);
+                mod = env_get(i->env, modname);
+            }
+        }
         if (mod) {
             if (stmt->import.nitems > 0) {
                 for (int j=0;j<stmt->import.nitems;j++) {
