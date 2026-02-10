@@ -1467,6 +1467,14 @@ int main(int argc, char **argv) {
             return 1;
 #endif
 
+        } else if (strcmp(sub, "list") == 0) {
+#ifdef XSC_ENABLE_PKG
+            return pkg_list();
+#else
+            fprintf(stderr, "xs list: not enabled in this build (rebuild with XSC_ENABLE_PKG=1)\n");
+            return 1;
+#endif
+
         } else if (strcmp(sub, "publish") == 0) {
             fprintf(stderr, "xs publish: no registry configured (set [registry] in xs.toml)\n");
             return 1;

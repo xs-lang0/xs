@@ -5300,22 +5300,23 @@ static Value *load_xs_module_file(Interp *i, const char *filepath) {
     src[sz] = '\0';
     fclose(f);
 
+    char *filepath_owned = xs_strdup(filepath);
     Lexer lex;
-    lexer_init(&lex, src, filepath);
+    lexer_init(&lex, src, filepath_owned);
     TokenArray ta = lexer_tokenize(&lex);
     Parser p;
-    parser_init(&p, &ta, filepath);
+    parser_init(&p, &ta, filepath_owned);
     Node *prog = parser_parse(&p);
     token_array_free(&ta);
     if (!prog || p.had_error) {
         free(src);
+        free(filepath_owned);
         if (prog) node_free(prog);
         return NULL;
     }
 
     Env *saved = i->env;
     i->env = env_new(i->globals);
-    hoist_functions(i, &prog->program.stmts);
     for (int j = 0; j < prog->program.stmts.len; j++) {
         interp_exec(i, prog->program.stmts.items[j]);
         if (i->cf.signal == CF_RETURN) CF_CLEAR(i);
@@ -5330,8 +5331,10 @@ static Value *load_xs_module_file(Interp *i, const char *filepath) {
 
     env_decref(i->env);
     i->env = saved;
-    node_free(prog);
-    free(src);
+    /* prog and src intentionally kept alive: function bodies
+       reference AST nodes and the source buffer */
+    (void)prog;
+    (void)src;
 
     return xs_module(m);
 }
