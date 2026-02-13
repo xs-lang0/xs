@@ -5781,6 +5781,73 @@ void interp_exec(Interp *i, Node *stmt) {
         break;
     }
 
+    case NODE_USE: {
+        char resolved[2048];
+        const char *use_path = stmt->use_.path;
+        struct stat st2;
+
+        /* resolve relative to current file's directory */
+        if (use_path[0] != '/') {
+            const char *fn = i->filename ? i->filename : "";
+            const char *last_slash = strrchr(fn, '/');
+            if (last_slash) {
+                int dirlen = (int)(last_slash - fn);
+                snprintf(resolved, sizeof(resolved), "%.*s/%s", dirlen, fn, use_path);
+            } else {
+                snprintf(resolved, sizeof(resolved), "%s", use_path);
+            }
+        } else {
+            snprintf(resolved, sizeof(resolved), "%s", use_path);
+        }
+
+        /* directory import: look for mod.xs or index.xs inside */
+        size_t rlen = strlen(resolved);
+        if (rlen > 0 && resolved[rlen - 1] == '/') {
+            char dir_try[2048];
+            snprintf(dir_try, sizeof(dir_try), "%smod.xs", resolved);
+            if (stat(dir_try, &st2) == 0) {
+                snprintf(resolved, sizeof(resolved), "%s", dir_try);
+            } else {
+                snprintf(dir_try, sizeof(dir_try), "%sindex.xs", resolved);
+                if (stat(dir_try, &st2) == 0)
+                    snprintf(resolved, sizeof(resolved), "%s", dir_try);
+            }
+        } else if (stat(resolved, &st2) == 0 && S_ISDIR(st2.st_mode)) {
+            char dir_try[2048];
+            snprintf(dir_try, sizeof(dir_try), "%s/mod.xs", resolved);
+            if (stat(dir_try, &st2) == 0) {
+                snprintf(resolved, sizeof(resolved), "%s", dir_try);
+            } else {
+                snprintf(dir_try, sizeof(dir_try), "%s/index.xs", resolved);
+                if (stat(dir_try, &st2) == 0)
+                    snprintf(resolved, sizeof(resolved), "%s", dir_try);
+            }
+        }
+
+        Value *mod = load_xs_module_file(i, resolved);
+        if (!mod) {
+            xs_runtime_error(stmt->span, "failed to load module", NULL,
+                "could not load '%s'", resolved);
+            i->cf.signal = CF_PANIC;
+            i->cf.value = xs_str("module load error");
+            break;
+        }
+
+        if (stmt->use_.import_all) {
+            env_define(i->env, stmt->use_.alias, mod, 1);
+        } else {
+            for (int j = 0; j < stmt->use_.nnames; j++) {
+                Value *item = NULL;
+                if (mod->tag == XS_MODULE || mod->tag == XS_MAP)
+                    item = map_get(mod->map, stmt->use_.names[j]);
+                if (item)
+                    env_define(i->env, stmt->use_.name_aliases[j], item, 1);
+            }
+        }
+        value_decref(mod);
+        break;
+    }
+
     case NODE_MODULE_DECL: {
         Env *saved = i->env;
         push_env(i);

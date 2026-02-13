@@ -535,6 +535,15 @@ static void resolve_node(Node *n, SymTab *st, SemaCtx *ctx) {
                 sym_define(st, n->import.items[ii], SYM_MODULE_ITEM, NULL, n, 0);
         }
         break;
+    case NODE_USE:
+        if (n->use_.import_all && n->use_.alias) {
+            sym_define(st, n->use_.alias, SYM_MODULE_ITEM, NULL, n, 0);
+        }
+        for (int ii = 0; ii < n->use_.nnames; ii++) {
+            if (n->use_.name_aliases[ii])
+                sym_define(st, n->use_.name_aliases[ii], SYM_MODULE_ITEM, NULL, n, 0);
+        }
+        break;
     case NODE_STRUCT_DECL:
     case NODE_ENUM_DECL:
     case NODE_TRAIT_DECL:

@@ -38,6 +38,7 @@ static const KWEntry KEYWORDS[] = {
     {"export",   TK_EXPORT},
     {"as",       TK_AS},
     {"from",     TK_FROM},
+    {"use",      TK_USE},
     {"async",    TK_ASYNC},
     {"await",    TK_AWAIT},
     {"actor",    TK_ACTOR},
@@ -1042,6 +1043,7 @@ const char *token_kind_name(TokenKind k) {
     case TK_ACTOR: return "actor";
     case TK_HASH_BRACKET: return "#[";
     case TK_UNSAFE: return "unsafe";
+    case TK_USE: return "use";
     default: return "?";
     }
 }

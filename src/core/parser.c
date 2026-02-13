@@ -2918,6 +2918,78 @@ static Node *parse_impl_decl(Parser *p) {
     return n;
 }
 
+static Node *parse_use(Parser *p) {
+    Token *kw = pp_expect(p, TK_USE, "expected 'use'");
+    Span span = kw->span;
+
+    Token *path_tok = pp_expect(p, TK_STRING, "expected file path string after 'use'");
+    char *path = xs_strdup(path_tok->sval ? path_tok->sval : "");
+
+    char  *alias = NULL;
+    char **names = NULL;
+    char **name_aliases = NULL;
+    int    nnames = 0;
+    int    import_all = 1;
+
+    if (pp_check(p, TK_AS)) {
+        pp_advance(p);
+        Token *al = pp_expect(p, TK_IDENT, "expected alias name");
+        alias = xs_strdup(al->sval ? al->sval : "");
+    } else if (pp_check(p, TK_LBRACE)) {
+        pp_advance(p);
+        import_all = 0;
+        while (!pp_check2(p, TK_RBRACE, TK_EOF)) {
+            Token *it = pp_expect(p, TK_IDENT, "expected name");
+            char *orig = xs_strdup(it->sval ? it->sval : "");
+            char *renamed = NULL;
+            if (pp_match(p, TK_AS)) {
+                Token *al = pp_expect(p, TK_IDENT, "expected alias name");
+                renamed = xs_strdup(al->sval ? al->sval : "");
+            } else {
+                renamed = xs_strdup(orig);
+            }
+            names = xs_realloc(names, (nnames + 1) * sizeof(char *));
+            name_aliases = xs_realloc(name_aliases, (nnames + 1) * sizeof(char *));
+            names[nnames] = orig;
+            name_aliases[nnames] = renamed;
+            nnames++;
+            if (!pp_match(p, TK_COMMA)) break;
+        }
+        pp_expect(p, TK_RBRACE, "expected '}'");
+    }
+
+    /* derive namespace name from filename if no alias and namespace import */
+    if (import_all && !alias) {
+        /* work on a copy so we can strip trailing slash */
+        char *tmp = xs_strdup(path);
+        size_t tlen = strlen(tmp);
+        while (tlen > 0 && tmp[tlen - 1] == '/') tmp[--tlen] = '\0';
+        const char *slash = strrchr(tmp, '/');
+        const char *base = slash ? slash + 1 : tmp;
+        /* strip .xs extension */
+        const char *dot = strrchr(base, '.');
+        if (dot && strcmp(dot, ".xs") == 0) {
+            alias = xs_malloc((size_t)(dot - base) + 1);
+            memcpy(alias, base, (size_t)(dot - base));
+            alias[dot - base] = '\0';
+        } else {
+            alias = xs_strdup(base);
+        }
+        free(tmp);
+    }
+
+    pp_match(p, TK_SEMICOLON);
+
+    Node *n = node_new(NODE_USE, span);
+    n->use_.path = path;
+    n->use_.alias = alias;
+    n->use_.names = names;
+    n->use_.name_aliases = name_aliases;
+    n->use_.nnames = nnames;
+    n->use_.import_all = import_all;
+    return n;
+}
+
 static Node *parse_import(Parser *p) {
     Token *kw = pp_expect(p, TK_IMPORT, "expected 'import'");
     Span span = kw->span;
@@ -3209,6 +3281,7 @@ static Node *parse_stmt(Parser *p) {
         return n;
     }
     if (tok->kind == TK_IMPORT) return parse_import(p);
+    if (tok->kind == TK_USE) return parse_use(p);
     if (tok->kind == TK_EFFECT) return parse_effect_decl(p);
 
     if (tok->kind == TK_MODULE) {

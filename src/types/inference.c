@@ -2169,6 +2169,7 @@ static void cgen_infer_stmt(CGen *cg, Node *stmt) {
         break;
 
     case NODE_IMPORT:
+    case NODE_USE:
         break;
 
     case NODE_MODULE_DECL: {

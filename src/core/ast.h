@@ -94,6 +94,7 @@ typedef enum {
     NODE_IMPL_DECL,
     NODE_TRAIT_DECL,
     NODE_IMPORT,
+    NODE_USE,
     NODE_MODULE_DECL,
     NODE_TYPE_ALIAS,
 
@@ -411,6 +412,15 @@ struct Node {
             char **items;
             int    nitems;
         } import;
+
+        struct {
+            char  *path;        /* file path from the string literal */
+            char  *alias;       /* from 'as name', or derived from filename */
+            char **names;       /* selective imports: original names */
+            char **name_aliases;/* parallel: renamed name (or same as names[i]) */
+            int    nnames;
+            int    import_all;  /* 1 = namespace import, 0 = selective */
+        } use_;
 
         struct {
             char    *name;

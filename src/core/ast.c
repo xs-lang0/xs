@@ -376,6 +376,12 @@ void node_free(Node *n) {
         free(n->import.alias);
         free_string_array(n->import.items, n->import.nitems);
         break;
+    case NODE_USE:
+        free(n->use_.path);
+        free(n->use_.alias);
+        free_string_array(n->use_.names, n->use_.nnames);
+        free_string_array(n->use_.name_aliases, n->use_.nnames);
+        break;
     case NODE_MODULE_DECL:
         free(n->module_decl.name);
         nodelist_free(&n->module_decl.body);
