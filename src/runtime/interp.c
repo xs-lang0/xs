@@ -18,6 +18,81 @@
 
 Interp *g_current_interp = NULL;
 
+/* forward decl for plugin system */
+Value *call_value(Interp *i, Value *callee, Value **args, int argc,
+                  const char *call_site);
+
+/* ── plugin system globals ── */
+
+#define MAX_PLUGIN_METHODS 256
+typedef struct {
+    char  *type_name;
+    char  *method_name;
+    Value *fn;
+} PluginMethod;
+
+static PluginMethod g_plugin_methods[MAX_PLUGIN_METHODS];
+static int g_plugin_method_count = 0;
+
+#define MAX_TEARDOWN_FNS 64
+static Value *g_teardown_fns[MAX_TEARDOWN_FNS];
+static int g_teardown_count = 0;
+
+#define MAX_LOADED_XS_PLUGINS 64
+typedef struct {
+    char *name;
+    char *version;
+    char *source;    /* kept alive so AST nodes remain valid */
+    char *filepath;  /* kept alive for span references */
+    Node *program;   /* kept alive so function bodies remain valid */
+} LoadedXSPlugin;
+static LoadedXSPlugin g_xs_plugins[MAX_LOADED_XS_PLUGINS];
+static int g_xs_plugin_count = 0;
+
+static void plugin_register_method(const char *type_name, const char *method_name, Value *fn) {
+    if (g_plugin_method_count >= MAX_PLUGIN_METHODS) return;
+    PluginMethod *pm = &g_plugin_methods[g_plugin_method_count++];
+    pm->type_name = xs_strdup(type_name);
+    pm->method_name = xs_strdup(method_name);
+    pm->fn = value_incref(fn);
+}
+
+static Value *plugin_lookup_method(const char *type_name, const char *method_name) {
+    for (int j = 0; j < g_plugin_method_count; j++) {
+        if (strcmp(g_plugin_methods[j].type_name, type_name) == 0 &&
+            strcmp(g_plugin_methods[j].method_name, method_name) == 0) {
+            return g_plugin_methods[j].fn;
+        }
+    }
+    return NULL;
+}
+
+static void plugin_run_teardowns(void) {
+    for (int j = 0; j < g_teardown_count; j++) {
+        if (g_teardown_fns[j] && g_current_interp) {
+            Value *r = call_value(g_current_interp, g_teardown_fns[j], NULL, 0, "teardown");
+            if (r) value_decref(r);
+        }
+    }
+}
+
+static void plugin_register_loaded(const char *name, const char *version) {
+    if (g_xs_plugin_count >= MAX_LOADED_XS_PLUGINS) return;
+    g_xs_plugins[g_xs_plugin_count].name = xs_strdup(name);
+    g_xs_plugins[g_xs_plugin_count].version = version ? xs_strdup(version) : NULL;
+    g_xs_plugin_count++;
+}
+
+static int plugin_is_loaded(const char *name) {
+    for (int j = 0; j < g_xs_plugin_count; j++) {
+        if (g_xs_plugins[j].name && strcmp(g_xs_plugins[j].name, name) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* ── end plugin globals ── */
+
 /* enum variant constructor registry */
 typedef struct {
     char *type_name;
@@ -270,6 +345,10 @@ Interp *interp_new(const char *filename) {
 
 void interp_free(Interp *i) {
     if (!i) return;
+    /* run plugin teardown callbacks only for the main interpreter */
+    if (i == g_current_interp) {
+        plugin_run_teardowns();
+    }
     CF_CLEAR(i);
     env_decref(i->env);
     env_decref(i->globals);
@@ -3317,6 +3396,21 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
     Value *fn = env_get(i->env, method);
     if (fn) return call_value(i, fn, args, argc, method);
 
+    /* check plugin method registry */
+    {
+        const char *tname = value_type_str(obj);
+        Value *pfn = plugin_lookup_method(tname, method);
+        if (pfn) {
+            Value **new_args = xs_malloc((argc + 1) * sizeof(Value*));
+            new_args[0] = value_incref(obj);
+            for (int j = 0; j < argc; j++) new_args[j + 1] = args[j];
+            Value *r = call_value(i, pfn, new_args, argc + 1, method);
+            value_decref(new_args[0]);
+            free(new_args);
+            return r;
+        }
+    }
+
     char *repr = value_repr(obj);
     static const char *str_methods[] = {"len","trim","upper","lower","split","contains","replace","starts_with","ends_with","chars","to_str","bytes","repeat","join","slice","index_of","parse_int","parse_float","is_empty","reverse","capitalize","pad_left","pad_right","count",NULL};
     static const char *arr_methods[] = {"len","push","pop","map","filter","reduce","sort","reverse","contains","join","slice","flatten","enumerate","zip","any","all","find","index_of",NULL};
@@ -5362,6 +5456,459 @@ static Value *try_load_xs_module(Interp *i, const char *modname) {
     return NULL;
 }
 
+/* ── XS plugin system native functions ── */
+
+static Env *s_plugin_host_globals = NULL;
+
+static Value *native_plugin_global_set(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 2 || !args[0] || args[0]->tag != XS_STR || !s_plugin_host_globals)
+        return value_incref(XS_NULL_VAL);
+    env_define(s_plugin_host_globals, args[0]->s, value_incref(args[1]), 1);
+    return value_incref(XS_NULL_VAL);
+}
+
+static Value *native_plugin_global_get(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1 || !args[0] || args[0]->tag != XS_STR || !s_plugin_host_globals)
+        return value_incref(XS_NULL_VAL);
+    Value *v = env_get(s_plugin_host_globals, args[0]->s);
+    return v ? value_incref(v) : value_incref(XS_NULL_VAL);
+}
+
+static Value *native_plugin_global_names(Interp *interp, Value **args, int argc) {
+    (void)interp; (void)args; (void)argc;
+    Value *arr = xs_array_new();
+    if (!s_plugin_host_globals) return arr;
+    for (int j = 0; j < s_plugin_host_globals->len; j++)
+        array_push(arr->arr, xs_str(s_plugin_host_globals->bindings[j].name));
+    return arr;
+}
+
+static Value *native_plugin_add_method(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 3 || !args[0] || args[0]->tag != XS_STR ||
+        !args[1] || args[1]->tag != XS_STR ||
+        !args[2] || (args[2]->tag != XS_FUNC && args[2]->tag != XS_NATIVE))
+        return value_incref(XS_NULL_VAL);
+    plugin_register_method(args[0]->s, args[1]->s, args[2]);
+    return value_incref(XS_NULL_VAL);
+}
+
+static Value *native_plugin_teardown(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1 || !args[0] || (args[0]->tag != XS_FUNC && args[0]->tag != XS_NATIVE))
+        return value_incref(XS_NULL_VAL);
+    if (g_teardown_count < MAX_TEARDOWN_FNS) {
+        g_teardown_fns[g_teardown_count++] = value_incref(args[0]);
+    }
+    return value_incref(XS_NULL_VAL);
+}
+
+static Value *native_plugin_requires(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1 || !args[0] || args[0]->tag != XS_STR)
+        return value_incref(XS_NULL_VAL);
+    if (!plugin_is_loaded(args[0]->s)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "required plugin '%s' not loaded", args[0]->s);
+        fprintf(stderr, "xs: error: %s\n", buf);
+        if (g_current_interp) {
+            g_current_interp->cf.signal = CF_PANIC;
+            g_current_interp->cf.value = xs_str(buf);
+        }
+    }
+    return value_incref(XS_NULL_VAL);
+}
+
+/* AST constructors */
+static Value *native_ast_int_node(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("int"));
+    map_set(m->map, "value", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_int(0));
+    return m;
+}
+static Value *native_ast_float_node(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("float"));
+    map_set(m->map, "value", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_float(0.0));
+    return m;
+}
+static Value *native_ast_str_node(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("str"));
+    map_set(m->map, "value", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_str(""));
+    return m;
+}
+static Value *native_ast_bool_node(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("bool"));
+    map_set(m->map, "value", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_FALSE_VAL));
+    return m;
+}
+static Value *native_ast_null_node(Interp *interp, Value **args, int argc) {
+    (void)interp; (void)args; (void)argc;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("null"));
+    return m;
+}
+static Value *native_ast_ident(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("ident"));
+    map_set(m->map, "name", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_str(""));
+    return m;
+}
+static Value *native_ast_binop(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("binop"));
+    map_set(m->map, "op", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_str("+"));
+    map_set(m->map, "left", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "right", (argc > 2 && args[2]) ? value_incref(args[2]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_unary(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("unary"));
+    map_set(m->map, "op", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_str("-"));
+    map_set(m->map, "expr", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_call(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("call"));
+    map_set(m->map, "callee", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "args", (argc > 1 && args[1]) ? value_incref(args[1]) : xs_array_new());
+    return m;
+}
+static Value *native_ast_method_call(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("method_call"));
+    map_set(m->map, "obj", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "method", (argc > 1 && args[1]) ? value_incref(args[1]) : xs_str(""));
+    map_set(m->map, "args", (argc > 2 && args[2]) ? value_incref(args[2]) : xs_array_new());
+    return m;
+}
+static Value *native_ast_if_expr(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("if"));
+    map_set(m->map, "cond", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "then", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_if_else(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("if"));
+    map_set(m->map, "cond", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "then", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "else", (argc > 2 && args[2]) ? value_incref(args[2]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_block(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("block"));
+    map_set(m->map, "stmts", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_array_new());
+    map_set(m->map, "expr", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_let_decl(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("let"));
+    map_set(m->map, "name", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_str(""));
+    map_set(m->map, "value", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "type_ann", value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_var_decl(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("var"));
+    map_set(m->map, "name", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_str(""));
+    map_set(m->map, "value", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "type_ann", value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_fn_decl(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("fn_decl"));
+    map_set(m->map, "name", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_str(""));
+    map_set(m->map, "params", (argc > 1 && args[1]) ? value_incref(args[1]) : xs_array_new());
+    map_set(m->map, "body", (argc > 2 && args[2]) ? value_incref(args[2]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "ret_type", value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_lambda(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("lambda"));
+    map_set(m->map, "params", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_array_new());
+    map_set(m->map, "body", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_return_node(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("return"));
+    map_set(m->map, "value", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_assign(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("assign"));
+    map_set(m->map, "target", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "value", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_for_loop(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("for"));
+    map_set(m->map, "pattern", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "iter", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "body", (argc > 2 && args[2]) ? value_incref(args[2]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_while_loop(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("while"));
+    map_set(m->map, "cond", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "body", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_array(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("array"));
+    map_set(m->map, "elements", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_array_new());
+    return m;
+}
+static Value *native_ast_map_node(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("map"));
+    map_set(m->map, "keys", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_array_new());
+    map_set(m->map, "values", (argc > 1 && args[1]) ? value_incref(args[1]) : xs_array_new());
+    return m;
+}
+
+static void build_plugin_map(Value *plugin_map) {
+    /* plugin.lexer — empty map (phase 2) */
+    Value *lexer_map = xs_map_new();
+    map_set(plugin_map->map, "lexer", lexer_map);
+    value_decref(lexer_map);
+
+    /* plugin.parser — empty map (phase 2) */
+    Value *parser_map = xs_map_new();
+    map_set(plugin_map->map, "parser", parser_map);
+    value_decref(parser_map);
+
+    /* plugin.hooks — empty map */
+    Value *hooks_map = xs_map_new();
+    map_set(plugin_map->map, "hooks", hooks_map);
+    value_decref(hooks_map);
+
+    /* plugin.runtime */
+    Value *runtime_map = xs_map_new();
+
+    /* plugin.runtime.global with .set/.get/.names */
+    Value *global_map = xs_map_new();
+    map_set(global_map->map, "set", xs_native(native_plugin_global_set));
+    map_set(global_map->map, "get", xs_native(native_plugin_global_get));
+    map_set(global_map->map, "names", xs_native(native_plugin_global_names));
+    map_set(runtime_map->map, "global", global_map);
+    value_decref(global_map);
+
+    /* plugin.runtime.add_method */
+    map_set(runtime_map->map, "add_method", xs_native(native_plugin_add_method));
+
+    map_set(plugin_map->map, "runtime", runtime_map);
+    value_decref(runtime_map);
+
+    /* plugin.teardown */
+    map_set(plugin_map->map, "teardown", xs_native(native_plugin_teardown));
+
+    /* plugin.requires */
+    map_set(plugin_map->map, "requires", xs_native(native_plugin_requires));
+
+    /* plugin.ast constructors */
+    Value *ast_map = xs_map_new();
+    map_set(ast_map->map, "int_node", xs_native(native_ast_int_node));
+    map_set(ast_map->map, "float_node", xs_native(native_ast_float_node));
+    map_set(ast_map->map, "str_node", xs_native(native_ast_str_node));
+    map_set(ast_map->map, "bool_node", xs_native(native_ast_bool_node));
+    map_set(ast_map->map, "null_node", xs_native(native_ast_null_node));
+    map_set(ast_map->map, "ident", xs_native(native_ast_ident));
+    map_set(ast_map->map, "binop", xs_native(native_ast_binop));
+    map_set(ast_map->map, "unary", xs_native(native_ast_unary));
+    map_set(ast_map->map, "call", xs_native(native_ast_call));
+    map_set(ast_map->map, "method_call", xs_native(native_ast_method_call));
+    map_set(ast_map->map, "if_expr", xs_native(native_ast_if_expr));
+    map_set(ast_map->map, "if_else", xs_native(native_ast_if_else));
+    map_set(ast_map->map, "block", xs_native(native_ast_block));
+    map_set(ast_map->map, "let_decl", xs_native(native_ast_let_decl));
+    map_set(ast_map->map, "var_decl", xs_native(native_ast_var_decl));
+    map_set(ast_map->map, "fn_decl", xs_native(native_ast_fn_decl));
+    map_set(ast_map->map, "lambda", xs_native(native_ast_lambda));
+    map_set(ast_map->map, "return_node", xs_native(native_ast_return_node));
+    map_set(ast_map->map, "assign", xs_native(native_ast_assign));
+    map_set(ast_map->map, "for_loop", xs_native(native_ast_for_loop));
+    map_set(ast_map->map, "while_loop", xs_native(native_ast_while_loop));
+    map_set(ast_map->map, "array", xs_native(native_ast_array));
+    map_set(ast_map->map, "map", xs_native(native_ast_map_node));
+    map_set(plugin_map->map, "ast", ast_map);
+    value_decref(ast_map);
+}
+
+static void exec_plugin_load(Interp *i, Node *stmt, const char *resolved) {
+    const char *use_path = stmt->use_.path;
+
+    FILE *pf = fopen(resolved, "rb");
+    if (!pf) {
+        char errbuf[256];
+        snprintf(errbuf, sizeof(errbuf), "plugin \"%s\" failed to load", use_path);
+        xs_runtime_error(stmt->span, errbuf, NULL,
+            "could not open '%s'", resolved);
+        i->cf.signal = CF_PANIC;
+        i->cf.value = xs_str("plugin load error");
+        return;
+    }
+    fseek(pf, 0, SEEK_END);
+    long psz = ftell(pf);
+    fseek(pf, 0, SEEK_SET);
+    char *psrc = xs_malloc((size_t)(psz + 1));
+    if (fread(psrc, 1, (size_t)psz, pf) != (size_t)psz) {
+        free(psrc); fclose(pf);
+        i->cf.signal = CF_PANIC;
+        i->cf.value = xs_str("plugin read error");
+        return;
+    }
+    psrc[psz] = '\0';
+    fclose(pf);
+
+    char *pfpath = xs_strdup(resolved);
+    Lexer plex;
+    lexer_init(&plex, psrc, pfpath);
+    TokenArray pta = lexer_tokenize(&plex);
+    Parser pp;
+    parser_init(&pp, &pta, pfpath);
+    Node *pprog = parser_parse(&pp);
+    token_array_free(&pta);
+    if (!pprog || pp.had_error) {
+        char errbuf[256];
+        snprintf(errbuf, sizeof(errbuf), "plugin \"%s\" failed to load", use_path);
+        xs_runtime_error(stmt->span, errbuf, NULL, "parse error in '%s'", resolved);
+        free(psrc); free(pfpath);
+        if (pprog) node_free(pprog);
+        i->cf.signal = CF_PANIC;
+        i->cf.value = xs_str("plugin parse error");
+        return;
+    }
+
+    /* save state for rollback on error */
+    int saved_method_count = g_plugin_method_count;
+    int saved_teardown_count = g_teardown_count;
+    int saved_xs_plugin_count = g_xs_plugin_count;
+
+    /* set the host globals pointer for native functions */
+    s_plugin_host_globals = i->globals;
+
+    /* build the plugin map */
+    Value *plugin_map = xs_map_new();
+    build_plugin_map(plugin_map);
+
+    /* create temp interpreter and inject plugin */
+    Interp *tmp = interp_new(pfpath);
+    env_define(tmp->globals, "plugin", value_incref(plugin_map), 1);
+
+    /* save and restore the main interp pointer */
+    Interp *saved_interp = g_current_interp;
+
+    /* run the plugin file in the temp interpreter */
+    interp_run(tmp, pprog);
+
+    /* restore main interp */
+    g_current_interp = saved_interp;
+
+    int had_error = (tmp->cf.signal == CF_ERROR || tmp->cf.signal == CF_PANIC ||
+                     tmp->cf.signal == CF_THROW);
+
+    if (had_error) {
+        /* rollback: undo any methods/teardowns/plugins registered */
+        for (int j = saved_method_count; j < g_plugin_method_count; j++) {
+            free(g_plugin_methods[j].type_name);
+            free(g_plugin_methods[j].method_name);
+            value_decref(g_plugin_methods[j].fn);
+        }
+        g_plugin_method_count = saved_method_count;
+
+        for (int j = saved_teardown_count; j < g_teardown_count; j++)
+            value_decref(g_teardown_fns[j]);
+        g_teardown_count = saved_teardown_count;
+
+        for (int j = saved_xs_plugin_count; j < g_xs_plugin_count; j++) {
+            free(g_xs_plugins[j].name);
+            free(g_xs_plugins[j].version);
+        }
+        g_xs_plugin_count = saved_xs_plugin_count;
+
+        char errbuf[256];
+        snprintf(errbuf, sizeof(errbuf), "plugin \"%s\" failed to load", use_path);
+        xs_runtime_error(stmt->span, errbuf, NULL,
+            "error while executing plugin '%s'", resolved);
+        i->cf.signal = CF_PANIC;
+        i->cf.value = xs_str("plugin execution error");
+    } else {
+        /* success: read plugin.meta to register the loaded plugin */
+        const char *pname = use_path;
+        const char *pver = NULL;
+        Value *pval = env_get(tmp->globals, "plugin");
+        if (pval && pval->tag == XS_MAP) {
+            Value *meta = map_get(pval->map, "meta");
+            if (meta && meta->tag == XS_MAP) {
+                Value *name_v = map_get(meta->map, "name");
+                Value *ver_v = map_get(meta->map, "version");
+                if (name_v && name_v->tag == XS_STR) pname = name_v->s;
+                if (ver_v && ver_v->tag == XS_STR) pver = ver_v->s;
+            }
+        }
+        plugin_register_loaded(pname, pver);
+        /* store source, filepath, and AST so closures remain valid */
+        int idx = g_xs_plugin_count - 1;
+        if (idx >= 0) {
+            g_xs_plugins[idx].source = psrc;
+            g_xs_plugins[idx].filepath = pfpath;
+            g_xs_plugins[idx].program = pprog;
+            psrc = NULL;
+            pfpath = NULL;
+            pprog = NULL;
+        }
+    }
+
+    value_decref(plugin_map);
+    interp_free(tmp);
+    /* if error, free psrc/pprog/pfpath; if success, they were moved into g_xs_plugins */
+    free(psrc);
+    free(pfpath);
+    if (pprog) node_free(pprog);
+}
+
+/* ── end plugin system ── */
+
 void interp_exec(Interp *i, Node *stmt) {
     if (!stmt || i->cf.signal) return;
     i->current_span = stmt->span;
@@ -5798,6 +6345,11 @@ void interp_exec(Interp *i, Node *stmt) {
             }
         } else {
             snprintf(resolved, sizeof(resolved), "%s", use_path);
+        }
+
+        if (stmt->use_.is_plugin) {
+            exec_plugin_load(i, stmt, resolved);
+            break;
         }
 
         /* directory import: look for mod.xs or index.xs inside */

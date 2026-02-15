@@ -2922,6 +2922,14 @@ static Node *parse_use(Parser *p) {
     Token *kw = pp_expect(p, TK_USE, "expected 'use'");
     Span span = kw->span;
 
+    /* check for `use plugin "path"` */
+    int is_plugin = 0;
+    Token *next = pp_peek(p, 0);
+    if (next->kind == TK_IDENT && next->sval && strcmp(next->sval, "plugin") == 0) {
+        is_plugin = 1;
+        pp_advance(p);
+    }
+
     Token *path_tok = pp_expect(p, TK_STRING, "expected file path string after 'use'");
     char *path = xs_strdup(path_tok->sval ? path_tok->sval : "");
 
@@ -2930,6 +2938,20 @@ static Node *parse_use(Parser *p) {
     char **name_aliases = NULL;
     int    nnames = 0;
     int    import_all = 1;
+
+    if (is_plugin) {
+        /* plugin use: no alias or selective imports */
+        pp_match(p, TK_SEMICOLON);
+        Node *n = node_new(NODE_USE, span);
+        n->use_.path = path;
+        n->use_.alias = NULL;
+        n->use_.names = NULL;
+        n->use_.name_aliases = NULL;
+        n->use_.nnames = 0;
+        n->use_.import_all = 0;
+        n->use_.is_plugin = 1;
+        return n;
+    }
 
     if (pp_check(p, TK_AS)) {
         pp_advance(p);
@@ -2987,6 +3009,7 @@ static Node *parse_use(Parser *p) {
     n->use_.name_aliases = name_aliases;
     n->use_.nnames = nnames;
     n->use_.import_all = import_all;
+    n->use_.is_plugin = is_plugin;
     return n;
 }
 

@@ -420,6 +420,7 @@ struct Node {
             char **name_aliases;/* parallel: renamed name (or same as names[i]) */
             int    nnames;
             int    import_all;  /* 1 = namespace import, 0 = selective */
+            int    is_plugin;   /* 1 = use plugin "path" */
         } use_;
 
         struct {

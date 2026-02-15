@@ -72,6 +72,15 @@
 
 int g_no_color = 0;
 
+static int program_has_plugin_use(Node *program) {
+    if (!program || program->tag != NODE_PROGRAM) return 0;
+    for (int j = 0; j < program->program.stmts.len; j++) {
+        Node *s = program->program.stmts.items[j];
+        if (s && s->tag == NODE_USE && s->use_.is_plugin) return 1;
+    }
+    return 0;
+}
+
 static SemaCache *g_sema_cache = NULL;
 
 #ifdef XSC_ENABLE_COVERAGE
@@ -1801,6 +1810,7 @@ run_file:;
 #endif
     ) {
         {
+            int has_plugins_vm = program_has_plugin_use(program);
             int cached_errors = 0;
             int sema_errors = 0;
             if (cache_lookup(g_sema_cache, filename, src_for_cache, &cached_errors)) {
@@ -1809,9 +1819,9 @@ run_file:;
             } else {
                 DiagContext *dctx = diag_context_new();
                 diag_context_add_source(dctx, filename, src_for_cache);
-                if (lenient) diag_context_set_lenient(dctx, 1);
+                if (lenient || has_plugins_vm) diag_context_set_lenient(dctx, 1);
                 SemaCtx sema;
-                sema_init(&sema, lenient, strict);
+                sema_init(&sema, lenient || has_plugins_vm, strict);
                 sema.diag = dctx;
                 sema_errors = sema_analyze(&sema, program, filename);
                 diag_render_all(dctx);
@@ -1820,7 +1830,7 @@ run_file:;
                 sema_free(&sema);
                 diag_context_free(dctx);
             }
-            if (sema_errors > 0) {
+            if (sema_errors > 0 && !has_plugins_vm) {
                 fprintf(stderr, "\n%d error%s found.\n", sema_errors, sema_errors > 1 ? "s" : "");
                 node_free(program);
                 cache_free(g_sema_cache);
@@ -1869,6 +1879,7 @@ run_file:;
 
     /* sema -> run (or just sema for --check) */
     {
+        int has_plugins = program_has_plugin_use(program);
         int cached_errors = 0;
         int sema_errors = 0;
         if (cache_lookup(g_sema_cache, filename, src_for_cache, &cached_errors)) {
@@ -1877,9 +1888,9 @@ run_file:;
         } else {
             DiagContext *dctx = diag_context_new();
             diag_context_add_source(dctx, filename, src_for_cache);
-            if (lenient) diag_context_set_lenient(dctx, 1);
+            if (lenient || has_plugins) diag_context_set_lenient(dctx, 1);
             SemaCtx sema;
-            sema_init(&sema, lenient, strict);
+            sema_init(&sema, lenient || has_plugins, strict);
             sema.diag = dctx;
             sema_errors = sema_analyze(&sema, program, filename);
             diag_render_all(dctx);
@@ -1888,7 +1899,7 @@ run_file:;
             sema_free(&sema);
             diag_context_free(dctx);
         }
-        if (sema_errors > 0) {
+        if (sema_errors > 0 && !has_plugins) {
             fprintf(stderr, "\n%d error%s found.\n", sema_errors, sema_errors > 1 ? "s" : "");
             node_free(program);
             cache_free(g_sema_cache);
