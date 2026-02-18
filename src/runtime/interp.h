@@ -68,6 +68,10 @@ struct Interp {
     int          call_stack_len;
     int          call_stack_cap;
     DiagContext  *diag;
+
+    /* phase 2: source kept alive for plugin re-parse */
+    const char  *source;
+    int          needs_reparse;
 };
 
 Interp *interp_new(const char *filename);

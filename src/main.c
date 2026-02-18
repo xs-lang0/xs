@@ -1929,6 +1929,7 @@ run_file:;
         if (err_src) xs_error_set_source(err_src);
 
         Interp *interp = interp_new(filename);
+        interp->source = err_src; /* keep source for plugin re-parse */
         DiagContext *dctx = diag_context_new();
         if (err_src) diag_context_add_source(dctx, filename, err_src);
         interp->diag = dctx;

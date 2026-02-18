@@ -7,6 +7,11 @@
 #include <ctype.h>
 #include <stdarg.h>
 
+/* phase 2: plugin syntax handler callbacks (set by interp.c) */
+Node *(*g_plugin_try_syntax_handler)(Parser *p, Token *tok) = NULL;
+Node *(*g_plugin_try_syntax_expr_handler)(Parser *p, Token *tok) = NULL;
+int (*g_plugin_is_keyword)(const char *word) = NULL;
+
 typedef struct { const char *typo; const char *suggestion; } TypoEntry;
 static const TypoEntry KEYWORD_TYPOS[] = {
     {"function",  "fn"},
@@ -1072,7 +1077,18 @@ static Node *parse_primary(Parser *p) {
     }
 
     default: {
+        /* phase 2: try plugin expression handlers before error */
         Token *t = pp_peek(p, 0);
+        if (g_plugin_is_keyword && t->kind == TK_IDENT && t->sval &&
+            g_plugin_is_keyword(t->sval)) {
+            int saved_pos = p->pos;
+            pp_advance(p);
+            Node *plugin_node = g_plugin_try_syntax_expr_handler ?
+                g_plugin_try_syntax_expr_handler(p, t) : NULL;
+            if (plugin_node) return plugin_node;
+            p->pos = saved_pos;
+            t = pp_peek(p, 0);
+        }
         const char *tname = t->sval ? t->sval : token_kind_name(t->kind);
         const char *suggestion = (t->kind == TK_IDENT && t->sval)
                                ? suggest_keyword(t->sval) : NULL;
@@ -3565,6 +3581,18 @@ static Node *parse_stmt(Parser *p) {
         }
     }
 
+    /* phase 2: check plugin syntax handlers for unknown tokens at statement level */
+    if (g_plugin_is_keyword && tok->kind == TK_IDENT && tok->sval &&
+        g_plugin_is_keyword(tok->sval)) {
+        int saved_pos = p->pos;
+        pp_advance(p);
+        Node *plugin_node = g_plugin_try_syntax_handler ?
+            g_plugin_try_syntax_handler(p, tok) : NULL;
+        if (plugin_node) return plugin_node;
+        p->pos = saved_pos;
+        tok = pp_peek(p, 0);
+    }
+
     /* Check for common declaration-like keyword typos from other languages.
        Only trigger when: (1) exact match in typo table, (2) followed by identifier or '('.
        This catches patterns like "function foo()" or "def bar()" early with a helpful message.
@@ -3625,4 +3653,30 @@ Node *parser_parse(Parser *p) {
     }
 
     return program_new(stmts, span);
+}
+
+/* ── phase 2: exported parser accessors for plugin system ── */
+
+Node *parser_parse_expr(Parser *p, int min_prec) {
+    return parse_expr(p, min_prec);
+}
+
+Node *parser_parse_block(Parser *p) {
+    return parse_block(p);
+}
+
+Token *parser_peek(Parser *p, int offset) {
+    return pp_peek(p, offset);
+}
+
+Token *parser_advance(Parser *p) {
+    return pp_advance(p);
+}
+
+int parser_check(Parser *p, TokenKind kind) {
+    return pp_check(p, kind);
+}
+
+Token *parser_expect(Parser *p, TokenKind kind, const char *msg) {
+    return pp_expect(p, kind, msg);
 }
