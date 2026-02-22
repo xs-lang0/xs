@@ -12,6 +12,9 @@ Node *(*g_plugin_try_syntax_handler)(Parser *p, Token *tok) = NULL;
 Node *(*g_plugin_try_syntax_expr_handler)(Parser *p, Token *tok) = NULL;
 int (*g_plugin_is_keyword)(const char *word) = NULL;
 
+/* phase 3: parser override hook */
+Node *(*g_plugin_try_parser_override)(Parser *p, const char *keyword) = NULL;
+
 typedef struct { const char *typo; const char *suggestion; } TypoEntry;
 static const TypoEntry KEYWORD_TYPOS[] = {
     {"function",  "fn"},
@@ -1286,6 +1289,18 @@ static Node *parse_prefix(Parser *p) {
         return n;
     }
 
+    /* phase 3: check override hooks before built-in keyword parsing */
+    if (g_plugin_try_parser_override) {
+        const char *kw = NULL;
+        if (tok->kind == TK_IF) kw = "if";
+        else if (tok->kind == TK_MATCH) kw = "match";
+        else if (tok->kind == TK_WHILE) kw = "while";
+        else if (tok->kind == TK_FOR) kw = "for";
+        if (kw) {
+            Node *override_result = g_plugin_try_parser_override(p, kw);
+            if (override_result) return override_result;
+        }
+    }
     if (tok->kind == TK_IF)     return parse_if(p);
     if (tok->kind == TK_MATCH)  return parse_match(p);
     if (tok->kind == TK_WHILE)  return parse_while(p);
@@ -2284,6 +2299,15 @@ static Node *parse_match(Parser *p) {
     return n;
 }
 
+/* phase 3: public wrappers for override chaining */
+Node *parser_parse_if(Parser *p)    { return parse_if(p); }
+Node *parser_parse_for(Parser *p)   { return parse_for(p); }
+Node *parser_parse_while(Parser *p) { return parse_while(p); }
+Node *parser_parse_match(Parser *p) { return parse_match(p); }
+Node *parser_parse_fn_decl(Parser *p, int is_pub, int is_async, int is_pure) {
+    return parse_fn_decl(p, is_pub, is_async, is_pure);
+}
+
 static Node *parse_try(Parser *p) {
     Token *kw = pp_expect(p, TK_TRY, "expected 'try'");
     Span span = kw->span;
@@ -2956,7 +2980,24 @@ static Node *parse_use(Parser *p) {
     int    import_all = 1;
 
     if (is_plugin) {
-        /* plugin use: no alias or selective imports */
+        /* parse optional sandbox { flags } */
+        int sandbox_flags = 0;
+        if (pp_peek(p, 0)->kind == TK_IDENT && pp_peek(p, 0)->sval &&
+            strcmp(pp_peek(p, 0)->sval, "sandbox") == 0) {
+            pp_advance(p); /* consume 'sandbox' */
+            pp_expect(p, TK_LBRACE, "expected '{' after sandbox");
+            while (!pp_check2(p, TK_RBRACE, TK_EOF)) {
+                Token *flag = pp_peek(p, 0);
+                if (flag->kind == TK_IDENT && flag->sval) {
+                    if (strcmp(flag->sval, "inject_only") == 0) sandbox_flags |= 1;
+                    else if (strcmp(flag->sval, "no_override") == 0) sandbox_flags |= 2;
+                    else if (strcmp(flag->sval, "no_eval_hook") == 0) sandbox_flags |= 4;
+                }
+                pp_advance(p);
+                pp_match(p, TK_COMMA);
+            }
+            pp_expect(p, TK_RBRACE, "expected '}' after sandbox flags");
+        }
         pp_match(p, TK_SEMICOLON);
         Node *n = node_new(NODE_USE, span);
         n->use_.path = path;
@@ -2966,6 +3007,7 @@ static Node *parse_use(Parser *p) {
         n->use_.nnames = 0;
         n->use_.import_all = 0;
         n->use_.is_plugin = 1;
+        n->use_.sandbox_flags = sandbox_flags;
         return n;
     }
 
@@ -3185,6 +3227,16 @@ static Node *parse_stmt(Parser *p) {
     }
 
     tok = pp_peek(p, 0);
+
+    /* phase 3: check override hooks for fn at statement level */
+    if (tok->kind == TK_FN && g_plugin_try_parser_override) {
+        Node *override_result = g_plugin_try_parser_override(p, "fn");
+        if (override_result) {
+            free(fn_deprecated_msg);
+            if (attr_derives) { for (int di=0; di<attr_n_derives; di++) free(attr_derives[di]); free(attr_derives); }
+            return override_result;
+        }
+    }
 
     /* Declarations */
     if (tok->kind == TK_FN) {

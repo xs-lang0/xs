@@ -119,6 +119,33 @@ static int g_n_postfix_handlers = 0;
 static char *g_plugin_keywords[MAX_PLUGIN_KEYWORDS];
 static int g_n_plugin_keywords = 0;
 
+/* phase 3: parser override registry */
+typedef struct {
+    char keyword[64];
+    Value *callback;
+    Value *previous;
+} ParserOverride;
+static ParserOverride g_parser_overrides[32];
+static int g_n_parser_overrides = 0;
+
+/* phase 3: lexer transform registry */
+static Value *g_lexer_transforms[16];
+static int g_n_lexer_transforms = 0;
+
+/* phase 3: resolve_import hook chain */
+static Value *g_resolve_import_hooks[16];
+static int g_n_resolve_import = 0;
+
+/* phase 3: on_error hook chain */
+static Value *g_on_error_hooks[16];
+static int g_n_on_error = 0;
+
+/* phase 3: sandbox flags for current plugin being loaded */
+#define SANDBOX_INJECT_ONLY  1
+#define SANDBOX_NO_OVERRIDE  2
+#define SANDBOX_NO_EVAL_HOOK 4
+static int g_current_sandbox_flags = 0;
+
 /* global interp pointer for use by parser-invoked plugin callbacks */
 static Interp *g_plugin_interp = NULL;
 
@@ -132,6 +159,9 @@ static const char *node_tag_to_string(NodeTag tag);
 static int plugin_is_keyword_impl(const char *word);
 static Node *plugin_try_syntax_handler_impl(Parser *p, Token *tok);
 static Node *plugin_try_syntax_expr_handler_impl(Parser *p, Token *tok);
+static Node *plugin_try_parser_override_impl(Parser *p, const char *keyword);
+/* phase 3 forward decls */
+static Value *make_hook_handle(int idx, const char *type);
 
 /* ── end plugin globals ── */
 
@@ -387,6 +417,8 @@ Interp *interp_new(const char *filename) {
     g_plugin_is_keyword = plugin_is_keyword_impl;
     g_plugin_try_syntax_handler = plugin_try_syntax_handler_impl;
     g_plugin_try_syntax_expr_handler = plugin_try_syntax_expr_handler_impl;
+    /* phase 3: parser override bridge */
+    g_plugin_try_parser_override = plugin_try_parser_override_impl;
     stdlib_register(i);
     return i;
 }
@@ -2394,7 +2426,20 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
          * (e.g. {get: fn, set: fn} state accessor objects) */
         {
             Value *fn = map_get(m, method);
-            if (fn && (fn->tag == XS_FUNC || fn->tag == XS_NATIVE)) {
+            if (fn && fn->tag == XS_FUNC) {
+                return call_value(i, fn, args, argc, method);
+            }
+            /* for native fns on maps that have _hook_idx (hook handles),
+               prepend the map as self so the native can access fields */
+            if (fn && fn->tag == XS_NATIVE) {
+                if (map_has(m, "_hook_idx")) {
+                    Value **new_args = xs_malloc((argc + 1) * sizeof(Value*));
+                    new_args[0] = obj;
+                    for (int j = 0; j < argc; j++) new_args[j + 1] = args[j];
+                    Value *r = call_value(i, fn, new_args, argc + 1, method);
+                    free(new_args);
+                    return r;
+                }
                 return call_value(i, fn, args, argc, method);
             }
         }
@@ -5554,6 +5599,13 @@ static Value *native_plugin_global_set(Interp *interp, Value **args, int argc) {
     (void)interp;
     if (argc < 2 || !args[0] || args[0]->tag != XS_STR || !s_plugin_host_globals)
         return value_incref(XS_NULL_VAL);
+    if (g_current_sandbox_flags & SANDBOX_INJECT_ONLY) {
+        Value *existing = env_get(s_plugin_host_globals, args[0]->s);
+        if (existing) {
+            fprintf(stderr, "xs: sandbox: inject_only prevents overwriting '%s'\n", args[0]->s);
+            return value_incref(XS_NULL_VAL);
+        }
+    }
     env_define(s_plugin_host_globals, args[0]->s, value_incref(args[1]), 1);
     return value_incref(XS_NULL_VAL);
 }
@@ -6158,6 +6210,10 @@ static Node *node_from_xs_map(Value *map) {
 
 static Value *native_plugin_before_eval(Interp *interp, Value **args, int argc) {
     (void)interp;
+    if (g_current_sandbox_flags & SANDBOX_NO_EVAL_HOOK) {
+        fprintf(stderr, "xs: sandbox: before_eval hooks are disabled\n");
+        return value_incref(XS_NULL_VAL);
+    }
     if (argc < 1) return value_incref(XS_NULL_VAL);
 
     int tag_filter = -1;
@@ -6179,14 +6235,15 @@ static Value *native_plugin_before_eval(Interp *interp, Value **args, int argc) 
     g_before_eval[idx].tag_filter = tag_filter;
     g_has_eval_hooks = 1;
 
-    Value *handle = xs_map_new();
-    map_set(handle->map, "index", xs_int(idx));
-    map_set(handle->map, "type", xs_str("before_eval"));
-    return handle;
+    return make_hook_handle(idx, "before_eval");
 }
 
 static Value *native_plugin_after_eval(Interp *interp, Value **args, int argc) {
     (void)interp;
+    if (g_current_sandbox_flags & SANDBOX_NO_EVAL_HOOK) {
+        fprintf(stderr, "xs: sandbox: after_eval hooks are disabled\n");
+        return value_incref(XS_NULL_VAL);
+    }
     if (argc < 1) return value_incref(XS_NULL_VAL);
 
     int tag_filter = -1;
@@ -6208,10 +6265,7 @@ static Value *native_plugin_after_eval(Interp *interp, Value **args, int argc) {
     g_after_eval[idx].tag_filter = tag_filter;
     g_has_eval_hooks = 1;
 
-    Value *handle = xs_map_new();
-    map_set(handle->map, "index", xs_int(idx));
-    map_set(handle->map, "type", xs_str("after_eval"));
-    return handle;
+    return make_hook_handle(idx, "after_eval");
 }
 
 /* ── phase 2: syntax handler natives ── */
@@ -6221,11 +6275,9 @@ static Value *native_plugin_on_unknown(Interp *interp, Value **args, int argc) {
     if (argc < 1 || !args[0] || (args[0]->tag != XS_FUNC && args[0]->tag != XS_NATIVE))
         return value_incref(XS_NULL_VAL);
     if (g_n_syntax_handlers >= 16) return value_incref(XS_NULL_VAL);
-    g_syntax_handlers[g_n_syntax_handlers++] = value_incref(args[0]);
-
-    Value *handle = xs_map_new();
-    map_set(handle->map, "type", xs_str("on_unknown"));
-    return handle;
+    int idx = g_n_syntax_handlers++;
+    g_syntax_handlers[idx] = value_incref(args[0]);
+    return make_hook_handle(idx, "on_unknown");
 }
 
 static Value *native_plugin_on_unknown_expr(Interp *interp, Value **args, int argc) {
@@ -6233,11 +6285,9 @@ static Value *native_plugin_on_unknown_expr(Interp *interp, Value **args, int ar
     if (argc < 1 || !args[0] || (args[0]->tag != XS_FUNC && args[0]->tag != XS_NATIVE))
         return value_incref(XS_NULL_VAL);
     if (g_n_syntax_expr_handlers >= 16) return value_incref(XS_NULL_VAL);
-    g_syntax_expr_handlers[g_n_syntax_expr_handlers++] = value_incref(args[0]);
-
-    Value *handle = xs_map_new();
-    map_set(handle->map, "type", xs_str("on_unknown_expr"));
-    return handle;
+    int idx = g_n_syntax_expr_handlers++;
+    g_syntax_expr_handlers[idx] = value_incref(args[0]);
+    return make_hook_handle(idx, "on_unknown_expr");
 }
 
 static Value *native_plugin_on_postfix(Interp *interp, Value **args, int argc) {
@@ -6245,11 +6295,9 @@ static Value *native_plugin_on_postfix(Interp *interp, Value **args, int argc) {
     if (argc < 1 || !args[0] || (args[0]->tag != XS_FUNC && args[0]->tag != XS_NATIVE))
         return value_incref(XS_NULL_VAL);
     if (g_n_postfix_handlers >= 16) return value_incref(XS_NULL_VAL);
-    g_postfix_handlers[g_n_postfix_handlers++] = value_incref(args[0]);
-
-    Value *handle = xs_map_new();
-    map_set(handle->map, "type", xs_str("on_postfix"));
-    return handle;
+    int idx = g_n_postfix_handlers++;
+    g_postfix_handlers[idx] = value_incref(args[0]);
+    return make_hook_handle(idx, "on_postfix");
 }
 
 /* ── phase 2: lexer extension natives ── */
@@ -6467,10 +6515,342 @@ static Node *plugin_try_syntax_expr_handler_impl(Parser *p, Token *tok) {
 
 /* ── end phase 2 natives ── */
 
+/* ── phase 3: hook handle .remove() ── */
+
+static Value *native_hook_remove(Interp *interp, Value **args, int argc) {
+    (void)args; (void)argc;
+    /* 'self' is passed as a hidden first arg by the method-call mechanism,
+       but for native functions on maps we need to fish the index/type out
+       of the map that contains this native. We use a trick: store _hook_idx
+       and _hook_type on the handle map, and the remove fn closes over the handle. */
+
+    /* the handle map is accessible via interp->env where "self" might be bound,
+       but for simplicity we encode the hook info in a closure context.
+       Actually: since XS calls map.remove() like a method, 'self' is args[0]. */
+    Value *self = (argc > 0 && args[0] && args[0]->tag == XS_MAP) ? args[0] : NULL;
+    if (!self) return value_incref(XS_NULL_VAL);
+
+    Value *idx_v = map_get(self->map, "_hook_idx");
+    Value *type_v = map_get(self->map, "_hook_type");
+    if (!idx_v || idx_v->tag != XS_INT || !type_v || type_v->tag != XS_STR)
+        return value_incref(XS_NULL_VAL);
+
+    int idx = (int)idx_v->i;
+    const char *type = type_v->s;
+
+    if (strcmp(type, "before_eval") == 0 && idx >= 0 && idx < g_n_before_eval) {
+        if (g_before_eval[idx].callback) {
+            value_decref(g_before_eval[idx].callback);
+            g_before_eval[idx].callback = NULL;
+        }
+    } else if (strcmp(type, "after_eval") == 0 && idx >= 0 && idx < g_n_after_eval) {
+        if (g_after_eval[idx].callback) {
+            value_decref(g_after_eval[idx].callback);
+            g_after_eval[idx].callback = NULL;
+        }
+    } else if (strcmp(type, "on_unknown") == 0 && idx >= 0 && idx < g_n_syntax_handlers) {
+        if (g_syntax_handlers[idx]) {
+            value_decref(g_syntax_handlers[idx]);
+            g_syntax_handlers[idx] = NULL;
+        }
+    } else if (strcmp(type, "on_unknown_expr") == 0 && idx >= 0 && idx < g_n_syntax_expr_handlers) {
+        if (g_syntax_expr_handlers[idx]) {
+            value_decref(g_syntax_expr_handlers[idx]);
+            g_syntax_expr_handlers[idx] = NULL;
+        }
+    } else if (strcmp(type, "on_postfix") == 0 && idx >= 0 && idx < g_n_postfix_handlers) {
+        if (g_postfix_handlers[idx]) {
+            value_decref(g_postfix_handlers[idx]);
+            g_postfix_handlers[idx] = NULL;
+        }
+    } else if (strcmp(type, "override") == 0 && idx >= 0 && idx < g_n_parser_overrides) {
+        if (g_parser_overrides[idx].callback) {
+            value_decref(g_parser_overrides[idx].callback);
+            g_parser_overrides[idx].callback = NULL;
+            if (g_parser_overrides[idx].previous) {
+                value_decref(g_parser_overrides[idx].previous);
+                g_parser_overrides[idx].previous = NULL;
+            }
+            g_parser_overrides[idx].keyword[0] = '\0';
+        }
+    } else if (strcmp(type, "transform") == 0 && idx >= 0 && idx < g_n_lexer_transforms) {
+        if (g_lexer_transforms[idx]) {
+            value_decref(g_lexer_transforms[idx]);
+            g_lexer_transforms[idx] = NULL;
+        }
+    } else if (strcmp(type, "resolve_import") == 0 && idx >= 0 && idx < g_n_resolve_import) {
+        if (g_resolve_import_hooks[idx]) {
+            value_decref(g_resolve_import_hooks[idx]);
+            g_resolve_import_hooks[idx] = NULL;
+        }
+    } else if (strcmp(type, "on_error") == 0 && idx >= 0 && idx < g_n_on_error) {
+        if (g_on_error_hooks[idx]) {
+            value_decref(g_on_error_hooks[idx]);
+            g_on_error_hooks[idx] = NULL;
+        }
+    }
+    return value_incref(XS_NULL_VAL);
+}
+
+static Value *make_hook_handle(int idx, const char *type) {
+    Value *handle = xs_map_new();
+    Value *idx_v = xs_int(idx);
+    map_set(handle->map, "_hook_idx", idx_v); value_decref(idx_v);
+    Value *type_v = xs_str(type);
+    map_set(handle->map, "_hook_type", type_v); value_decref(type_v);
+    map_set(handle->map, "remove", xs_native(native_hook_remove));
+    return handle;
+}
+
+/* ── phase 3: parser override native ── */
+
+/* wraps a built-in parser function as an XS callable for the "previous" chain */
+typedef struct {
+    const char *keyword;
+} BuiltinParseCtx;
+
+static Value *native_builtin_parse_if(Interp *interp, Value **args, int argc) {
+    (void)args; (void)argc;
+    if (!g_active_parser) return value_incref(XS_NULL_VAL);
+    Node *n = parser_parse_if((Parser *)g_active_parser);
+    return node_to_xs_map(n);
+}
+static Value *native_builtin_parse_for(Interp *interp, Value **args, int argc) {
+    (void)args; (void)argc;
+    if (!g_active_parser) return value_incref(XS_NULL_VAL);
+    Node *n = parser_parse_for((Parser *)g_active_parser);
+    return node_to_xs_map(n);
+}
+static Value *native_builtin_parse_while(Interp *interp, Value **args, int argc) {
+    (void)args; (void)argc;
+    if (!g_active_parser) return value_incref(XS_NULL_VAL);
+    Node *n = parser_parse_while((Parser *)g_active_parser);
+    return node_to_xs_map(n);
+}
+static Value *native_builtin_parse_match(Interp *interp, Value **args, int argc) {
+    (void)args; (void)argc;
+    if (!g_active_parser) return value_incref(XS_NULL_VAL);
+    Node *n = parser_parse_match((Parser *)g_active_parser);
+    return node_to_xs_map(n);
+}
+static Value *native_builtin_parse_fn(Interp *interp, Value **args, int argc) {
+    (void)args; (void)argc;
+    if (!g_active_parser) return value_incref(XS_NULL_VAL);
+    Node *n = parser_parse_fn_decl((Parser *)g_active_parser, 0, 0, 0);
+    return node_to_xs_map(n);
+}
+
+static Value *get_builtin_parser_for(const char *keyword) {
+    if (strcmp(keyword, "if") == 0) return xs_native(native_builtin_parse_if);
+    if (strcmp(keyword, "for") == 0) return xs_native(native_builtin_parse_for);
+    if (strcmp(keyword, "while") == 0) return xs_native(native_builtin_parse_while);
+    if (strcmp(keyword, "match") == 0) return xs_native(native_builtin_parse_match);
+    if (strcmp(keyword, "fn") == 0) return xs_native(native_builtin_parse_fn);
+    return NULL;
+}
+
+static Value *native_plugin_parser_override(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (g_current_sandbox_flags & SANDBOX_NO_OVERRIDE) {
+        fprintf(stderr, "xs: sandbox: plugin.parser.override is disabled\n");
+        return value_incref(XS_NULL_VAL);
+    }
+    if (argc < 2 || !args[0] || args[0]->tag != XS_STR ||
+        !args[1] || (args[1]->tag != XS_FUNC && args[1]->tag != XS_NATIVE))
+        return value_incref(XS_NULL_VAL);
+    if (g_n_parser_overrides >= 32) return value_incref(XS_NULL_VAL);
+
+    const char *keyword = args[0]->s;
+    Value *callback = args[1];
+
+    /* find previous handler: either another plugin's override or the built-in */
+    Value *previous = NULL;
+    for (int j = g_n_parser_overrides - 1; j >= 0; j--) {
+        if (strcmp(g_parser_overrides[j].keyword, keyword) == 0 &&
+            g_parser_overrides[j].callback) {
+            previous = value_incref(g_parser_overrides[j].callback);
+            break;
+        }
+    }
+    if (!previous) {
+        previous = get_builtin_parser_for(keyword);
+    }
+
+    int idx = g_n_parser_overrides++;
+    strncpy(g_parser_overrides[idx].keyword, keyword, 63);
+    g_parser_overrides[idx].keyword[63] = '\0';
+    g_parser_overrides[idx].callback = value_incref(callback);
+    g_parser_overrides[idx].previous = previous;
+
+    return make_hook_handle(idx, "override");
+}
+
+/* ── phase 3: lexer transform native ── */
+
+static Value *native_plugin_lexer_transform(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1 || !args[0] || (args[0]->tag != XS_FUNC && args[0]->tag != XS_NATIVE))
+        return value_incref(XS_NULL_VAL);
+    if (g_n_lexer_transforms >= 16) return value_incref(XS_NULL_VAL);
+
+    int idx = g_n_lexer_transforms++;
+    g_lexer_transforms[idx] = value_incref(args[0]);
+    return make_hook_handle(idx, "transform");
+}
+
+/* ── phase 3: resolve_import native ── */
+
+static Value *native_plugin_resolve_import(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1 || !args[0] || (args[0]->tag != XS_FUNC && args[0]->tag != XS_NATIVE))
+        return value_incref(XS_NULL_VAL);
+    if (g_n_resolve_import >= 16) return value_incref(XS_NULL_VAL);
+
+    int idx = g_n_resolve_import++;
+    g_resolve_import_hooks[idx] = value_incref(args[0]);
+    return make_hook_handle(idx, "resolve_import");
+}
+
+/* ── phase 3: on_error native ── */
+
+static Value *native_plugin_on_error(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1 || !args[0] || (args[0]->tag != XS_FUNC && args[0]->tag != XS_NATIVE))
+        return value_incref(XS_NULL_VAL);
+    if (g_n_on_error >= 16) return value_incref(XS_NULL_VAL);
+
+    int idx = g_n_on_error++;
+    g_on_error_hooks[idx] = value_incref(args[0]);
+    return make_hook_handle(idx, "on_error");
+}
+
+/* ── phase 3: plugin.hooks inspection ── */
+
+static Value *native_plugin_hooks(Interp *interp, Value **args, int argc) {
+    (void)interp; (void)args; (void)argc;
+    Value *hooks = xs_map_new();
+
+    /* before_eval array */
+    Value *be_arr = xs_array_new();
+    for (int j = 0; j < g_n_before_eval; j++) {
+        if (g_before_eval[j].callback)
+            array_push(be_arr->arr, value_incref(g_before_eval[j].callback));
+    }
+    map_set(hooks->map, "before_eval", be_arr); value_decref(be_arr);
+
+    /* after_eval array */
+    Value *ae_arr = xs_array_new();
+    for (int j = 0; j < g_n_after_eval; j++) {
+        if (g_after_eval[j].callback)
+            array_push(ae_arr->arr, value_incref(g_after_eval[j].callback));
+    }
+    map_set(hooks->map, "after_eval", ae_arr); value_decref(ae_arr);
+
+    /* on_unknown array */
+    Value *ou_arr = xs_array_new();
+    for (int j = 0; j < g_n_syntax_handlers; j++) {
+        if (g_syntax_handlers[j])
+            array_push(ou_arr->arr, value_incref(g_syntax_handlers[j]));
+    }
+    map_set(hooks->map, "on_unknown", ou_arr); value_decref(ou_arr);
+
+    /* on_unknown_expr array */
+    Value *oue_arr = xs_array_new();
+    for (int j = 0; j < g_n_syntax_expr_handlers; j++) {
+        if (g_syntax_expr_handlers[j])
+            array_push(oue_arr->arr, value_incref(g_syntax_expr_handlers[j]));
+    }
+    map_set(hooks->map, "on_unknown_expr", oue_arr); value_decref(oue_arr);
+
+    /* on_postfix array */
+    Value *op_arr = xs_array_new();
+    for (int j = 0; j < g_n_postfix_handlers; j++) {
+        if (g_postfix_handlers[j])
+            array_push(op_arr->arr, value_incref(g_postfix_handlers[j]));
+    }
+    map_set(hooks->map, "on_postfix", op_arr); value_decref(op_arr);
+
+    /* overrides map: keyword -> handler */
+    Value *ov_map = xs_map_new();
+    for (int j = 0; j < g_n_parser_overrides; j++) {
+        if (g_parser_overrides[j].callback && g_parser_overrides[j].keyword[0])
+            map_set(ov_map->map, g_parser_overrides[j].keyword,
+                    value_incref(g_parser_overrides[j].callback));
+    }
+    map_set(hooks->map, "overrides", ov_map); value_decref(ov_map);
+
+    /* transforms array */
+    Value *tr_arr = xs_array_new();
+    for (int j = 0; j < g_n_lexer_transforms; j++) {
+        if (g_lexer_transforms[j])
+            array_push(tr_arr->arr, value_incref(g_lexer_transforms[j]));
+    }
+    map_set(hooks->map, "transforms", tr_arr); value_decref(tr_arr);
+
+    /* resolve_import array */
+    Value *ri_arr = xs_array_new();
+    for (int j = 0; j < g_n_resolve_import; j++) {
+        if (g_resolve_import_hooks[j])
+            array_push(ri_arr->arr, value_incref(g_resolve_import_hooks[j]));
+    }
+    map_set(hooks->map, "resolve_import", ri_arr); value_decref(ri_arr);
+
+    /* on_error array */
+    Value *oe_arr = xs_array_new();
+    for (int j = 0; j < g_n_on_error; j++) {
+        if (g_on_error_hooks[j])
+            array_push(oe_arr->arr, value_incref(g_on_error_hooks[j]));
+    }
+    map_set(hooks->map, "on_error", oe_arr); value_decref(oe_arr);
+
+    return hooks;
+}
+
+/* ── phase 3: parser override bridge (called from parser.c) ── */
+
+static Node *plugin_try_parser_override_impl(Parser *p, const char *keyword) {
+    if (g_n_parser_overrides == 0 || !g_plugin_interp) return NULL;
+
+    /* find the last (most recent) override for this keyword */
+    int found = -1;
+    for (int j = g_n_parser_overrides - 1; j >= 0; j--) {
+        if (g_parser_overrides[j].callback &&
+            strcmp(g_parser_overrides[j].keyword, keyword) == 0) {
+            found = j;
+            break;
+        }
+    }
+    if (found < 0) return NULL;
+
+    void *saved_parser = g_active_parser;
+    g_active_parser = p;
+
+    /* build a "previous" function for the callback.
+       If this override has a stored previous, use it;
+       otherwise use the built-in parser wrapper. */
+    Value *previous = g_parser_overrides[found].previous;
+    if (!previous) previous = get_builtin_parser_for(keyword);
+
+    Value *args[1] = { previous };
+    Value *ret = call_value(g_plugin_interp, g_parser_overrides[found].callback,
+                            args, 1, "parser.override");
+
+    g_active_parser = saved_parser;
+
+    if (ret && ret->tag == XS_MAP) {
+        Node *result = node_from_xs_map(ret);
+        value_decref(ret);
+        return result;
+    }
+    if (ret) value_decref(ret);
+    return NULL;
+}
+
 static void build_plugin_map(Value *plugin_map) {
     /* plugin.lexer */
     Value *lexer_map = xs_map_new();
     map_set(lexer_map->map, "add_keyword", xs_native(native_plugin_add_keyword));
+    map_set(lexer_map->map, "transform", xs_native(native_plugin_lexer_transform));
     map_set(plugin_map->map, "lexer", lexer_map);
     value_decref(lexer_map);
 
@@ -6479,6 +6859,7 @@ static void build_plugin_map(Value *plugin_map) {
     map_set(parser_map->map, "on_unknown", xs_native(native_plugin_on_unknown));
     map_set(parser_map->map, "on_unknown_expr", xs_native(native_plugin_on_unknown_expr));
     map_set(parser_map->map, "on_postfix", xs_native(native_plugin_on_postfix));
+    map_set(parser_map->map, "override", xs_native(native_plugin_parser_override));
     map_set(parser_map->map, "expr", xs_native(native_parser_expr));
     map_set(parser_map->map, "block", xs_native(native_parser_block));
     map_set(parser_map->map, "ident", xs_native(native_parser_ident));
@@ -6488,10 +6869,8 @@ static void build_plugin_map(Value *plugin_map) {
     map_set(plugin_map->map, "parser", parser_map);
     value_decref(parser_map);
 
-    /* plugin.hooks — empty map */
-    Value *hooks_map = xs_map_new();
-    map_set(plugin_map->map, "hooks", hooks_map);
-    value_decref(hooks_map);
+    /* plugin.hooks — callable that returns current hook state */
+    map_set(plugin_map->map, "hooks", xs_native(native_plugin_hooks));
 
     /* plugin.runtime */
     Value *runtime_map = xs_map_new();
@@ -6510,6 +6889,10 @@ static void build_plugin_map(Value *plugin_map) {
     /* plugin.runtime.before_eval / after_eval */
     map_set(runtime_map->map, "before_eval", xs_native(native_plugin_before_eval));
     map_set(runtime_map->map, "after_eval", xs_native(native_plugin_after_eval));
+
+    /* plugin.runtime.resolve_import / on_error */
+    map_set(runtime_map->map, "resolve_import", xs_native(native_plugin_resolve_import));
+    map_set(runtime_map->map, "on_error", xs_native(native_plugin_on_error));
 
     map_set(plugin_map->map, "runtime", runtime_map);
     value_decref(runtime_map);
@@ -6594,6 +6977,10 @@ static void exec_plugin_load(Interp *i, Node *stmt, const char *resolved) {
         return;
     }
 
+    /* phase 3: set sandbox flags for this plugin load */
+    int saved_sandbox_flags = g_current_sandbox_flags;
+    g_current_sandbox_flags = stmt->use_.sandbox_flags;
+
     /* save state for rollback on error */
     int saved_method_count = g_plugin_method_count;
     int saved_teardown_count = g_teardown_count;
@@ -6604,6 +6991,10 @@ static void exec_plugin_load(Interp *i, Node *stmt, const char *resolved) {
     int saved_syntax_expr_handlers = g_n_syntax_expr_handlers;
     int saved_postfix_handlers = g_n_postfix_handlers;
     int saved_plugin_keywords = g_n_plugin_keywords;
+    int saved_parser_overrides = g_n_parser_overrides;
+    int saved_lexer_transforms = g_n_lexer_transforms;
+    int saved_resolve_import = g_n_resolve_import;
+    int saved_on_error = g_n_on_error;
 
     /* set the host globals pointer for native functions */
     s_plugin_host_globals = i->globals;
@@ -6669,6 +7060,24 @@ static void exec_plugin_load(Interp *i, Node *stmt, const char *resolved) {
         for (int j = saved_plugin_keywords; j < g_n_plugin_keywords; j++)
             free(g_plugin_keywords[j]);
         g_n_plugin_keywords = saved_plugin_keywords;
+
+        /* rollback phase 3 hooks */
+        for (int j = saved_parser_overrides; j < g_n_parser_overrides; j++) {
+            value_decref(g_parser_overrides[j].callback);
+            if (g_parser_overrides[j].previous)
+                value_decref(g_parser_overrides[j].previous);
+        }
+        g_n_parser_overrides = saved_parser_overrides;
+        for (int j = saved_lexer_transforms; j < g_n_lexer_transforms; j++)
+            value_decref(g_lexer_transforms[j]);
+        g_n_lexer_transforms = saved_lexer_transforms;
+        for (int j = saved_resolve_import; j < g_n_resolve_import; j++)
+            value_decref(g_resolve_import_hooks[j]);
+        g_n_resolve_import = saved_resolve_import;
+        for (int j = saved_on_error; j < g_n_on_error; j++)
+            value_decref(g_on_error_hooks[j]);
+        g_n_on_error = saved_on_error;
+
         g_has_eval_hooks = (g_n_before_eval > 0 || g_n_after_eval > 0);
 
         char errbuf[256];
@@ -6692,9 +7101,10 @@ static void exec_plugin_load(Interp *i, Node *stmt, const char *resolved) {
             }
         }
         plugin_register_loaded(pname, pver);
-        /* flag re-parse if syntax handlers were newly registered */
+        /* flag re-parse if syntax handlers or overrides were newly registered */
         if (g_n_syntax_handlers > saved_syntax_handlers ||
-            g_n_plugin_keywords > saved_plugin_keywords)
+            g_n_plugin_keywords > saved_plugin_keywords ||
+            g_n_parser_overrides > saved_parser_overrides)
             i->needs_reparse = 1;
         /* store source, filepath, and AST so closures remain valid */
         int idx = g_xs_plugin_count - 1;
@@ -6710,6 +7120,8 @@ static void exec_plugin_load(Interp *i, Node *stmt, const char *resolved) {
 
     value_decref(plugin_map);
     interp_free(tmp);
+    /* restore sandbox flags */
+    g_current_sandbox_flags = saved_sandbox_flags;
     /* if error, free psrc/pprog/pfpath; if success, they were moved into g_xs_plugins */
     free(psrc);
     free(pfpath);
@@ -7112,6 +7524,48 @@ void interp_exec(Interp *i, Node *stmt) {
         if (stmt->import.nparts == 0) break;
         char *modname = stmt->import.path[0];
         Value *mod = env_get(i->env, modname);
+
+        /* phase 3: resolve_import hook chain */
+        if (!mod && g_n_resolve_import > 0) {
+            for (int _ri = g_n_resolve_import - 1; _ri >= 0; _ri--) {
+                if (!g_resolve_import_hooks[_ri]) continue;
+                /* build a "previous" function that either chains to the next
+                   hook or does the default module lookup */
+                Value *name_arg = xs_str(modname);
+                /* for the previous fn, use a native that does the default lookup */
+                Value *prev_fn = NULL;
+                /* find the next active hook or use default */
+                int found_prev = 0;
+                for (int _p = _ri - 1; _p >= 0; _p--) {
+                    if (g_resolve_import_hooks[_p]) {
+                        prev_fn = value_incref(g_resolve_import_hooks[_p]);
+                        found_prev = 1;
+                        break;
+                    }
+                }
+                if (!found_prev) {
+                    /* the "previous" when no more hooks just returns null —
+                       the caller can check and fall through to default */
+                    prev_fn = value_incref(XS_NULL_VAL);
+                }
+                Value *hook_args[2] = { name_arg, prev_fn };
+                Value *result = call_value(i, g_resolve_import_hooks[_ri],
+                                           hook_args, 2, "resolve_import");
+                value_decref(name_arg);
+                if (prev_fn) value_decref(prev_fn);
+                if (result && result->tag != XS_NULL &&
+                    (result->tag == XS_MAP || result->tag == XS_MODULE)) {
+                    mod = result;
+                    env_define(i->globals, modname, mod, 1);
+                    value_decref(mod);
+                    mod = env_get(i->env, modname);
+                    break;
+                }
+                if (result) value_decref(result);
+                if (i->cf.signal) break;
+            }
+        }
+
         if (!mod) {
             mod = try_load_xs_module(i, modname);
             if (mod) {
@@ -7433,7 +7887,8 @@ void interp_run(Interp *i, Node *program) {
         if (i->needs_reparse) {
         }
         if (i->needs_reparse && i->source && i->filename &&
-            (g_n_syntax_handlers > 0 || g_n_plugin_keywords > 0)) {
+            (g_n_syntax_handlers > 0 || g_n_plugin_keywords > 0 ||
+             g_n_parser_overrides > 0)) {
             i->needs_reparse = 0;
             if (i->cf.signal) CF_CLEAR(i);
             Lexer rlex;
@@ -7471,16 +7926,63 @@ void interp_run(Interp *i, Node *program) {
 
         if (i->cf.signal == CF_RETURN) { CF_CLEAR(i); }
         else if (i->cf.signal == CF_ERROR || i->cf.signal == CF_PANIC) {
-            break;
+            /* phase 3: on_error hook for panics */
+            if (g_n_on_error > 0) {
+                Value *err_val = i->cf.value ? value_incref(i->cf.value) : xs_str("<error>");
+                CF_CLEAR(i);
+                int handled = 0;
+                for (int _oe = g_n_on_error - 1; _oe >= 0; _oe--) {
+                    if (!g_on_error_hooks[_oe]) continue;
+                    Value *prev = value_incref(XS_NULL_VAL);
+                    Value *oargs[2] = { err_val, prev };
+                    Value *oresult = call_value(i, g_on_error_hooks[_oe], oargs, 2, "on_error");
+                    value_decref(prev);
+                    if (oresult) value_decref(oresult);
+                    if (!i->cf.signal) { handled = 1; break; }
+                    CF_CLEAR(i);
+                }
+                value_decref(err_val);
+                if (!handled) {
+                    i->cf.signal = CF_PANIC;
+                    i->cf.value = xs_str("unhandled error");
+                    break;
+                }
+            } else {
+                break;
+            }
         } else if (i->cf.signal == CF_THROW) {
-            Value *exc = i->cf.value;
-            char *s = exc ? value_repr(exc) : xs_strdup("<error>");
-            Node *sn = program->program.stmts.items[j];
-            fprintf(stderr, "xs: error at %s:%d:%d: unhandled exception: %s\n",
-                    sn->span.file ? sn->span.file : "<unknown>",
-                    sn->span.line, sn->span.col, s);
-            free(s);
-            CF_CLEAR(i);
+            /* phase 3: on_error hook for unhandled throws */
+            if (g_n_on_error > 0) {
+                Value *exc = i->cf.value ? value_incref(i->cf.value) : xs_str("<error>");
+                CF_CLEAR(i);
+                int handled = 0;
+                for (int _oe = g_n_on_error - 1; _oe >= 0; _oe--) {
+                    if (!g_on_error_hooks[_oe]) continue;
+                    Value *prev = value_incref(XS_NULL_VAL);
+                    Value *oargs[2] = { exc, prev };
+                    Value *oresult = call_value(i, g_on_error_hooks[_oe], oargs, 2, "on_error");
+                    value_decref(prev);
+                    if (oresult) value_decref(oresult);
+                    if (!i->cf.signal) { handled = 1; break; }
+                    CF_CLEAR(i);
+                }
+                value_decref(exc);
+                if (!handled) {
+                    Node *sn = program->program.stmts.items[j];
+                    fprintf(stderr, "xs: error at %s:%d:%d: unhandled exception\n",
+                            sn->span.file ? sn->span.file : "<unknown>",
+                            sn->span.line, sn->span.col);
+                }
+            } else {
+                Value *exc = i->cf.value;
+                char *s = exc ? value_repr(exc) : xs_strdup("<error>");
+                Node *sn = program->program.stmts.items[j];
+                fprintf(stderr, "xs: error at %s:%d:%d: unhandled exception: %s\n",
+                        sn->span.file ? sn->span.file : "<unknown>",
+                        sn->span.line, sn->span.col, s);
+                free(s);
+                CF_CLEAR(i);
+            }
         } else if (i->cf.signal) {
             CF_CLEAR(i);
         }

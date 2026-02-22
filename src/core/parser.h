@@ -40,4 +40,14 @@ extern Node *(*g_plugin_try_syntax_handler)(Parser *p, Token *tok);
 extern Node *(*g_plugin_try_syntax_expr_handler)(Parser *p, Token *tok);
 extern int (*g_plugin_is_keyword)(const char *word);
 
+/* phase 3: parser override hook (set by interp.c) */
+extern Node *(*g_plugin_try_parser_override)(Parser *p, const char *keyword);
+
+/* parse individual constructs (exposed for override chaining) */
+Node *parser_parse_if(Parser *p);
+Node *parser_parse_for(Parser *p);
+Node *parser_parse_while(Parser *p);
+Node *parser_parse_match(Parser *p);
+Node *parser_parse_fn_decl(Parser *p, int is_pub, int is_async, int is_pure);
+
 #endif /* PARSER_H */
