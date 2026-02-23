@@ -6012,6 +6012,27 @@ static Value *node_to_xs_map(Node *n) {
         map_set(m->map, "cond", node_to_xs_map(n->while_loop.cond));
         map_set(m->map, "body", node_to_xs_map(n->while_loop.body));
         break;
+    case NODE_LAMBDA: {
+        Value *params = xs_array_new();
+        for (int j = 0; j < n->lambda.params.len; j++) {
+            Param *pm = &n->lambda.params.items[j];
+            array_push(params->arr, xs_str(pm->name ? pm->name : "_"));
+        }
+        map_set(m->map, "params", params);
+        map_set(m->map, "body", node_to_xs_map(n->lambda.body));
+        break;
+    }
+    case NODE_FN_DECL: {
+        map_set(m->map, "name", xs_str(n->fn_decl.name ? n->fn_decl.name : ""));
+        Value *params = xs_array_new();
+        for (int j = 0; j < n->fn_decl.params.len; j++) {
+            Param *pm = &n->fn_decl.params.items[j];
+            array_push(params->arr, xs_str(pm->name ? pm->name : "_"));
+        }
+        map_set(m->map, "params", params);
+        map_set(m->map, "body", node_to_xs_map(n->fn_decl.body));
+        break;
+    }
     default:
         break;
     }
@@ -6189,6 +6210,72 @@ static Node *node_from_xs_map(Value *map) {
         n->while_loop.label = NULL;
         if (!n->while_loop.cond) n->while_loop.cond = node_new(NODE_LIT_NULL, sp);
         if (!n->while_loop.body) n->while_loop.body = node_new(NODE_LIT_NULL, sp);
+        return n;
+    }
+    if (tag_i == NODE_LAMBDA) {
+        Node *n = node_new(NODE_LAMBDA, sp);
+        n->lambda.params = paramlist_new();
+        n->lambda.is_generator = 0;
+        Value *params = map_get(map->map, "params");
+        if (params && params->tag == XS_ARRAY) {
+            for (int j = 0; j < params->arr->len; j++) {
+                Value *pv = params->arr->items[j];
+                Param p = {0};
+                p.span = sp;
+                const char *pname = "_";
+                if (pv && pv->tag == XS_STR) pname = pv->s;
+                else if (pv && pv->tag == XS_MAP) {
+                    Value *nv = map_get(pv->map, "name");
+                    if (nv && nv->tag == XS_STR) pname = nv->s;
+                }
+                p.name = xs_strdup(pname);
+                Node *pat = node_new(NODE_PAT_IDENT, sp);
+                pat->pat_ident.name = xs_strdup(pname);
+                pat->pat_ident.mutable = 0;
+                p.pattern = pat;
+                paramlist_push(&n->lambda.params, p);
+            }
+        }
+        Value *body = map_get(map->map, "body");
+        n->lambda.body = (body && body->tag == XS_MAP) ? node_from_xs_map(body) : NULL;
+        if (!n->lambda.body) n->lambda.body = node_new(NODE_LIT_NULL, sp);
+        return n;
+    }
+    if (tag_i == NODE_FN_DECL) {
+        Node *n = node_new(NODE_FN_DECL, sp);
+        Value *name = map_get(map->map, "name");
+        n->fn_decl.name = xs_strdup((name && name->tag == XS_STR) ? name->s : "");
+        n->fn_decl.params = paramlist_new();
+        Value *params = map_get(map->map, "params");
+        if (params && params->tag == XS_ARRAY) {
+            for (int j = 0; j < params->arr->len; j++) {
+                Value *pv = params->arr->items[j];
+                Param p = {0};
+                p.span = sp;
+                const char *pname = "_";
+                if (pv && pv->tag == XS_STR) pname = pv->s;
+                p.name = xs_strdup(pname);
+                Node *pat = node_new(NODE_PAT_IDENT, sp);
+                pat->pat_ident.name = xs_strdup(pname);
+                pat->pat_ident.mutable = 0;
+                p.pattern = pat;
+                paramlist_push(&n->fn_decl.params, p);
+            }
+        }
+        Value *body = map_get(map->map, "body");
+        n->fn_decl.body = (body && body->tag == XS_MAP) ? node_from_xs_map(body) : NULL;
+        if (!n->fn_decl.body) n->fn_decl.body = node_new(NODE_LIT_NULL, sp);
+        n->fn_decl.is_async = 0;
+        n->fn_decl.is_pub = 0;
+        n->fn_decl.is_generator = 0;
+        n->fn_decl.is_pure = 0;
+        n->fn_decl.is_test = 0;
+        n->fn_decl.is_static = 0;
+        n->fn_decl.deprecated_msg = NULL;
+        n->fn_decl.ret_type = NULL;
+        n->fn_decl.type_params = NULL;
+        n->fn_decl.type_bounds = NULL;
+        n->fn_decl.n_type_params = 0;
         return n;
     }
     if (tag_i == NODE_EXPR_STMT) {
