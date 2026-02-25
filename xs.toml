@@ -4,8 +4,8 @@ version = "0.1.0"
 xs_version = ">=1.0"
 description = "The XS programming language"
 license = "Apache-2.0"
-authors = ["xslang9"]
-repository = "https://github.com/xslang9/xs"
+authors = ["xs-lang0"]
+repository = "https://github.com/xs-lang0/xs"
 
 [dependencies]
 

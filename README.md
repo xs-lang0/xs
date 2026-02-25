@@ -105,7 +105,7 @@ COMMANDS.md   # full CLI reference
 
 ## Author
 
-[@xslang9](https://github.com/xslang9)
+[@xs-lang0](https://github.com/xs-lang0)
 
 ## License
 
