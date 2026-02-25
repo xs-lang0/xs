@@ -134,10 +134,42 @@ static int copy_directory(const char *src, const char *dst) {
     return 0;
 }
 
+static int remove_recursive(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+
+    if (!S_ISDIR(st.st_mode)) return remove(path);
+
+    DIR *d = opendir(path);
+    if (!d) return -1;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        char child[2048];
+        snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+        remove_recursive(child);
+    }
+    closedir(d);
+    return rmdir(path);
+}
+
 static const char *basename_of(const char *path) {
     const char *slash = strrchr(path, '/');
     if (slash) return slash + 1;
     return path;
+}
+
+/* strip .git suffix from a name, returns static buffer */
+static const char *strip_git_suffix(const char *name) {
+    static char buf[512];
+    size_t len = strlen(name);
+    if (len >= 4 && strcmp(name + len - 4, ".git") == 0) {
+        if (len - 4 >= sizeof(buf)) len = sizeof(buf) - 1 + 4;
+        memcpy(buf, name, len - 4);
+        buf[len - 4] = '\0';
+        return buf;
+    }
+    return name;
 }
 
 
@@ -292,7 +324,7 @@ int pkg_install(const char *package_name) {
     } else if (strstr(package_name, ".git") || strncmp(package_name, "git://", 6) == 0 ||
                strncmp(package_name, "https://", 8) == 0 || strncmp(package_name, "http://", 7) == 0) {
         is_git = 1;
-        pkg_name = basename_of(package_name);
+        pkg_name = strip_git_suffix(basename_of(package_name));
     }
 
     char dirpath[1024];
@@ -390,20 +422,14 @@ int pkg_remove(const char *package_name) {
     char dirpath[1024];
     snprintf(dirpath, sizeof(dirpath), "xs_modules/%s", package_name);
 
-    DIR *d = opendir(dirpath);
-    if (!d) {
+    if (!is_directory(dirpath)) {
         fprintf(stderr, "xs remove: package '%s' not installed\n", package_name);
         return 1;
     }
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-        char filepath[2048];
-        snprintf(filepath, sizeof(filepath), "%s/%s", dirpath, ent->d_name);
-        remove(filepath);
+    if (remove_recursive(dirpath) != 0) {
+        fprintf(stderr, "xs remove: failed to fully remove '%s'\n", package_name);
+        return 1;
     }
-    closedir(d);
-    rmdir(dirpath);
     printf("removed %s\n", package_name);
     return 0;
 }

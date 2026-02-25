@@ -1,6 +1,6 @@
 # Contributing to XS
 
-Hey, thanks for wanting to help out. Here's the quick rundown.
+Thanks for wanting to help out.
 
 ## Building
 
@@ -10,7 +10,7 @@ You just need gcc and make. Then:
 make
 ```
 
-That's it. The compiler builds itself.
+The compiler builds itself. No extra steps needed.
 
 ## Running tests
 
@@ -31,7 +31,7 @@ for the general pattern -- keep them focused on one thing.
 - C11 standard
 - 4-space indentation, no tabs
 - Keep functions short and readable
-- Don't over-engineer things -- simple and clear wins
+- Don't over-engineer things -- simple, short, and sweet.
 
 ## Submitting changes
 
