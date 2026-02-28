@@ -164,13 +164,15 @@ $(TARGET): $(OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-debug: CFLAGS = -g -O0 -Wall -Wextra -Wno-unused-parameter -std=c11 -Isrc \
-                -fsanitize=address -fsanitize=undefined -DDEBUG
+debug: CFLAGS = -g -O0 -Wall -Wextra -Wno-unused-parameter -std=c11 -Isrc -Isrc/tls/bearssl \
+                -fsanitize=address -fsanitize=undefined -DDEBUG \
+                $(foreach f,VM JIT PLUGINS SANDBOX TRACER LSP DAP EFFECTS TRANSPILER FMT PKG PROFILER COVERAGE DOC,-DXSC_ENABLE_$(f))
 debug: LDFLAGS += -fsanitize=address -fsanitize=undefined
 debug: clean $(TARGET)
 
-release: CFLAGS = -O3 -Wall -Wextra -Wno-unused-parameter -std=c11 -Isrc \
-                  -DNDEBUG -flto
+release: CFLAGS = -O3 -Wall -Wextra -Wno-unused-parameter -std=c11 -Isrc -Isrc/tls/bearssl \
+                  -DNDEBUG -flto \
+                  $(foreach f,VM JIT PLUGINS SANDBOX TRACER LSP DAP EFFECTS TRANSPILER FMT PKG PROFILER COVERAGE DOC,-DXSC_ENABLE_$(f))
 release: LDFLAGS += -flto -s
 release: clean $(TARGET)
 
