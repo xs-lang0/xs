@@ -93,7 +93,7 @@ static void cov_register_node(XSCoverage *cov, Node *n) {
     case NODE_LIT_NULL: case NODE_LIT_CHAR:
     case NODE_IDENT: case NODE_SCOPE:
     case NODE_PAT_WILD: case NODE_PAT_IDENT: case NODE_PAT_LIT:
-    case NODE_CONTINUE: case NODE_TYPE_ALIAS: case NODE_IMPORT:
+    case NODE_CONTINUE: case NODE_TYPE_ALIAS: case NODE_IMPORT: case NODE_USE:
     case NODE_TRAIT_DECL:
         break;
     case NODE_LIT_STRING: case NODE_INTERP_STRING:
@@ -548,7 +548,7 @@ static void ast_dump(Node *n, int depth) {
         case NODE_ENUM_DECL: fprintf(stdout, "ENUM name=%s\n", n->enum_decl.name); break;
         case NODE_TRAIT_DECL: fprintf(stdout, "TRAIT name=%s\n", n->trait_decl.name); break;
         case NODE_IMPL_DECL: fprintf(stdout, "IMPL type=%s trait=%s\n", n->impl_decl.type_name, n->impl_decl.trait_name ? n->impl_decl.trait_name : "(none)"); break;
-        case NODE_IMPORT: fprintf(stdout, "IMPORT\n"); break;
+        case NODE_IMPORT: case NODE_USE: fprintf(stdout, "IMPORT\n"); break;
         case NODE_LAMBDA: fprintf(stdout, "LAMBDA\n"); ast_dump(n->lambda.body, depth+1); break;
         case NODE_EXPR_STMT: fprintf(stdout, "EXPR_STMT\n"); ast_dump(n->expr_stmt.expr, depth+1); break;
         case NODE_BREAK: fprintf(stdout, "BREAK\n"); break;

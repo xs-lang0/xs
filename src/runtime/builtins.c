@@ -4372,8 +4372,7 @@ static Value *native_net_url_parse(Interp *ig, Value **a, int n) {
 static int http_parse_url(const char *url, char *host, int hostlen,
                           int *port, char *path, int pathlen) {
     const char *start = url;
-    int is_https = 0;
-    if (strncmp(url, "https://", 8) == 0) { start = url + 8; is_https = 1; *port = 443; }
+    if (strncmp(url, "https://", 8) == 0) { start = url + 8; *port = 443; }
     else if (strncmp(url, "http://", 7) == 0) { start = url + 7; *port = 80; }
     else { *port = 80; }
 

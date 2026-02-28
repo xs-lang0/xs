@@ -846,6 +846,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
         sb_add(s, "undefined");
         break;
     case NODE_IMPORT:
+    case NODE_USE:
         sb_add(s, "undefined");
         break;
     case NODE_MODULE_DECL:

@@ -7679,7 +7679,7 @@ void interp_exec(Interp *i, Node *stmt) {
     }
 
     case NODE_USE: {
-        char resolved[2048];
+        char resolved[PATH_MAX];
         const char *use_path = stmt->use_.path;
         struct stat st2;
 
@@ -7705,22 +7705,22 @@ void interp_exec(Interp *i, Node *stmt) {
         /* directory import: look for mod.xs or index.xs inside */
         size_t rlen = strlen(resolved);
         if (rlen > 0 && resolved[rlen - 1] == '/') {
-            char dir_try[2048];
-            snprintf(dir_try, sizeof(dir_try), "%smod.xs", resolved);
+            char dir_try[PATH_MAX];
+            snprintf(dir_try, sizeof(dir_try), "%.*smod.xs", (int)(sizeof(dir_try)-8), resolved);
             if (stat(dir_try, &st2) == 0) {
                 snprintf(resolved, sizeof(resolved), "%s", dir_try);
             } else {
-                snprintf(dir_try, sizeof(dir_try), "%sindex.xs", resolved);
+                snprintf(dir_try, sizeof(dir_try), "%.*sindex.xs", (int)(sizeof(dir_try)-10), resolved);
                 if (stat(dir_try, &st2) == 0)
                     snprintf(resolved, sizeof(resolved), "%s", dir_try);
             }
         } else if (stat(resolved, &st2) == 0 && S_ISDIR(st2.st_mode)) {
-            char dir_try[2048];
-            snprintf(dir_try, sizeof(dir_try), "%s/mod.xs", resolved);
+            char dir_try[PATH_MAX];
+            snprintf(dir_try, sizeof(dir_try), "%.*s/mod.xs", (int)(sizeof(dir_try)-9), resolved);
             if (stat(dir_try, &st2) == 0) {
                 snprintf(resolved, sizeof(resolved), "%s", dir_try);
             } else {
-                snprintf(dir_try, sizeof(dir_try), "%s/index.xs", resolved);
+                snprintf(dir_try, sizeof(dir_try), "%.*s/index.xs", (int)(sizeof(dir_try)-11), resolved);
                 if (stat(dir_try, &st2) == 0)
                     snprintf(resolved, sizeof(resolved), "%s", dir_try);
             }

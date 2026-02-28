@@ -692,6 +692,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
     case NODE_IMPL_DECL:
     case NODE_TYPE_ALIAS:
     case NODE_IMPORT:
+    case NODE_USE:
     case NODE_MODULE_DECL:
     case NODE_EFFECT_DECL:
         sb_add(s, "XS_NULL");
@@ -1457,6 +1458,7 @@ static void emit_stmt(SB *s, Node *n, int depth) {
                   n->type_alias.target ? n->type_alias.target : "?");
         break;
     case NODE_IMPORT:
+    case NODE_USE:
         sb_indent(s, depth);
         sb_add(s, "#include \"");
         for (int i = 0; i < n->import.nparts; i++) {
