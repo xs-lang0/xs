@@ -13,8 +13,12 @@ XSC_ENABLE_DAP     ?= 1
 
 # Platform detection
 ifeq ($(OS),Windows_NT)
-  CFLAGS  += -D__USE_MINGW_ANSI_STDIO=1
+  CFLAGS  += -D__USE_MINGW_ANSI_STDIO=1 -D_WIN32
+  LDFLAGS += -lws2_32
   TARGET  = xs.exe
+  # disable features that need POSIX
+  XSC_ENABLE_JIT     = 0
+  XSC_ENABLE_PLUGINS = 0
 else
   UNAME := $(shell uname -s)
   ifeq ($(UNAME),Linux)
@@ -24,6 +28,11 @@ else
     ifneq ($(wildcard /usr/include),)
       CFLAGS += -isystem /usr/include
     endif
+    LDFLAGS += -ldl
+  endif
+  ifeq ($(UNAME),Darwin)
+    # macOS: no -ldl needed (dlopen is in libc)
+    CFLAGS += -Wno-unused-command-line-argument
   endif
   TARGET = xs
 endif
@@ -90,7 +99,6 @@ endif
 
 ifeq ($(XSC_ENABLE_PLUGINS),1)
   CFLAGS += -DXSC_ENABLE_PLUGINS
-  LDFLAGS += -ldl
   SRCS += $(wildcard src/plugins/*.c)
 endif
 
