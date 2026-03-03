@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+        shell: bash
+
+      - name: Test
+        run: make test
+        shell: bash
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: xs-linux-x86_64
+          - os: macos-latest
+            name: xs-macos-x86_64
+          - os: windows-latest
+            name: xs-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release
+        run: make release
+        shell: bash
+
+      - name: Rename binary (unix)
+        if: runner.os != 'Windows'
+        run: mv xs ${{ matrix.name }}
+
+      - name: Rename binary (windows)
+        if: runner.os == 'Windows'
+        run: mv xs.exe ${{ matrix.name }}
+        shell: bash
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ matrix.name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
