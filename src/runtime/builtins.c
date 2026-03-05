@@ -6071,14 +6071,22 @@ Value *make_cli_module(void) {
 
 /* ffi (dlopen/dlsym) */
 #ifdef XSC_ENABLE_PLUGINS
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #endif
 
 static Value *native_ffi_load(Interp *ig, Value **a, int n) {
     (void)ig;
 #ifdef XSC_ENABLE_PLUGINS
     if (n < 1 || a[0]->tag != XS_STR) return value_incref(XS_NULL_VAL);
+#ifdef _WIN32
+    void *handle = (void *)LoadLibraryA(a[0]->s);
+#else
     void *handle = dlopen(a[0]->s, RTLD_LAZY);
+#endif
     if (!handle) return value_incref(XS_NULL_VAL);
     XSMap *h = map_new();
     map_set(h, "_handle", xs_int((int64_t)(uintptr_t)handle));

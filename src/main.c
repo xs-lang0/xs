@@ -61,7 +61,11 @@
 #endif
 #ifdef XSC_ENABLE_PLUGINS
 #include "plugins/plugin_api.h"
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #endif
 #ifdef XSC_ENABLE_JIT
 #include "jit/jit.h"
@@ -1953,21 +1957,38 @@ run_file:;
         }
 #ifdef XSC_ENABLE_PLUGINS
         if (plugin_path) {
+#ifdef _WIN32
+            void *dl = (void *)LoadLibraryA(plugin_path);
+#else
             void *dl = dlopen(plugin_path, RTLD_NOW);
+#endif
             if (!dl) {
+#ifdef _WIN32
+                fprintf(stderr, "xs: failed to load plugin '%s'\n", plugin_path);
+#else
                 fprintf(stderr, "xs: failed to load plugin '%s': %s\n",
                         plugin_path, dlerror());
+#endif
                 interp_free(interp);
                 node_free(program);
                 cache_free(g_sema_cache);
                 return 1;
             }
+#ifdef _WIN32
+            xs_plugin_init_fn init_fn =
+                (xs_plugin_init_fn)(void *)GetProcAddress((HMODULE)dl, "xs_plugin_init");
+#else
             xs_plugin_init_fn init_fn =
                 (xs_plugin_init_fn)dlsym(dl, "xs_plugin_init");
+#endif
             if (!init_fn) {
-                fprintf(stderr, "xs: plugin '%s' missing xs_plugin_init symbol: %s\n",
-                        plugin_path, dlerror());
+                fprintf(stderr, "xs: plugin '%s' missing xs_plugin_init symbol\n",
+                        plugin_path);
+#ifdef _WIN32
+                FreeLibrary((HMODULE)dl);
+#else
                 dlclose(dl);
+#endif
                 interp_free(interp);
                 node_free(program);
                 cache_free(g_sema_cache);
@@ -1977,7 +1998,11 @@ run_file:;
             if (prc != 0) {
                 fprintf(stderr, "xs: plugin '%s' init returned error %d\n",
                         plugin_path, prc);
+#ifdef _WIN32
+                FreeLibrary((HMODULE)dl);
+#else
                 dlclose(dl);
+#endif
                 interp_free(interp);
                 node_free(program);
                 cache_free(g_sema_cache);

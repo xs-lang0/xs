@@ -16,9 +16,6 @@ ifeq ($(OS),Windows_NT)
   CFLAGS  += -D__USE_MINGW_ANSI_STDIO=1 -D_WIN32
   LDFLAGS += -lws2_32
   TARGET  = xs.exe
-  # disable features that need POSIX
-  XSC_ENABLE_JIT     = 0
-  XSC_ENABLE_PLUGINS = 0
 else
   UNAME := $(shell uname -s)
   ifeq ($(UNAME),Linux)

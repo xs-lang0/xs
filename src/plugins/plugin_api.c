@@ -5,7 +5,23 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef XSC_ENABLE_PLUGINS
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
+#endif
+
+#ifdef _WIN32
+#define xs_dlopen(path)       ((void *)LoadLibraryA(path))
+#define xs_dlsym(h, name)     ((void *)GetProcAddress((HMODULE)(h), name))
+#define xs_dlclose(h)         FreeLibrary((HMODULE)(h))
+#define xs_dlerror_msg()          "LoadLibrary failed"
+#else
+#define xs_dlopen(path)       dlopen(path, RTLD_LAZY)
+#define xs_dlsym(h, name)     dlsym(h, name)
+#define xs_dlclose(h)         dlclose(h)
+#define xs_dlerror_msg()       dlerror()
 #endif
 
 #define MAX_HOOKS_PER_TYPE 64
@@ -48,26 +64,26 @@ int plugin_load(Interp *i, const char *path) {
 #ifdef XSC_ENABLE_PLUGINS
     hooks_ensure_init();
 
-    void *dl = dlopen(path, RTLD_NOW);
+    void *dl = xs_dlopen(path);
     if (!dl) {
         fprintf(stderr, "xs: plugin_load: dlopen('%s') failed: %s\n",
-                path, dlerror());
+                path, xs_dlerror_msg());
         return 1;
     }
 
     xs_plugin_init_fn init_fn =
-        (xs_plugin_init_fn)dlsym(dl, "xs_plugin_init");
+        (xs_plugin_init_fn)xs_dlsym(dl, "xs_plugin_init");
     if (!init_fn) {
         fprintf(stderr, "xs: plugin_load: '%s' missing xs_plugin_init: %s\n",
-                path, dlerror());
-        dlclose(dl);
+                path, xs_dlerror_msg());
+        xs_dlclose(dl);
         return 1;
     }
 
     int rc = init_fn(i, XS_PLUGIN_API_VERSION);
     if (rc != 0) {
         fprintf(stderr, "xs: plugin_load: '%s' init returned %d\n", path, rc);
-        dlclose(dl);
+        xs_dlclose(dl);
         return 1;
     }
 
@@ -76,10 +92,10 @@ int plugin_load(Interp *i, const char *path) {
         lp->path      = xs_strdup(path);
         lp->dl_handle = dl;
 
-        const char **name_ptr = (const char **)dlsym(dl, "xs_plugin_name");
+        const char **name_ptr = (const char **)xs_dlsym(dl, "xs_plugin_name");
         lp->name = xs_strdup(name_ptr ? *name_ptr : path);
 
-        lp->fini_fn = (xs_plugin_fini_fn)dlsym(dl, "xs_plugin_fini");
+        lp->fini_fn = (xs_plugin_fini_fn)xs_dlsym(dl, "xs_plugin_fini");
     }
 
     return 0;
@@ -118,7 +134,7 @@ int plugin_unload(Interp *i, const char *name) {
             }
 
             if (lp->dl_handle) {
-                dlclose(lp->dl_handle);
+                xs_dlclose(lp->dl_handle);
             }
             free(lp->name);
             free(lp->path);
