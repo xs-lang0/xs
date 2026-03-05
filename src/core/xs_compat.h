@@ -51,6 +51,7 @@ static inline int xs_clock_gettime(int clk_id, struct timespec *ts) {
 
 #include <dirent.h>
 
+#include <stdio.h>
 #include <process.h>
 #ifndef getpid
 #  define getpid _getpid

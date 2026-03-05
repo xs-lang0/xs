@@ -3,6 +3,7 @@
 #include "core/xs_compat.h"
 #include "runtime/interp.h"
 #include "tls/xs_tls.h"
+#include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2283,7 +2284,11 @@ static Value *native_io_temp_file(Interp *ig, Value **a, int n) {
 #ifndef __MINGW32__
     int fd;
     if (suffix[0]) {
+        #ifdef __APPLE__
+        fd = mkstemp(tmpl);
+#else
         fd = mkstemps(tmpl,(int)strlen(suffix));
+#endif
     } else {
         fd = mkstemp(tmpl);
     }
@@ -2305,6 +2310,9 @@ static Value *native_io_temp_dir(Interp *ig, Value **a, int n) {
     char tmpl[4096];
     snprintf(tmpl,sizeof(tmpl),"%s/%sXXXXXX",tmpdir,prefix);
 #ifndef __MINGW32__
+    #ifdef __APPLE__
+    extern char *mkdtemp(char *);
+#endif
     char *res = mkdtemp(tmpl);
     if (!res) return value_incref(XS_NULL_VAL);
     return xs_str(res);
@@ -2520,7 +2528,13 @@ static Value *native_os_is_dir(Interp *ig, Value **a, int n) {
 }
 static Value *native_os_cpu_count(Interp *ig, Value **a, int n) {
     (void)ig;(void)a;(void)n;
+    #ifdef _SC_NPROCESSORS_ONLN
     long c=sysconf(_SC_NPROCESSORS_ONLN);
+#elif defined(__APPLE__)
+    int mib[2]={6,3}; int nc=1; size_t len=sizeof(nc); sysctl(mib,2,&nc,&len,NULL,0); long c=nc;
+#else
+    long c=1;
+#endif
     return xs_int(c>0?c:1);
 }
 static Value *native_os_pid(Interp *ig, Value **a, int n) {
@@ -5700,6 +5714,19 @@ static const char *db_read_ident(const char *s, char *buf, int bufsz) {
      DELETE FROM name WHERE key = value
      DROP TABLE name
 */
+
+#ifndef _GNU_SOURCE
+static const char *xs_strcasestr(const char *h, const char *n) {
+    size_t nlen = strlen(n);
+    if (!nlen) return h;
+    for (; *h; h++) {
+        if (strncasecmp(h, n, nlen) == 0) return h;
+    }
+    return NULL;
+}
+#define strcasestr xs_strcasestr
+#endif
+
 static Value *db_execute(Value *db_val, const char *sql, int return_rows) {
     if (!db_val || (db_val->tag != XS_MAP && db_val->tag != XS_MODULE) || !db_val->map)
         return xs_str("error: invalid db handle");
