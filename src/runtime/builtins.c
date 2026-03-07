@@ -4,6 +4,24 @@
 #include "runtime/interp.h"
 #include "tls/xs_tls.h"
 #include <strings.h>
+#ifdef __MINGW32__
+#define re_nsub nsub
+#endif
+
+#if defined(_WIN32) || defined(__APPLE__)
+static char *xs_strndup(const char *s, size_t n) {
+    size_t len = strlen(s);
+    if (n < len) len = n;
+    char *r = (char *)malloc(len + 1);
+    if (r) { memcpy(r, s, len); r[len] = 0; }
+    return r;
+}
+#define strndup xs_strndup
+#endif
+
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2318,7 +2336,7 @@ static Value *native_io_temp_dir(Interp *ig, Value **a, int n) {
     return xs_str(res);
 #else
     if (!_mktemp(tmpl)) return value_incref(XS_NULL_VAL);
-    mkdir(tmpl);
+    mkdir(tmpl, 0700);
     return xs_str(tmpl);
 #endif
 }
@@ -2589,7 +2607,12 @@ static Value *native_os_env_has(Interp *ig, Value **a, int n) {
     if (n<1||a[0]->tag!=XS_STR) return value_incref(XS_FALSE_VAL);
     return getenv(a[0]->s)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
 }
+#ifdef _WIN32
+#define environ _environ
+extern char **_environ;
+#else
 extern char **environ;
+#endif
 static Value *native_os_env_all(Interp *ig, Value **a, int n) {
     (void)ig;(void)a;(void)n;
     Value *m=xs_map_new();
@@ -5715,8 +5738,7 @@ static const char *db_read_ident(const char *s, char *buf, int bufsz) {
      DROP TABLE name
 */
 
-#ifndef _GNU_SOURCE
-static const char *xs_strcasestr(const char *h, const char *n) {
+static const char *xs_strcasestr_fn(const char *h, const char *n) {
     size_t nlen = strlen(n);
     if (!nlen) return h;
     for (; *h; h++) {
@@ -5724,8 +5746,6 @@ static const char *xs_strcasestr(const char *h, const char *n) {
     }
     return NULL;
 }
-#define strcasestr xs_strcasestr
-#endif
 
 static Value *db_execute(Value *db_val, const char *sql, int return_rows) {
     if (!db_val || (db_val->tag != XS_MAP && db_val->tag != XS_MODULE) || !db_val->map)
@@ -5838,7 +5858,7 @@ static Value *db_execute(Value *db_val, const char *sql, int return_rows) {
         if (*rest == '*') rest++;
         else {
             /* skip until FROM */
-            const char *from = strcasestr(rest, "FROM");
+            const char *from = xs_strcasestr_fn(rest, "FROM");
             if (!from) return xs_str("error: expected FROM");
             rest = from;
         }
@@ -6133,7 +6153,11 @@ static Value *native_ffi_sym(Interp *ig, Value **a, int n) {
     Value *hp = map_get(a[0]->map, "_handle");
     if (!hp || hp->tag != XS_INT) return value_incref(XS_NULL_VAL);
     void *handle = (void*)(uintptr_t)hp->i;
+#ifdef _WIN32
+    void *sym = (void *)GetProcAddress((HMODULE)handle, a[1]->s);
+#else
     void *sym = dlsym(handle, a[1]->s);
+#endif
     if (!sym) return value_incref(XS_NULL_VAL);
     XSMap *s = map_new();
     map_set(s, "_sym", xs_int((int64_t)(uintptr_t)sym));
@@ -6181,7 +6205,11 @@ static Value *native_ffi_close(Interp *ig, Value **a, int n) {
     if (!hp || hp->tag != XS_INT)
         return xs_str("error: invalid library handle");
     void *handle = (void *)(uintptr_t)hp->i;
+#ifdef _WIN32
+    FreeLibrary((HMODULE)handle);
+#else
     dlclose(handle);
+#endif
     /* Invalidate the handle */
     map_set(a[0]->map, "_handle", xs_int(0));
     map_set(a[0]->map, "_closed", value_incref(XS_TRUE_VAL));
