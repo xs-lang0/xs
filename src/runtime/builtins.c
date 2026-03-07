@@ -8,20 +8,7 @@
 #define re_nsub nsub
 #endif
 
-#if defined(_WIN32) || defined(__APPLE__)
-static char *xs_strndup(const char *s, size_t n) {
-    size_t len = strlen(s);
-    if (n < len) len = n;
-    char *r = (char *)malloc(len + 1);
-    if (r) { memcpy(r, s, len); r[len] = 0; }
-    return r;
-}
-#define strndup xs_strndup
-#endif
 
-#ifdef __APPLE__
-#include <sys/sysctl.h>
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1605,7 +1592,7 @@ static Value *native_path_dirname(Interp *i, Value **a, int n) {
     if (!last) return xs_str(".");
     int dlen=(int)(last-s);
     if (dlen==0) return xs_str("/");
-    char *r=strndup(s,dlen); Value *v=xs_str(r); free(r); return v;
+    char *r=xs_strndup(s,dlen); Value *v=xs_str(r); free(r); return v;
 }
 static Value *native_path_ext(Interp *i, Value **a, int n) {
     (void)i;
@@ -1626,7 +1613,7 @@ static Value *native_path_stem(Interp *i, Value **a, int n) {
     const char *last=sl>bs?sl:bs; const char *base=last?last+1:s;
     const char *dot=strrchr(base,'.');
     if (!dot) return xs_str(base);
-    char *r=strndup(base,(int)(dot-base)); Value *v=xs_str(r); free(r); return v;
+    char *r=xs_strndup(base,(int)(dot-base)); Value *v=xs_str(r); free(r); return v;
 }
 static Value *native_path_join(Interp *i, Value **a, int argc) {
     (void)i;
@@ -2549,7 +2536,7 @@ static Value *native_os_cpu_count(Interp *ig, Value **a, int n) {
     #ifdef _SC_NPROCESSORS_ONLN
     long c=sysconf(_SC_NPROCESSORS_ONLN);
 #elif defined(__APPLE__)
-    int mib[2]={6,3}; int nc=1; size_t len=sizeof(nc); sysctl(mib,2,&nc,&len,NULL,0); long c=nc;
+    int nc=1; size_t len=sizeof(nc); sysctlbyname("hw.ncpu",&nc,&len,NULL,0); long c=nc;
 #else
     long c=1;
 #endif
@@ -2607,10 +2594,7 @@ static Value *native_os_env_has(Interp *ig, Value **a, int n) {
     if (n<1||a[0]->tag!=XS_STR) return value_incref(XS_FALSE_VAL);
     return getenv(a[0]->s)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
 }
-#ifdef _WIN32
-#define environ _environ
-extern char **_environ;
-#else
+#ifndef _WIN32
 extern char **environ;
 #endif
 static Value *native_os_env_all(Interp *ig, Value **a, int n) {
@@ -3483,8 +3467,8 @@ static Value *native_url_parse_query(Interp *ig, Value **a, int n) {
         const char *amp=strchr(eq,'&');
         int klen=(int)(eq-s);
         int vlen=amp?(int)(amp-eq-1):(int)strlen(eq+1);
-        char *key=strndup(s,klen);
-        char *val=strndup(eq+1,vlen);
+        char *key=xs_strndup(s,klen);
+        char *val=xs_strndup(eq+1,vlen);
         /* decode key */
         Value *kv=xs_str(key); Value *args2[1]={kv};
         Value *dk=native_url_decode(ig,args2,1); value_decref(kv); free(key);
