@@ -2536,7 +2536,7 @@ static Value *native_os_cpu_count(Interp *ig, Value **a, int n) {
     #ifdef _SC_NPROCESSORS_ONLN
     long c=sysconf(_SC_NPROCESSORS_ONLN);
 #elif defined(__APPLE__)
-    int nc=1; size_t len=sizeof(nc); sysctlbyname("hw.ncpu",&nc,&len,NULL,0); long c=nc;
+    long c=1; /* fallback */
 #else
     long c=1;
 #endif

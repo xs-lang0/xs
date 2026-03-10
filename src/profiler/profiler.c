@@ -77,6 +77,7 @@ void profiler_start(XSProfiler *p) {
     clock_gettime(CLOCK_MONOTONIC, &p->start_time);
 
     g_profiler = p;
+#ifndef _WIN32
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigprof_handler;
@@ -90,16 +91,18 @@ void profiler_start(XSProfiler *p) {
     timer.it_value.tv_sec     = 0;
     timer.it_value.tv_usec    = 1000;
     setitimer(ITIMER_PROF, &timer, NULL);
+#endif
 }
 
 void profiler_stop(XSProfiler *p) {
     if (!p) return;
 
+#ifndef _WIN32
     struct itimerval timer;
     memset(&timer, 0, sizeof(timer));
     setitimer(ITIMER_PROF, &timer, NULL);
-
     signal(SIGPROF, SIG_DFL);
+#endif
 
     p->running = 0;
     clock_gettime(CLOCK_MONOTONIC, &p->end_time);
