@@ -4,8 +4,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#define close closesocket
+#define ssize_t int
+#define read(fd, buf, len) recv(fd, buf, len, 0)
+#define write(fd, buf, len) send(fd, buf, len, 0)
+#else
 #include <unistd.h>
 #include <sys/socket.h>
+#endif
 
 struct xs_tls_conn {
     br_ssl_client_context sc;
