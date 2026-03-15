@@ -7,7 +7,7 @@
 #include "tracer/tracer.h"
 #endif
 
-#define VM_STACK_SIZE    4096
+#define VM_STACK_SIZE    4096 /* TODO: make these growable instead of fixed */
 #define VM_FRAMES_MAX    256
 #define VM_TRY_STACK_MAX 64
 #define VM_DEFER_MAX     64

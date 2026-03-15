@@ -17,7 +17,7 @@
 #define LSP_BUF_MEDIUM  4096
 #define LSP_BUF_LARGE   16384
 #define LSP_BUF_HUGE    65536
-#define LSP_MAX_DOCS    128
+#define LSP_MAX_DOCS    128  /* FIXME: should use a hashtable, not a flat array */
 #define LSP_MAX_IDENTS  512
 
 

@@ -1,6 +1,6 @@
 # XS Language Reference
 
-Complete reference for the XS programming language.
+Complete reference for the XS programming language. This covers syntax, semantics, and the standard library. If something is missing or wrong, it probably is -- this doc was written alongside the implementation and might lag behind in places.
 
 > **Notation:** Examples show `-- output` comments to indicate what a line
 > prints or evaluates to. These are line comments, not output syntax.
@@ -259,6 +259,7 @@ ASCII strings the byte count equals the character count.
 from the end. Out-of-bounds indices return `null`.
 
 **`.chars()`** splits byte-by-byte, returning an array of one-character strings.
+Yeah, proper Unicode support is on the list but not done yet.
 
 **Method aliases:** Several methods have aliases for convenience:
 - `.find()` / `.index_of()`
@@ -665,8 +666,6 @@ impl Point {
 the first parameter. `self` is not implicit — omitting it means the method
 cannot access instance state.
 
----
-
 ## Enums
 
 ```xs
@@ -690,8 +689,6 @@ match color {
     Blue  => "#0000FF"
 }
 ```
-
----
 
 ## Traits
 
@@ -951,6 +948,8 @@ string concatenation. `+` on strings is a type error.
 
 ## Algebraic Effects
 
+This is probably the most experimental part of the language. The basic idea is borrowed from Eff/Koka/OCaml 5 -- effects let you "perform" an operation without knowing how it will be handled, and the handler decides what to do. Think of it as exceptions you can resume from.
+
 ```xs
 -- Declare an effect
 effect Log {
@@ -993,8 +992,6 @@ let result = await fetch_data()
 yield value
 ```
 
----
-
 ## List Comprehensions
 
 ```xs
@@ -1002,10 +999,7 @@ let squares = [x * x for x in 0..10]
 let evens = [x for x in 0..20 if x % 2 == 0]
 ```
 
-**Note:** List comprehensions return a new array. The `if` clause is optional
-and filters elements.
-
----
+List comprehensions return a new array. The `if` clause is optional.
 
 ## Built-in Functions
 

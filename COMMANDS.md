@@ -1,6 +1,6 @@
 # XS Command Reference
 
-Complete reference for the `xs` command-line tool.
+Reference for the `xs` command-line tool. Most of these work, some are rough around the edges.
 
 > **Convention:** Optional arguments are shown in `[brackets]`, required
 > arguments in `<angle brackets>`. Flags can appear before or after positional
@@ -150,8 +150,6 @@ optimizations.
 ```bash
 xs --optimize heavy_compute.xs
 ```
-
----
 
 ## Code Quality Tools
 
@@ -327,8 +325,7 @@ xs transpile --target wasi server.xs
 - `wasm32` — WebAssembly binary (`.wasm`)
 - `wasi` — WASI-compatible WebAssembly
 
-**Note:** WASM/WASI targets may have limited support. Check build output for
-any warnings.
+The WASM backend is the least mature of the three -- it handles basic arithmetic and function calls but doesn't cover the full language yet.
 
 ### `xs build <file.xs>`
 
@@ -443,10 +440,10 @@ Creates:
 
 ```
 myapp/
-├── xs.toml          # package manifest
-├── src/
-│   └── main.xs      # hello world entry point
-└── .gitignore
+├-- xs.toml          # package manifest
+├-- src/
+│   └-- main.xs      # hello world entry point
+└-- .gitignore
 ```
 
 ### `xs install [pkg]`
@@ -595,8 +592,6 @@ xs transpile -h
 xs fmt --help
 ```
 
----
-
 ## Building from Source
 
 ### Makefile Targets
@@ -637,6 +632,4 @@ make XSC_ENABLE_PLUGINS=0   # build without plugin support
 | `XSC_ENABLE_PLUGINS` | Plugin loading | `--plugin`, `--sandbox` |
 | `XSC_ENABLE_SANDBOX` | Plugin sandboxing | `--sandbox` |
 
-**Note:** If a feature is disabled at compile time, the corresponding CLI
-command will print an error message explaining that the feature is not available
-in this build.
+If a feature is disabled at compile time, the corresponding CLI command will print an error saying the feature isn't available in this build.

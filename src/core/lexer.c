@@ -81,7 +81,7 @@ static TokenKind lookup_keyword(const char *s) {
 
 static char lpeek(Lexer *l, int off) {
     int idx = l->pos + off;
-    int len = (int)strlen(l->source);
+    int len = (int)strlen(l->source); /* XXX: called a lot, should cache this */
     return idx < len ? l->source[idx] : '\0';
 }
 

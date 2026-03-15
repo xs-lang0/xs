@@ -161,7 +161,7 @@ int xs_call(XSState *xs, const char *fn_name, int argc) {
     }
 
     int base = xs->sp - argc;
-    char *arg_strs[256];
+    char *arg_strs[256]; /* TODO: silently drops args if argc > 256 */
     size_t total_len = strlen(fn_name) + 3; /* fn_name( ) \0 */
     for (int i = 0; i < argc; i++) {
         arg_strs[i] = value_repr(xs->stack[base + i]);

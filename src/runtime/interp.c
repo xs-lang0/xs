@@ -22,7 +22,7 @@ Interp *g_current_interp = NULL;
 Value *call_value(Interp *i, Value *callee, Value **args, int argc,
                   const char *call_site);
 
-/* ── plugin system globals ── */
+/* plugin system globals */
 
 #define MAX_PLUGIN_METHODS 256
 typedef struct {
@@ -50,7 +50,7 @@ static LoadedXSPlugin g_xs_plugins[MAX_LOADED_XS_PLUGINS];
 static int g_xs_plugin_count = 0;
 
 static void plugin_register_method(const char *type_name, const char *method_name, Value *fn) {
-    if (g_plugin_method_count >= MAX_PLUGIN_METHODS) return;
+    if (g_plugin_method_count >= MAX_PLUGIN_METHODS) return; /* FIXME: fails silently */
     PluginMethod *pm = &g_plugin_methods[g_plugin_method_count++];
     pm->type_name = xs_strdup(type_name);
     pm->method_name = xs_strdup(method_name);
@@ -77,7 +77,7 @@ static void plugin_run_teardowns(void) {
 }
 
 static void plugin_register_loaded(const char *name, const char *version) {
-    if (g_xs_plugin_count >= MAX_LOADED_XS_PLUGINS) return;
+    if (g_xs_plugin_count >= MAX_LOADED_XS_PLUGINS) return; /* TODO: should warn */
     g_xs_plugins[g_xs_plugin_count].name = xs_strdup(name);
     g_xs_plugins[g_xs_plugin_count].version = version ? xs_strdup(version) : NULL;
     g_xs_plugin_count++;
@@ -91,7 +91,7 @@ static int plugin_is_loaded(const char *name) {
     return 0;
 }
 
-/* ── phase 2: eval hooks ── */
+/* phase 2: eval hooks */
 
 typedef struct {
     Value *callback;
@@ -105,7 +105,7 @@ static int g_n_after_eval = 0;
 static int g_has_eval_hooks = 0;
 static int g_in_eval_hook = 0; /* recursion guard */
 
-/* ── phase 2: syntax extension globals ── */
+/* phase 2: syntax extension globals */
 
 static Value *g_syntax_handlers[16];
 static int g_n_syntax_handlers = 0;
@@ -163,7 +163,7 @@ static Node *plugin_try_parser_override_impl(Parser *p, const char *keyword);
 /* phase 3 forward decls */
 static Value *make_hook_handle(int idx, const char *type);
 
-/* ── end plugin globals ── */
+/* end plugin globals */
 
 /* enum variant constructor registry */
 typedef struct {
@@ -5591,7 +5591,7 @@ static Value *try_load_xs_module(Interp *i, const char *modname) {
     return NULL;
 }
 
-/* ── XS plugin system native functions ── */
+/* XS plugin system native functions */
 
 static Env *s_plugin_host_globals = NULL;
 
@@ -5848,7 +5848,7 @@ static Value *native_ast_map_node(Interp *interp, Value **args, int argc) {
     return m;
 }
 
-/* ── phase 2: node tag string conversion ── */
+/* phase 2: node tag string conversion */
 
 static const char *node_tag_to_string(NodeTag tag) {
     switch (tag) {
@@ -6293,7 +6293,7 @@ static Node *node_from_xs_map(Value *map) {
     return NULL;
 }
 
-/* ── phase 2: eval hook natives ── */
+/* phase 2: eval hook natives */
 
 static Value *native_plugin_before_eval(Interp *interp, Value **args, int argc) {
     (void)interp;
@@ -6355,7 +6355,7 @@ static Value *native_plugin_after_eval(Interp *interp, Value **args, int argc) {
     return make_hook_handle(idx, "after_eval");
 }
 
-/* ── phase 2: syntax handler natives ── */
+/* phase 2: syntax handler natives */
 
 static Value *native_plugin_on_unknown(Interp *interp, Value **args, int argc) {
     (void)interp;
@@ -6387,7 +6387,7 @@ static Value *native_plugin_on_postfix(Interp *interp, Value **args, int argc) {
     return make_hook_handle(idx, "on_postfix");
 }
 
-/* ── phase 2: lexer extension natives ── */
+/* phase 2: lexer extension natives */
 
 static Value *native_plugin_add_keyword(Interp *interp, Value **args, int argc) {
     (void)interp;
@@ -6403,7 +6403,7 @@ static Value *native_plugin_add_keyword(Interp *interp, Value **args, int argc) 
     return value_incref(XS_NULL_VAL);
 }
 
-/* ── phase 2: parser method natives (require active parser) ── */
+/* phase 2: parser method natives (require active parser) */
 
 /* These are declared here but implemented in parser.c through a callback mechanism.
    The parser sets a global pointer, and these natives use it. */
@@ -6522,7 +6522,7 @@ static Value *native_parser_peek(Interp *interp, Value **args, int argc) {
     return m;
 }
 
-/* ── phase 2: plugin-parser bridge functions (called from parser.c via fn ptrs) ── */
+/* phase 2: plugin-parser bridge functions (called from parser.c via fn ptrs) */
 
 static int plugin_is_keyword_impl(const char *word) {
     if (!word) return 0;
@@ -6600,9 +6600,9 @@ static Node *plugin_try_syntax_expr_handler_impl(Parser *p, Token *tok) {
     return result;
 }
 
-/* ── end phase 2 natives ── */
+/* end phase 2 natives */
 
-/* ── phase 3: hook handle .remove() ── */
+/* phase 3: hook handle .remove() */
 
 static Value *native_hook_remove(Interp *interp, Value **args, int argc) {
     (void)args; (void)argc;
@@ -6689,7 +6689,7 @@ static Value *make_hook_handle(int idx, const char *type) {
     return handle;
 }
 
-/* ── phase 3: parser override native ── */
+/* phase 3: parser override native */
 
 /* wraps a built-in parser function as an XS callable for the "previous" chain */
 typedef struct {
@@ -6772,7 +6772,7 @@ static Value *native_plugin_parser_override(Interp *interp, Value **args, int ar
     return make_hook_handle(idx, "override");
 }
 
-/* ── phase 3: lexer transform native ── */
+/* phase 3: lexer transform native */
 
 static Value *native_plugin_lexer_transform(Interp *interp, Value **args, int argc) {
     (void)interp;
@@ -6785,7 +6785,7 @@ static Value *native_plugin_lexer_transform(Interp *interp, Value **args, int ar
     return make_hook_handle(idx, "transform");
 }
 
-/* ── phase 3: resolve_import native ── */
+/* phase 3: resolve_import native */
 
 static Value *native_plugin_resolve_import(Interp *interp, Value **args, int argc) {
     (void)interp;
@@ -6798,7 +6798,7 @@ static Value *native_plugin_resolve_import(Interp *interp, Value **args, int arg
     return make_hook_handle(idx, "resolve_import");
 }
 
-/* ── phase 3: on_error native ── */
+/* phase 3: on_error native */
 
 static Value *native_plugin_on_error(Interp *interp, Value **args, int argc) {
     (void)interp;
@@ -6811,7 +6811,7 @@ static Value *native_plugin_on_error(Interp *interp, Value **args, int argc) {
     return make_hook_handle(idx, "on_error");
 }
 
-/* ── phase 3: plugin.hooks inspection ── */
+/* phase 3: plugin.hooks inspection */
 
 static Value *native_plugin_hooks(Interp *interp, Value **args, int argc) {
     (void)interp; (void)args; (void)argc;
@@ -6893,7 +6893,7 @@ static Value *native_plugin_hooks(Interp *interp, Value **args, int argc) {
     return hooks;
 }
 
-/* ── phase 3: parser override bridge (called from parser.c) ── */
+/* phase 3: parser override bridge (called from parser.c) */
 
 static Node *plugin_try_parser_override_impl(Parser *p, const char *keyword) {
     if (g_n_parser_overrides == 0 || !g_plugin_interp) return NULL;
@@ -7215,7 +7215,7 @@ static void exec_plugin_load(Interp *i, Node *stmt, const char *resolved) {
     if (pprog) node_free(pprog);
 }
 
-/* ── end plugin system ── */
+/* end plugin system */
 
 void interp_exec(Interp *i, Node *stmt) {
     if (!stmt || i->cf.signal) return;

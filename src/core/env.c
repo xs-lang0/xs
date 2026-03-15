@@ -38,7 +38,7 @@ void env_define(Env *e, const char *name, Value *val, int mutable) {
     }
     if (e->len >= e->cap) {
         e->cap = e->cap ? e->cap * 2 : 8;
-        e->bindings = xs_realloc(e->bindings, e->cap * sizeof(Binding));
+        e->bindings = xs_realloc(e->bindings, e->cap * sizeof(Binding)); /* FIXME: leaks old ptr if realloc fails */
     }
     e->bindings[e->len].name    = xs_strdup(name);
     e->bindings[e->len].value   = value_incref(val);

@@ -1,10 +1,8 @@
 # XS
 
-One language for everything, gradual by default.
+A general-purpose programming language with gradual typing, multiple backends, and way too many features.
 
-XS is a general-purpose programming language that starts dynamic and lets you
-add types when you want them enforced. It has multiple execution backends,
-transpiles to other languages, and ships with batteries included.
+Started as a private project in late 2024, worked on it on and off until I finally decided to put it out there in March 2026. The git history is compressed because it was developed locally for a long time before being pushed.
 
 ```xs
 -- no types required, but you can add them
@@ -34,11 +32,11 @@ let result = handle ask_user() {
 
 ```bash
 make          # produces ./xs
-make test     # runs the test suite (12 test files)
+make test     # runs the test suite
 make clean    # clean build artifacts
 ```
 
-Requires a C compiler (gcc or clang).
+Requires a C compiler (gcc or clang). Builds on Linux, macOS, and Windows (MinGW).
 
 ## Run
 
@@ -48,60 +46,49 @@ Requires a C compiler (gcc or clang).
 ./xs run file.xs      # explicit run (same as above)
 ```
 
-## Features
+## What works well
 
-**Type system** -- Gradual typing. Leave types off and everything is dynamic.
-Add annotations and they get enforced. Mix freely.
+**Gradual typing** -- The core of the language. Leave types off and everything is dynamic. Add annotations and they get enforced at runtime. `--strict` mode requires annotations everywhere, `--check` does static analysis. This is the part I'm most happy with.
 
-**Backends** -- Tree-walk interpreter (default), bytecode VM, JIT compiler.
-Pick what fits.
+**Tree-walk interpreter** -- The default backend. Handles all language features, including the weirder ones like algebraic effects and the plugin system.
 
-**Transpilation** -- Compile to JavaScript, C, or WebAssembly.
+**Object system** -- Both struct/trait (composition) and class/inheritance (OOP). Use whichever makes sense for the problem.
 
-**Object system** -- Both struct/trait (composition) and class/inheritance (OOP).
-Use whichever makes sense.
+**Pattern matching** -- `match` expressions with destructuring, guards, nested patterns. Works well.
 
-**Effects** -- Algebraic effects with `effect`, `perform`, `handle`, and `resume`.
-Think of them as resumable exceptions.
+## What exists but is rough
 
-**Concurrency** -- `spawn`, `async`/`await`, actors, channels, and nurseries.
-All of them, not just one.
+**Bytecode VM** -- Works for basic programs. Doesn't support everything the tree-walk interpreter does yet.
 
-**Pattern matching** -- `match` expressions with destructuring, guards, and
-nested patterns.
+**JIT compiler** -- x86-64 only, handles arithmetic and simple functions. More of a proof of concept than something you'd actually use.
 
-**Error handling** -- `try`/`catch` plus `defer` for cleanup.
+**Transpilation** -- JS backend is the most complete. C backend handles a decent chunk. WASM is very early, basically just arithmetic.
 
-**Closures and lambdas** -- First-class functions, arrow syntax, captures work
-how you'd expect.
+**Concurrency** -- `spawn`, `async`/`await`, actors, channels, nurseries are all there. Everything is cooperative (no real threads), spawn just runs immediately. It works, but it's not going to win any benchmarks.
 
-**Collections** -- Lists, maps, sets, tuples, ranges, list comprehensions,
-spread/rest.
+**Algebraic effects** -- `effect`, `perform`, `handle`, `resume`. They work, they're cool, they're probably buggy in edge cases I haven't hit yet.
 
-**Built-in tools:**
+**Plugin system** -- Plugins can inject globals, hook into the parser, add keywords, override syntax. Pretty powerful but the API is still shifting.
 
-- REPL
-- LSP server
-- Formatter
-- Linter
-- Profiler
-- Test runner
+## Built-in tools
+
+REPL, LSP server, formatter, linter, profiler, test runner. Some of these are more polished than others -- the LSP and REPL work well, the formatter is basic.
 
 ## Project layout
 
 ```
 src/          # compiler and runtime source
-tests/        # 12 test files covering all language features
+tests/        # test files
 Makefile      # build system
 xs.toml       # project config
-LANGUAGE.md   # full language reference
-COMMANDS.md   # full CLI reference
+LANGUAGE.md   # language reference
+COMMANDS.md   # CLI reference
 ```
 
 ## Reference
 
-- [LANGUAGE.md](LANGUAGE.md) -- complete language spec with examples
-- [COMMANDS.md](COMMANDS.md) -- every CLI command and flag
+- [LANGUAGE.md](LANGUAGE.md) -- language spec with examples
+- [COMMANDS.md](COMMANDS.md) -- CLI commands and flags
 
 ## Author
 
@@ -109,4 +96,4 @@ COMMANDS.md   # full CLI reference
 
 ## License
 
-See repository for license details.
+Apache 2.0

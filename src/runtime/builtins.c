@@ -960,7 +960,7 @@ static Value *native_math_isinf(Interp *ig, Value **a, int n) {
     return isinf(v)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
 }
 
-/* ── additional math: hyperbolic inverse ─────────────────── */
+/* additional math: hyperbolic inverse */
 #define MATH1_EXTRA(fname, cfunc) \
 static Value *native_math_##fname(Interp *ig, Value **a, int n) { \
     (void)ig; \
@@ -978,7 +978,7 @@ MATH1_EXTRA(gamma_fn, tgamma)
 MATH1_EXTRA(lgamma_fn,lgamma)
 #undef MATH1_EXTRA
 
-/* ── fmod(x, y) ─────────────────────────────────────────── */
+/* fmod(x, y) */
 static Value *native_math_fmod(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<2) return xs_float(0.0);
@@ -987,7 +987,7 @@ static Value *native_math_fmod(Interp *ig, Value **a, int n) {
     return xs_float(fmod(x,y));
 }
 
-/* ── modf(x) -> [integer_part, fractional_part] ──────────── */
+/* modf(x) -> [integer_part, fractional_part] */
 static Value *native_math_modf(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1) return xs_array_new();
@@ -1000,7 +1000,7 @@ static Value *native_math_modf(Interp *ig, Value **a, int n) {
     return arr;
 }
 
-/* ── copysign(x, y) ─────────────────────────────────────── */
+/* copysign(x, y) */
 static Value *native_math_copysign(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<2) return xs_float(0.0);
@@ -1009,7 +1009,7 @@ static Value *native_math_copysign(Interp *ig, Value **a, int n) {
     return xs_float(copysign(x,y));
 }
 
-/* ── isclose(a, b, rel_tol?, abs_tol?) ───────────────────── */
+/* isclose(a, b, rel_tol?, abs_tol?) */
 static Value *native_math_isclose(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<2) return value_incref(XS_FALSE_VAL);
@@ -1023,7 +1023,7 @@ static Value *native_math_isclose(Interp *ig, Value **a, int n) {
     return (diff<=rel_tol*mx)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
 }
 
-/* ── frexp(x) -> [mantissa, exponent] ────────────────────── */
+/* frexp(x) -> [mantissa, exponent] */
 static Value *native_math_frexp(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1) return xs_array_new();
@@ -1036,7 +1036,7 @@ static Value *native_math_frexp(Interp *ig, Value **a, int n) {
     return arr;
 }
 
-/* ── ldexp(x, i) ─────────────────────────────────────────── */
+/* ldexp(x, i) */
 static Value *native_math_ldexp(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<2) return xs_float(0.0);
@@ -1045,7 +1045,7 @@ static Value *native_math_ldexp(Interp *ig, Value **a, int n) {
     return xs_float(ldexp(x,exp_val));
 }
 
-/* ── comb(n, k) = n! / (k! * (n-k)!) ────────────────────── */
+/* comb(n, k) = n! / (k! * (n-k)!) */
 static Value *native_math_comb(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<2) return xs_int(0);
@@ -1058,7 +1058,7 @@ static Value *native_math_comb(Interp *ig, Value **a, int n) {
     return xs_int(r);
 }
 
-/* ── perm(n, k?) ─────────────────────────────────────────── */
+/* perm(n, k?) */
 static Value *native_math_perm(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1) return xs_int(0);
@@ -1070,14 +1070,14 @@ static Value *native_math_perm(Interp *ig, Value **a, int n) {
     return xs_int(r);
 }
 
-/* ── helper: extract double from value ───────────────────── */
+/* helper: extract double from value */
 static double math_to_double(Value *v) {
     if (v->tag==XS_FLOAT) return v->f;
     if (v->tag==XS_INT)   return (double)v->i;
     return 0.0;
 }
 
-/* ── prod(arr) ───────────────────────────────────────────── */
+/* prod(arr) */
 static Value *native_math_prod(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1||a[0]->tag!=XS_ARRAY) return xs_float(1.0);
@@ -1087,7 +1087,7 @@ static Value *native_math_prod(Interp *ig, Value **a, int n) {
     return xs_float(r);
 }
 
-/* ── sum(arr) ────────────────────────────────────────────── */
+/* sum(arr) */
 static Value *native_math_sum(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1||a[0]->tag!=XS_ARRAY) return xs_float(0.0);
@@ -1097,7 +1097,7 @@ static Value *native_math_sum(Interp *ig, Value **a, int n) {
     return xs_float(r);
 }
 
-/* ── min(arr) ────────────────────────────────────────────── */
+/* min(arr) */
 static Value *native_math_min_arr(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1||a[0]->tag!=XS_ARRAY||a[0]->arr->len==0) return value_incref(XS_NULL_VAL);
@@ -1107,7 +1107,7 @@ static Value *native_math_min_arr(Interp *ig, Value **a, int n) {
     return xs_float(r);
 }
 
-/* ── max(arr) ────────────────────────────────────────────── */
+/* max(arr) */
 static Value *native_math_max_arr(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1||a[0]->tag!=XS_ARRAY||a[0]->arr->len==0) return value_incref(XS_NULL_VAL);
@@ -1117,7 +1117,7 @@ static Value *native_math_max_arr(Interp *ig, Value **a, int n) {
     return xs_float(r);
 }
 
-/* ── mean(arr) ───────────────────────────────────────────── */
+/* mean(arr) */
 static Value *native_math_mean(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1||a[0]->tag!=XS_ARRAY||a[0]->arr->len==0) return xs_float(0.0);
@@ -1130,7 +1130,7 @@ static Value *native_math_mean(Interp *ig, Value **a, int n) {
 Value *make_math_module(void) {
     XSMap *m = map_new();
 
-    /* ── constants (both uppercase and lowercase per reference) ── */
+    /* constants (both uppercase and lowercase per reference) */
 #define MATH_CONST(name, val) do { \
     Value *cv = xs_float(val); map_set(m, name, cv); value_decref(cv); \
 } while(0)
@@ -1148,7 +1148,7 @@ Value *make_math_module(void) {
 
 #define REG(name, fn) map_set(m, name, xs_native(fn))
 
-    /* ── trigonometric ───────────────────────────────────────── */
+    /* trigonometric */
     REG("sin",       builtin_sin);
     REG("cos",       builtin_cos);
     REG("tan",       builtin_tan);
@@ -1163,7 +1163,7 @@ Value *make_math_module(void) {
     REG("acosh",     native_math_acosh_fn);
     REG("atanh",     native_math_atanh_fn);
 
-    /* ── exponents / logarithms ──────────────────────────────── */
+    /* exponents / logarithms */
     REG("sqrt",      builtin_sqrt);
     REG("cbrt",      native_math_cbrt);
     REG("exp",       native_math_exp_fn);
@@ -1173,13 +1173,13 @@ Value *make_math_module(void) {
     REG("log10",     native_math_log10_fn);
     REG("log1p",     native_math_log1p_fn);
 
-    /* ── rounding ────────────────────────────────────────────── */
+    /* rounding */
     REG("floor",     builtin_floor);
     REG("ceil",      builtin_ceil);
     REG("round",     builtin_round);
     REG("trunc",     native_math_trunc);
 
-    /* ── utility ─────────────────────────────────────────────── */
+    /* utility */
     REG("abs",       builtin_abs);
     REG("pow",       builtin_pow);
     REG("hypot",     native_math_hypot);
@@ -1202,18 +1202,18 @@ Value *make_math_module(void) {
     REG("frexp",     native_math_frexp);
     REG("ldexp",     native_math_ldexp);
 
-    /* ── combinatorial ───────────────────────────────────────── */
+    /* combinatorial */
     REG("comb",      native_math_comb);
     REG("perm",      native_math_perm);
 
-    /* ── aggregate ───────────────────────────────────────────── */
+    /* aggregate */
     REG("prod",      native_math_prod);
     REG("sum",       native_math_sum);
     REG("min",       native_math_min_arr);
     REG("max",       native_math_max_arr);
     REG("mean",      native_math_mean);
 
-    /* ── special functions ───────────────────────────────────── */
+    /* special functions */
     REG("erf",       native_math_erf_fn);
     REG("erfc",      native_math_erfc_fn);
     REG("gamma",     native_math_gamma_fn);
@@ -1223,7 +1223,7 @@ Value *make_math_module(void) {
     return xs_module(m);
 }
 
-/* ── time module ─────────────────────────────────────────── */
+/* time module */
 static Value *native_time_now(Interp *i, Value **args, int argc) {
     (void)i; (void)args; (void)argc;
     struct timespec ts;
@@ -1254,7 +1254,7 @@ static Value *native_time_stopwatch(Interp *i, Value **args, int argc) {
     return sw;
 }
 
-/* ── time module extra ───────────────────────────────────── */
+/* time module extra */
 static Value *native_time_millis(Interp *i, Value **a, int n) {
     (void)i;(void)a;(void)n;
     struct timespec ts; clock_gettime(CLOCK_REALTIME,&ts);
@@ -1349,7 +1349,7 @@ Value *make_time_module(void) {
     return xs_module(m);
 }
 
-/* ── io module ───────────────────────────────────────────── */
+/* io module */
 static Value *native_io_read_file(Interp *i, Value **args, int argc) {
     (void)i;
     if (argc<1||args[0]->tag!=XS_STR) return value_incref(XS_NULL_VAL);
@@ -1370,7 +1370,7 @@ static Value *native_io_write_file(Interp *i, Value **args, int argc) {
     return value_incref(XS_TRUE_VAL);
 }
 
-/* ── string module ───────────────────────────────────────── */
+/* string module */
 static Value *native_str_pad_left(Interp *i, Value **a, int n) {
     (void)i;
     if (n<2||a[0]->tag!=XS_STR) return n>0?value_incref(a[0]):value_incref(XS_NULL_VAL);
@@ -1572,7 +1572,7 @@ Value *make_string_module(void) {
     return xs_module(m);
 }
 
-/* ── path module ─────────────────────────────────────────── */
+/* path module */
 static Value *native_path_basename(Interp *i, Value **a, int n) {
     (void)i;
     if (n<1||a[0]->tag!=XS_STR) return value_incref(XS_NULL_VAL);
@@ -1643,7 +1643,7 @@ Value *make_path_module(void) {
     return xs_module(m);
 }
 
-/* ── base64 module ───────────────────────────────────────── */
+/* base64 module */
 static const char b64_table[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static Value *native_b64_encode(Interp *i, Value **a, int n) {
     (void)i;
@@ -1691,7 +1691,7 @@ Value *make_base64_module(void) {
     return xs_module(m);
 }
 
-/* ── hash module ─────────────────────────────────────────── */
+/* hash module */
 /* Forward declarations for real hash implementations (defined in crypto module section) */
 static void md5_hash(const uint8_t *data, size_t len, uint8_t out[16]);
 static void sha256_hash(const uint8_t *data, size_t len, uint8_t out[32]);
@@ -1723,7 +1723,7 @@ Value *make_hash_module(void) {
     return xs_module(m);
 }
 
-/* ── uuid module ─────────────────────────────────────────── */
+/* uuid module */
 static Value *native_uuid_v4(Interp *i, Value **a, int n) {
     (void)i;(void)a;(void)n;
     unsigned char b[16];
@@ -1752,7 +1752,7 @@ Value *make_uuid_module(void) {
     return xs_module(m);
 }
 
-/* ── random module ───────────────────────────────────────── */
+/* random module */
 static Value *native_random_int(Interp *ig, Value **args, int argc) {
     (void)ig;
     int64_t lo = 0, hi = 100;
@@ -1882,7 +1882,7 @@ Value *make_random_module(void) {
     return xs_module(m);
 }
 
-/* ── collections module ──────────────────────────────────── */
+/* collections module */
 /* Stack: returns a map with _type="Stack" and _data=[] */
 static Value *collections_stack_new(Interp *i, Value **a, int n) {
     (void)i;(void)a;(void)n;
@@ -2000,7 +2000,7 @@ Value *make_collections_module(void) {
     return xs_module(m);
 }
 
-/* ── process module ──────────────────────────────────────── */
+/* process module */
 static Value *native_process_pid(Interp *i, Value **a, int n) {
     (void)i;(void)a;(void)n;
     return xs_int((int64_t)getpid());
@@ -2284,7 +2284,7 @@ static Value *native_io_temp_file(Interp *ig, Value **a, int n) {
     const char *prefix = (n>=2 && a[1]->tag==XS_STR) ? a[1]->s : "xs_tmp_";
     const char *tmpdir = getenv("TMPDIR");
     if (!tmpdir) tmpdir = "/tmp";
-    char tmpl[4096];
+    char tmpl[4096]; /* TODO: PATH_MAX would be better here */
     snprintf(tmpl,sizeof(tmpl),"%s/%sXXXXXX%s",tmpdir,prefix,suffix);
 #ifndef __MINGW32__
     int fd;
@@ -2350,7 +2350,7 @@ static Value *native_io_file_info(Interp *ig, Value **a, int n) {
 static Value *native_io_stdin_lines(Interp *ig, Value **a, int n) {
     (void)ig;(void)a;(void)n;
     Value *arr=xs_array_new();
-    char buf[4096];
+    char buf[4096]; /* FIXME: lines longer than 4k get split */
     while (fgets(buf,sizeof(buf),stdin)) {
         int len2=(int)strlen(buf);
         while (len2>0&&(buf[len2-1]=='\n'||buf[len2-1]=='\r')) buf[--len2]='\0';
@@ -2474,7 +2474,7 @@ Value *make_io_module(void) {
     return xs_module(m);
 }
 
-/* ── os module ───────────────────────────────────────────── */
+/* os module */
 static Value *native_os_cwd(Interp *ig, Value **a, int n) {
     (void)ig;(void)a;(void)n;
     char buf[4096]; if (!getcwd(buf,sizeof(buf))) return value_incref(XS_NULL_VAL);
@@ -2649,7 +2649,7 @@ Value *make_os_module(Interp *ig) {
     return xs_module(m);
 }
 
-/* ── json module ─────────────────────────────────────────── */
+/* json module */
 typedef struct { const char *s; int pos; } JsonParser;
 static Value *json_parse_value(JsonParser *p);
 static void json_skip_ws(JsonParser *p) {
@@ -2673,7 +2673,7 @@ static Value *json_parse_string(JsonParser *p) {
             case 'b': buf[ri++]='\b'; break;
             case 'f': buf[ri++]='\f'; break;
             case 'u': {
-                /* \uXXXX — full UTF-8 encoding with surrogate pair support */
+                /* \uXXXX -- TODO: doesn't validate the hex digits, strtoul just returns 0 on garbage */
                 char hex[5]={p->s[p->pos+1],p->s[p->pos+2],p->s[p->pos+3],p->s[p->pos+4],0};
                 unsigned cp=(unsigned)strtoul(hex,NULL,16);
                 p->pos+=4;
@@ -2930,7 +2930,7 @@ Value *native_io_write_json(Interp *ig, Value **a, int n) {
     return value_incref(XS_TRUE_VAL);
 }
 
-/* ── log module ──────────────────────────────────────────── */
+/* log module */
 static int xs_log_level = 1; /* default: info */
 #define LOG_MSG(level_val, prefix) \
 static Value *native_log_##prefix(Interp *ig, Value **a, int n) { \
@@ -2967,7 +2967,7 @@ Value *make_log_module(void) {
     return xs_module(m);
 }
 
-/* ── fmt module ──────────────────────────────────────────── */
+/* fmt module */
 static Value *native_fmt_number(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1) return xs_str("0");
@@ -3183,7 +3183,7 @@ Value *make_fmt_module(void) {
     return xs_module(m);
 }
 
-/* ── test module ─────────────────────────────────────────── */
+/* test module */
 static int test_passed_count = 0;
 static int test_failed_count = 0;
 
@@ -3278,7 +3278,7 @@ Value *make_test_module(void) {
     return xs_module(m);
 }
 
-/* ── csv module ──────────────────────────────────────────── */
+/* csv module */
 static Value *csv_parse_row(const char *s, int *pos2) {
     Value *row=xs_array_new();
     while (s[*pos2]&&s[*pos2]!='\n'&&s[*pos2]!='\r') {
@@ -3398,7 +3398,7 @@ Value *make_csv_module(void) {
     return xs_module(m);
 }
 
-/* ── url module ──────────────────────────────────────────── */
+/* url module */
 static int url_hex_val(char c) {
     if (c>='0'&&c<='9') return c-'0';
     if (c>='A'&&c<='F') return c-'A'+10;
@@ -3529,7 +3529,7 @@ Value *make_url_module(void) {
     return xs_module(m);
 }
 
-/* ── re (regex) module ───────────────────────────────────── */
+/* re (regex) module */
 /* Convert PCRE-style shorthand escapes to POSIX ERE equivalents */
 static char *re_to_posix(const char *pat) {
     /* Allocate worst-case: each \X can expand to ~12 chars */
@@ -3680,7 +3680,7 @@ Value *make_re_module(void) {
     return xs_module(m);
 }
 
-/* ── reactive primitives ─────────────────────────────────── */
+/* reactive primitives */
 static Value *builtin_signal(Interp *i, Value **args, int argc) {
     (void)i;
     XSSignal *sig = xs_calloc(1, sizeof(XSSignal));
@@ -3715,7 +3715,7 @@ static Value *builtin_derived(Interp *i, Value **args, int argc) {
     return v;
 }
 
-/* ── channel(capacity) ───────────────────────────────────── */
+/* channel(capacity) */
 static Value *builtin_channel(Interp *i, Value **args, int argc) {
     (void)i;
     Value *ch = xs_map_new();
@@ -3726,7 +3726,7 @@ static Value *builtin_channel(Interp *i, Value **args, int argc) {
     return ch;
 }
 
-/* ── contains ────────────────────────────────────────────── */
+/* contains */
 static Value *builtin_contains(Interp *interp, Value **args, int argc) {
     (void)interp;
     if (argc < 2 || args[0]->tag != XS_STR || args[1]->tag != XS_STR)
@@ -3736,7 +3736,7 @@ static Value *builtin_contains(Interp *interp, Value **args, int argc) {
     return value_incref(XS_FALSE_VAL);
 }
 
-/* ── Result / Option constructors ───────────────────────── */
+/* Result / Option constructors */
 static Value *make_result_enum(const char *type_name, const char *variant, Value **args, int argc) {
     XSEnum *en = xs_calloc(1, sizeof(XSEnum));
     en->type_name = xs_strdup(type_name);
@@ -3767,7 +3767,7 @@ static Value *builtin_none_fn(Interp *interp, Value **args, int argc) {
     return value_incref(XS_NULL_VAL);
 }
 
-/* ── forward declarations for new modules (defined below) ── */
+/* forward declarations for new modules (defined below) */
 Value *make_async_module(void);
 Value *make_net_module(void);
 Value *make_crypto_module(void);
@@ -3782,7 +3782,7 @@ Value *make_gc_module(void);
 Value *make_reactive_module(void);
 Value *make_fs_module(void);
 
-/* ── register all ────────────────────────────────────────── */
+/* register all */
 void stdlib_register(Interp *i) {
     /* Core */
     interp_define_native(i, "print",     builtin_print);
@@ -3969,7 +3969,7 @@ void stdlib_register(Interp *i) {
     interp_define_native(i, "ceil", builtin_ceil);
     interp_define_native(i, "round",builtin_round);
 
-    /* ── new stdlib modules (12) ─────────────────────────────── */
+    /* new stdlib modules (12) */
     Value *async_mod = make_async_module();
     env_define(i->globals, "async", async_mod, 1);
     value_decref(async_mod);
@@ -4385,7 +4385,7 @@ static Value *native_net_url_parse(Interp *ig, Value **a, int n) {
     return m;
 }
 
-/* ---- HTTP client helpers ---- */
+/* HTTP client helpers */
 
 #ifndef __MINGW32__
 
@@ -5246,7 +5246,7 @@ static Value *native_thread_sleep(Interp *ig, Value **a, int n) {
     return value_incref(XS_NULL_VAL);
 }
 
-/* ── cross-platform mutex implementation ───────────────────── */
+/* cross-platform mutex implementation */
 
 static xs_mutex_t *mutex_from_map(XSMap *m) {
     Value *pv = map_get(m, "_ptr");
@@ -6431,7 +6431,7 @@ Value *make_reactive_module(void) {
     return xs_module(m);
 }
 
-/* ── fs module ───────────────────────────────────────────── */
+/* fs module */
 
 static Value *native_fs_read(Interp *ig, Value **a, int n) {
     (void)ig;

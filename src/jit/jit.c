@@ -23,8 +23,14 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #define JIT_HAS_MMAP 1
+#define JIT_HAS_WIN 0
+#elif defined(_WIN32)
+#include <windows.h>
+#define JIT_HAS_MMAP 0
+#define JIT_HAS_WIN 1
 #else
 #define JIT_HAS_MMAP 0
+#define JIT_HAS_WIN 0
 #endif
 
 /* coerce both operands to double, returns 1 on success */
@@ -44,6 +50,7 @@ static Value *jit_rt_add(Value *a, Value *b) {
     if (numcoerce(a, b, &fa, &fb))
         return xs_float(fa + fb);
     if (a->tag == XS_STR && b->tag == XS_STR) {
+        /* TODO: O(n) concat in a loop is quadratic, need a rope or builder */
         size_t la = strlen(a->s), lb = strlen(b->s);
         char *buf = xs_malloc(la + lb + 1);
         memcpy(buf, a->s, la);
@@ -783,6 +790,18 @@ XSJIT *jit_new(void) {
         j->code_used = 0;
         j->available = 1;
     }
+#elif JIT_ARCH_X86_64 && JIT_HAS_WIN
+    j->code_size = XS_JIT_CODE_SIZE;
+    j->code = (uint8_t *)VirtualAlloc(NULL, j->code_size,
+                                       MEM_COMMIT | MEM_RESERVE,
+                                       PAGE_EXECUTE_READWRITE);
+    if (!j->code) {
+        j->code_size = 0;
+        fprintf(stderr, "xs jit: VirtualAlloc failed, JIT unavailable\n");
+    } else {
+        j->code_used = 0;
+        j->available = 1;
+    }
 #else
     j->code = NULL;
     j->code_size = 0;
@@ -800,6 +819,9 @@ void jit_free(XSJIT *j) {
 #if JIT_HAS_MMAP
     if (j->code && j->code_size)
         munmap(j->code, j->code_size);
+#elif JIT_HAS_WIN
+    if (j->code && j->code_size)
+        VirtualFree(j->code, 0, MEM_RELEASE);
 #endif
     free(j->compiled);
     free(j->call_counts);
@@ -852,7 +874,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             emit_nop(&em);
             break;
 
-        /* ---- Stack literals ---- */
+        /* Stack literals */
 
         case OP_PUSH_CONST:
             emit_load_const(&em, bx);
@@ -875,7 +897,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             emit_xs_push_rax(&em);
             break;
 
-        /* ---- Locals ---- */
+        /* Locals */
 
         case OP_LOAD_LOCAL:
             emit_load_local(&em, bx);
@@ -895,7 +917,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             break;
         }
 
-        /* ---- Arithmetic ---- */
+        /* Arithmetic */
 
         case OP_ADD:  emit_binary_op(&em, (void *)(uintptr_t)jit_rt_add); break;
         case OP_SUB:  emit_binary_op(&em, (void *)(uintptr_t)jit_rt_sub); break;
@@ -906,7 +928,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
         case OP_NEG:  emit_unary_op(&em, (void *)(uintptr_t)jit_rt_neg);  break;
         case OP_NOT:  emit_unary_op(&em, (void *)(uintptr_t)jit_rt_not);  break;
 
-        /* ---- Comparisons ---- */
+        /* Comparisons */
 
         case OP_EQ:   emit_binary_op(&em, (void *)(uintptr_t)jit_rt_eq);  break;
         case OP_NEQ:  emit_binary_op(&em, (void *)(uintptr_t)jit_rt_neq); break;
@@ -915,7 +937,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
         case OP_LTE:  emit_binary_op(&em, (void *)(uintptr_t)jit_rt_lte); break;
         case OP_GTE:  emit_binary_op(&em, (void *)(uintptr_t)jit_rt_gte); break;
 
-        /* ---- String / bitwise ---- */
+        /* String / bitwise */
 
         case OP_CONCAT: emit_binary_op(&em, (void *)(uintptr_t)jit_rt_concat); break;
         case OP_BAND:   emit_binary_op(&em, (void *)(uintptr_t)jit_rt_band);   break;
@@ -925,7 +947,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
         case OP_SHL:    emit_binary_op(&em, (void *)(uintptr_t)jit_rt_shl);    break;
         case OP_SHR:    emit_binary_op(&em, (void *)(uintptr_t)jit_rt_shr);    break;
 
-        /* ---- Control flow ---- */
+        /* Control flow */
 
         case OP_JUMP:
         case OP_LOOP: {
@@ -991,7 +1013,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             break;
         }
 
-        /* ---- Globals ---- */
+        /* Globals */
 
         case OP_LOAD_GLOBAL: {
             /* We need the globals map passed as a 4th hidden arg.
@@ -1014,7 +1036,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             break;
         }
 
-        /* ---- Collections ---- */
+        /* Collections */
 
         case OP_MAKE_ARRAY: {
             int n = (int)INSTR_C(instr);
@@ -1097,7 +1119,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             break;
         }
 
-        /* ---- Function calls ---- */
+        /* Function calls */
 
         case OP_CALL: {
             int argc = (int)INSTR_C(instr);
@@ -1118,14 +1140,14 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             break;
         }
 
-        /* ---- Additional arithmetic/comparison ---- */
+        /* Additional arithmetic/comparison */
 
         case OP_FLOOR_DIV: emit_binary_op(&em, (void *)(uintptr_t)jit_rt_floor_div); break;
         case OP_SPACESHIP: emit_binary_op(&em, (void *)(uintptr_t)jit_rt_spaceship); break;
         case OP_IN:        emit_binary_op(&em, (void *)(uintptr_t)jit_rt_in);        break;
         case OP_IS:        emit_binary_op(&em, (void *)(uintptr_t)jit_rt_is);        break;
 
-        /* ---- Tuple ---- */
+        /* Tuple */
 
         case OP_MAKE_TUPLE: {
             int n = (int)INSTR_C(instr);
@@ -1144,7 +1166,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             break;
         }
 
-        /* ---- Range ---- */
+        /* Range */
 
         case OP_MAKE_RANGE: {
             int inclusive = (int)INSTR_A(instr);
@@ -1156,7 +1178,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             break;
         }
 
-        /* ---- Iterators ---- */
+        /* Iterators */
 
         case OP_ITER_LEN: {
             emit_xs_pop_gpr(&em, RDI);
@@ -1173,7 +1195,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             break;
         }
 
-        /* ---- Method calls ---- */
+        /* Method calls */
 
         case OP_METHOD_CALL: {
             int argc = (int)INSTR_A(instr);
@@ -1193,7 +1215,7 @@ void *jit_compile(XSJIT *j, XSProto *proto) {
             break;
         }
 
-        /* ---- Opcodes we don't JIT: fall back to interpreter ---- */
+        /* Opcodes we don't JIT: fall back to interpreter */
         default:
             bail = 1;
             break;

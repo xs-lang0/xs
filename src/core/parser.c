@@ -7,7 +7,8 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-/* phase 2: plugin syntax handler callbacks (set by interp.c) */
+/* phase 2: plugin syntax handler callbacks (set by interp.c)
+   FIXME: these globals make the parser non-reentrant */
 Node *(*g_plugin_try_syntax_handler)(Parser *p, Token *tok) = NULL;
 Node *(*g_plugin_try_syntax_expr_handler)(Parser *p, Token *tok) = NULL;
 int (*g_plugin_is_keyword)(const char *word) = NULL;
@@ -3707,7 +3708,7 @@ Node *parser_parse(Parser *p) {
     return program_new(stmts, span);
 }
 
-/* ── phase 2: exported parser accessors for plugin system ── */
+/* phase 2: exported parser accessors for plugin system */
 
 Node *parser_parse_expr(Parser *p, int min_prec) {
     return parse_expr(p, min_prec);

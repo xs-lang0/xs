@@ -1592,7 +1592,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
     RType result;
 
     switch (expr->tag) {
-    /* --- Literals --- */
+    /* Literals */
     case NODE_LIT_INT:
     case NODE_LIT_BIGINT:
         result = rt_type(ty_i64());
@@ -1614,7 +1614,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         result = rt_type(ty_char());
         break;
 
-    /* --- Collections --- */
+    /* Collections */
     case NODE_LIT_ARRAY: {
         int n = expr->lit_array.elems.len;
         if (n == 0) {
@@ -1652,7 +1652,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Identifiers --- */
+    /* Identifiers */
     case NODE_IDENT: {
         PolyType *poly = hmenv_lookup(cg->env, expr->ident.name);
         if (poly) {
@@ -1664,7 +1664,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Operators --- */
+    /* Operators */
     case NODE_BINOP:
         result = infer_binop(cg, expr);
         break;
@@ -1672,7 +1672,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         result = infer_unary(cg, expr);
         break;
 
-    /* --- Assignment --- */
+    /* Assignment */
     case NODE_ASSIGN: {
         RType val_t = cgen_infer_expr(cg, expr->assign.value);
         RType tgt_t = cgen_infer_expr(cg, expr->assign.target);
@@ -1681,7 +1681,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Calls --- */
+    /* Calls */
     case NODE_CALL:
         result = infer_call(cg, expr);
         break;
@@ -1689,7 +1689,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         result = infer_method_call(cg, expr);
         break;
 
-    /* --- Field / Index --- */
+    /* Field / Index */
     case NODE_FIELD:
         result = infer_field(cg, expr);
         break;
@@ -1705,7 +1705,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         }
         break;
 
-    /* --- Control Flow --- */
+    /* Control Flow */
     case NODE_IF:
         result = infer_if(cg, expr);
         break;
@@ -1750,7 +1750,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Return / Break / Continue --- */
+    /* Return / Break / Continue */
     case NODE_RETURN: {
         if (expr->ret.value) {
             RType ret_t = cgen_infer_expr(cg, expr->ret.value);
@@ -1776,7 +1776,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Exception Handling --- */
+    /* Exception Handling */
     case NODE_THROW:
         if (expr->throw_.value)
             cgen_infer_expr(cg, expr->throw_.value);
@@ -1810,12 +1810,12 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         result = rt_type(ty_unit());
         break;
 
-    /* --- Lambda --- */
+    /* Lambda */
     case NODE_LAMBDA:
         result = infer_lambda(cg, expr);
         break;
 
-    /* --- Cast --- */
+    /* Cast */
     case NODE_CAST: {
         if (expr->cast.expr)
             cgen_infer_expr(cg, expr->cast.expr);
@@ -1828,7 +1828,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Range --- */
+    /* Range */
     case NODE_RANGE: {
         if (expr->range.start) cgen_infer_expr(cg, expr->range.start);
         if (expr->range.end)   cgen_infer_expr(cg, expr->range.end);
@@ -1836,7 +1836,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Struct Init --- */
+    /* Struct Init */
     case NODE_STRUCT_INIT: {
         for (int i = 0; i < expr->struct_init.fields.len; i++)
             cgen_infer_expr(cg, expr->struct_init.fields.items[i].val);
@@ -1848,13 +1848,13 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Spread --- */
+    /* Spread */
     case NODE_SPREAD:
         result = expr->spread.expr ? cgen_infer_expr(cg, expr->spread.expr)
                                    : rt_type(ty_unknown());
         break;
 
-    /* --- List Comprehension --- */
+    /* List Comprehension */
     case NODE_LIST_COMP: {
         TVar *elem_tv = cgen_fresh();
         /* Process clauses */
@@ -1869,7 +1869,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Map Comprehension --- */
+    /* Map Comprehension */
     case NODE_MAP_COMP: {
         /* Process clauses */
         for (int i = 0; i < expr->map_comp.clause_iters.len; i++)
@@ -1884,7 +1884,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         break;
     }
 
-    /* --- Algebraic Effects --- */
+    /* Algebraic Effects */
     case NODE_PERFORM:
         for (int i = 0; i < expr->perform.args.len; i++)
             cgen_infer_expr(cg, expr->perform.args.items[i]);
@@ -1899,7 +1899,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         result = rt_var(cgen_fresh());
         break;
 
-    /* --- Async --- */
+    /* Async */
     case NODE_AWAIT:
         result = expr->await_.expr ? cgen_infer_expr(cg, expr->await_.expr)
                                    : rt_type(ty_unit());
@@ -1913,7 +1913,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         result = rt_type(ty_unit());
         break;
 
-    /* --- Patterns (shouldn't appear as expressions, but handle gracefully) --- */
+    /* Patterns (shouldn't appear as expressions, but handle gracefully) */
     case NODE_PAT_WILD:
     case NODE_PAT_IDENT:
     case NODE_PAT_LIT:

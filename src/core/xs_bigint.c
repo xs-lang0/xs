@@ -22,7 +22,7 @@ static XSBigInt *bigint_alloc(int cap) {
 static void bigint_ensure(XSBigInt *b, int needed) {
     if (needed > b->cap) {
         int newcap = b->cap;
-        while (newcap < needed) newcap *= 2;
+        while (newcap < needed) newcap *= 2; /* TODO: integer overflow if needed is huge */
         b->limbs = (uint32_t *)xs_realloc(b->limbs, newcap * sizeof(uint32_t));
         memset(b->limbs + b->cap, 0, (newcap - b->cap) * sizeof(uint32_t));
         b->cap = newcap;
