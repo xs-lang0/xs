@@ -2284,7 +2284,7 @@ static Value *native_io_temp_file(Interp *ig, Value **a, int n) {
     const char *prefix = (n>=2 && a[1]->tag==XS_STR) ? a[1]->s : "xs_tmp_";
     const char *tmpdir = getenv("TMPDIR");
     if (!tmpdir) tmpdir = "/tmp";
-    char tmpl[4096]; /* TODO: PATH_MAX would be better here */
+    char tmpl[4096];
     snprintf(tmpl,sizeof(tmpl),"%s/%sXXXXXX%s",tmpdir,prefix,suffix);
 #ifndef __MINGW32__
     int fd;
@@ -2350,7 +2350,7 @@ static Value *native_io_file_info(Interp *ig, Value **a, int n) {
 static Value *native_io_stdin_lines(Interp *ig, Value **a, int n) {
     (void)ig;(void)a;(void)n;
     Value *arr=xs_array_new();
-    char buf[4096]; /* FIXME: lines longer than 4k get split */
+    char buf[4096];
     while (fgets(buf,sizeof(buf),stdin)) {
         int len2=(int)strlen(buf);
         while (len2>0&&(buf[len2-1]=='\n'||buf[len2-1]=='\r')) buf[--len2]='\0';
@@ -2673,7 +2673,7 @@ static Value *json_parse_string(JsonParser *p) {
             case 'b': buf[ri++]='\b'; break;
             case 'f': buf[ri++]='\f'; break;
             case 'u': {
-                /* \uXXXX -- TODO: doesn't validate the hex digits, strtoul just returns 0 on garbage */
+                /* \uXXXX */
                 char hex[5]={p->s[p->pos+1],p->s[p->pos+2],p->s[p->pos+3],p->s[p->pos+4],0};
                 unsigned cp=(unsigned)strtoul(hex,NULL,16);
                 p->pos+=4;

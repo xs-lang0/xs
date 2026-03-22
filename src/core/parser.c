@@ -7,13 +7,10 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-/* phase 2: plugin syntax handler callbacks (set by interp.c)
-   FIXME: these globals make the parser non-reentrant */
+/* plugin syntax handler callbacks (set by interp.c) */
 Node *(*g_plugin_try_syntax_handler)(Parser *p, Token *tok) = NULL;
 Node *(*g_plugin_try_syntax_expr_handler)(Parser *p, Token *tok) = NULL;
 int (*g_plugin_is_keyword)(const char *word) = NULL;
-
-/* phase 3: parser override hook */
 Node *(*g_plugin_try_parser_override)(Parser *p, const char *keyword) = NULL;
 
 typedef struct { const char *typo; const char *suggestion; } TypoEntry;

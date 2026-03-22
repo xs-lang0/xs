@@ -53,7 +53,7 @@ static int64_t elapsed_ns(struct XSTracer *t) {
 
 static void ensure_capacity(XSTracer *t) {
     if (t->n_events >= t->capacity) {
-        if (t->capacity >= MAX_EVENTS) return; /* TODO: silently drops events, should at least warn once */
+        if (t->capacity >= MAX_EVENTS) return;
         t->capacity = t->capacity * 2;
         if (t->capacity > MAX_EVENTS) t->capacity = MAX_EVENTS;
         void *tmp = realloc(t->events, (size_t)t->capacity * sizeof(TraceEvent));

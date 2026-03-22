@@ -50,7 +50,11 @@ static LoadedXSPlugin g_xs_plugins[MAX_LOADED_XS_PLUGINS];
 static int g_xs_plugin_count = 0;
 
 static void plugin_register_method(const char *type_name, const char *method_name, Value *fn) {
-    if (g_plugin_method_count >= MAX_PLUGIN_METHODS) return; /* FIXME: fails silently */
+    if (g_plugin_method_count >= MAX_PLUGIN_METHODS) {
+        fprintf(stderr, "xs: plugin method limit reached (%d), ignoring %s.%s\n",
+                MAX_PLUGIN_METHODS, type_name, method_name);
+        return;
+    }
     PluginMethod *pm = &g_plugin_methods[g_plugin_method_count++];
     pm->type_name = xs_strdup(type_name);
     pm->method_name = xs_strdup(method_name);
@@ -77,7 +81,10 @@ static void plugin_run_teardowns(void) {
 }
 
 static void plugin_register_loaded(const char *name, const char *version) {
-    if (g_xs_plugin_count >= MAX_LOADED_XS_PLUGINS) return; /* TODO: should warn */
+    if (g_xs_plugin_count >= MAX_LOADED_XS_PLUGINS) {
+        fprintf(stderr, "xs: plugin limit reached (%d)\n", MAX_LOADED_XS_PLUGINS);
+        return;
+    }
     g_xs_plugins[g_xs_plugin_count].name = xs_strdup(name);
     g_xs_plugins[g_xs_plugin_count].version = version ? xs_strdup(version) : NULL;
     g_xs_plugin_count++;

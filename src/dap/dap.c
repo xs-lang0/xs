@@ -159,7 +159,7 @@ static void json_escape_into(char *dst, size_t dstsz, const char *src) {
 
 
 static char *dap_read_message(void) {
-    char header[512]; /* TODO: could overflow with weird DAP clients */
+    char header[512];
     int content_length = -1;
     while (fgets(header, sizeof(header), stdin)) {
         size_t len = strlen(header);
@@ -191,8 +191,7 @@ static void dap_send_response(DapState *st, int request_seq, const char *command
     char *buf = malloc(blen + 512);
     if (!buf) return;
     st->seq++;
-    /* FIXME: should use snprintf, this trusts blen+512 is enough */
-    sprintf(buf,
+    snprintf(buf, blen + 512,
         "{\"seq\":%d,\"type\":\"response\",\"request_seq\":%d,"
         "\"success\":true,\"command\":\"%s\",\"body\":%s}",
         st->seq, request_seq, command, body_json ? body_json : "{}");

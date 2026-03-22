@@ -81,8 +81,7 @@ static TokenKind lookup_keyword(const char *s) {
 
 static char lpeek(Lexer *l, int off) {
     int idx = l->pos + off;
-    int len = (int)strlen(l->source); /* XXX: called a lot, should cache this */
-    return idx < len ? l->source[idx] : '\0';
+    return idx < l->source_len ? l->source[idx] : '\0';
 }
 
 static char ladvance(Lexer *l) {
@@ -957,6 +956,7 @@ void lexer_init(Lexer *l, const char *source, const char *filename) {
     l->source    = source;
     l->filename  = filename ? filename : "<stdin>";
     l->pos       = 0;
+    l->source_len = (int)strlen(source);
     l->line      = 1;
     l->col       = 1;
     l->paren_depth = 0;

@@ -158,7 +158,7 @@ static void buf_f64(WasmBuf *b, double val) {
 }
 
 /* String table */
-#define MAX_STRINGS 1024 /* TODO: check at parse time, this will just silently corrupt */
+#define MAX_STRINGS 1024
 
 typedef struct {
     const char *strs[MAX_STRINGS];

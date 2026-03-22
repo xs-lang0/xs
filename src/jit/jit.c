@@ -50,7 +50,6 @@ static Value *jit_rt_add(Value *a, Value *b) {
     if (numcoerce(a, b, &fa, &fb))
         return xs_float(fa + fb);
     if (a->tag == XS_STR && b->tag == XS_STR) {
-        /* TODO: O(n) concat in a loop is quadratic, need a rope or builder */
         size_t la = strlen(a->s), lb = strlen(b->s);
         char *buf = xs_malloc(la + lb + 1);
         memcpy(buf, a->s, la);

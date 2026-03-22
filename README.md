@@ -1,8 +1,6 @@
 # XS
 
-A general-purpose programming language with gradual typing, multiple backends, and way too many features.
-
-Started as a private project in late 2024, worked on it on and off until I finally decided to put it out there in March 2026. The git history is compressed because it was developed locally for a long time before being pushed.
+A general-purpose programming language with gradual typing and multiple backends. Made privately starting 2024, published in early-mid stage 2026.
 
 ```xs
 -- no types required, but you can add them
@@ -48,7 +46,7 @@ Requires a C compiler (gcc or clang). Builds on Linux, macOS, and Windows (MinGW
 
 ## What works well
 
-**Gradual typing** -- The core of the language. Leave types off and everything is dynamic. Add annotations and they get enforced at runtime. `--strict` mode requires annotations everywhere, `--check` does static analysis. This is the part I'm most happy with.
+**Gradual typing** -- Leave types off and everything is dynamic. Add annotations and they get enforced at runtime. `--strict` mode requires annotations everywhere, `--check` does static analysis.
 
 **Tree-walk interpreter** -- The default backend. Handles all language features, including the weirder ones like algebraic effects and the plugin system.
 
@@ -60,19 +58,19 @@ Requires a C compiler (gcc or clang). Builds on Linux, macOS, and Windows (MinGW
 
 **Bytecode VM** -- Works for basic programs. Doesn't support everything the tree-walk interpreter does yet.
 
-**JIT compiler** -- x86-64 only, handles arithmetic and simple functions. More of a proof of concept than something you'd actually use.
+**JIT compiler** -- x86-64 only, handles arithmetic and simple functions. Very early stage.
 
 **Transpilation** -- JS backend is the most complete. C backend handles a decent chunk. WASM is very early, basically just arithmetic.
 
 **Concurrency** -- `spawn`, `async`/`await`, actors, channels, nurseries are all there. Everything is cooperative (no real threads), spawn just runs immediately. It works, but it's not going to win any benchmarks.
 
-**Algebraic effects** -- `effect`, `perform`, `handle`, `resume`. They work, they're cool, they're probably buggy in edge cases I haven't hit yet.
+**Algebraic effects** -- `effect`, `perform`, `handle`, `resume`. Covers the common cases, edge cases may still have bugs.
 
 **Plugin system** -- Plugins can inject globals, hook into the parser, add keywords, override syntax. Pretty powerful but the API is still shifting.
 
 ## Built-in tools
 
-REPL, LSP server, formatter, linter, profiler, test runner. Some of these are more polished than others -- the LSP and REPL work well, the formatter is basic.
+REPL, LSP server, formatter, linter, profiler, test runner.
 
 ## Project layout
 

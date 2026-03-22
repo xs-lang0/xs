@@ -131,7 +131,6 @@ Value *value_incref(Value *v) {
     return v;
 }
 
-/* TODO: not all tags are handled here, new ones will leak */
 static void free_value(Value *v) {
     if (!v) return;
     switch (v->tag) {

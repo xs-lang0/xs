@@ -95,6 +95,7 @@ typedef struct {
     const char *source;
     const char *filename;
     int         pos;
+    int         source_len;
     int         line, col;
     int         paren_depth;
     TokenArray  tokens;

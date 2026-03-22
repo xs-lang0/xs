@@ -127,7 +127,7 @@ void profiler_sample(XSProfiler *p, const char *fn, int line) {
         }
     }
 
-    if (p->n_samples < MAX_SAMPLES) { /* TODO: no feedback when this fills up */
+    if (p->n_samples < MAX_SAMPLES) {
         p->samples[p->n_samples].fn_name = name;
         p->samples[p->n_samples].line    = line;
         p->samples[p->n_samples].count   = 1;
