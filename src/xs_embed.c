@@ -42,7 +42,7 @@ void xs_free(XSState *xs) {
 
 static void xs_set_error(XSState *xs, const char *msg) {
     xs->has_error = 1;
-    snprintf(xs->error_msg, sizeof(xs->error_msg), "%s", msg);
+    snprintf(xs->error_msg, sizeof(xs->error_msg), "%.*s", (int)(sizeof(xs->error_msg)-1), msg);
 }
 
 static void xs_clear_error(XSState *xs) {

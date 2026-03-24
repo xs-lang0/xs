@@ -5,6 +5,8 @@
  */
 
 #ifdef XSC_ENABLE_JIT
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 
 #include "jit/jit.h"
 #include "core/value.h"
@@ -1287,4 +1289,5 @@ int jit_available(void) {
 
 #else
 /* jit.h provides static inline fallbacks when JIT is disabled. */
+#pragma GCC diagnostic pop
 #endif

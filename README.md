@@ -1,6 +1,6 @@
 # XS
 
-A general-purpose programming language with gradual typing and multiple backends. Made privately starting 2024, published in early-mid stage 2026.
+A general-purpose programming language with gradual typing and multiple backends. Made privately starting 2024, published in early stage 2026.
 
 ```xs
 -- no types required, but you can add them

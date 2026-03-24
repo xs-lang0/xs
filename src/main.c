@@ -2,7 +2,7 @@
 #define _DEFAULT_SOURCE
 #endif
 
-#define XS_VERSION "0.3.0"
+#define XS_VERSION "0.0.1"
 #define XS_VERSION_TAG "xs " XS_VERSION
 
 #include "core/xs_compat.h"
@@ -23,6 +23,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <limits.h>
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 #include <time.h>
 #ifdef XSC_ENABLE_VM
 #include "vm/bytecode.h"
@@ -383,7 +387,7 @@ static Node *parse_file(const char *path, DiagContext *dctx) {
 }
 
 static void usage(void) {
-    fprintf(stderr,
+    printf(
         "Usage:\n"
         "  xs [file.xs] [args...]           Run a script (no file = REPL)\n"
         "  xs run <file.xs> [args...]        Run a script\n"
@@ -598,6 +602,8 @@ static void ast_dump(Node *n, int depth) {
 }
 
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
     if (!g_sema_cache) g_sema_cache = cache_new();
     int do_check    = 0;
     int lenient     = 0;
@@ -647,7 +653,7 @@ int main(int argc, char **argv) {
                 else topic = argv[j]; /* flags like --vm are topics too */
             }
             if (topic) {
-                #define H(cmd, text) if (strcmp(topic, cmd) == 0) { fprintf(stderr, "%s", text); return 0; }
+                #define H(cmd, text) if (strcmp(topic, cmd) == 0) { printf("%s", text); fflush(stdout); return 0; }
                 /* Subcommands */
                 H("run",       "Usage: xs run <file.xs> [args...]\n\n"
                                "Run an XS script. The full pipeline runs:\n"
@@ -852,6 +858,7 @@ int main(int argc, char **argv) {
                 #undef H
             }
             usage();
+            fflush(stdout);
             return 0;
         }
     }

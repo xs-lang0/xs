@@ -14,7 +14,7 @@ XSC_ENABLE_DAP     ?= 1
 # Platform detection
 ifeq ($(OS),Windows_NT)
   CFLAGS  += -D__USE_MINGW_ANSI_STDIO=1 -D_WIN32
-  LDFLAGS += -lws2_32
+  LDFLAGS += -lws2_32 -static
   TARGET  = xs.exe
 else
   UNAME := $(shell uname -s)
