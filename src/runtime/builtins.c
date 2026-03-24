@@ -4969,7 +4969,7 @@ static Value *native_crypto_random_bytes(Interp *ig, Value **a, int n) {
         HMODULE advapi = LoadLibraryA("advapi32.dll");
         int filled = 0;
         if (advapi) {
-            RtlGenRandomFn RtlGenRandom = (RtlGenRandomFn)GetProcAddress(advapi, "SystemFunction036");
+            RtlGenRandomFn RtlGenRandom = (RtlGenRandomFn)(void *)GetProcAddress(advapi, "SystemFunction036");
             if (RtlGenRandom && RtlGenRandom(buf, (ULONG)count)) filled = 1;
             FreeLibrary(advapi);
         }
@@ -5008,7 +5008,7 @@ static Value *native_crypto_random_int(Interp *ig, Value **a, int n) {
         HMODULE advapi = LoadLibraryA("advapi32.dll");
         int filled = 0;
         if (advapi) {
-            RtlGenRandomFn RtlGenRandom = (RtlGenRandomFn)GetProcAddress(advapi, "SystemFunction036");
+            RtlGenRandomFn RtlGenRandom = (RtlGenRandomFn)(void *)GetProcAddress(advapi, "SystemFunction036");
             if (RtlGenRandom && RtlGenRandom(&r, (ULONG)sizeof(r))) filled = 1;
             FreeLibrary(advapi);
         }
@@ -5034,7 +5034,7 @@ static Value *native_crypto_uuid4(Interp *ig, Value **a, int n) {
         HMODULE advapi = LoadLibraryA("advapi32.dll");
         int filled = 0;
         if (advapi) {
-            RtlGenRandomFn RtlGenRandom = (RtlGenRandomFn)GetProcAddress(advapi, "SystemFunction036");
+            RtlGenRandomFn RtlGenRandom = (RtlGenRandomFn)(void *)GetProcAddress(advapi, "SystemFunction036");
             if (RtlGenRandom && RtlGenRandom(bytes, 16)) filled = 1;
             FreeLibrary(advapi);
         }

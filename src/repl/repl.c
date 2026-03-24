@@ -243,6 +243,9 @@ typedef struct {
     int    cap;
 } CompletionList;
 
+#ifdef __MINGW32__
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
 static void comp_init(CompletionList *cl) {
     cl->items = NULL;
     cl->count = 0;

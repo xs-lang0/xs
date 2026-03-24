@@ -322,11 +322,6 @@ void diag_render_all(DiagContext *ctx) {
     int errors_remaining = 0;
     int warnings_remaining = 0;
 
-    int total_errors = 0, total_warnings = 0;
-    for (int i = 0; i < ctx->n_items; i++) {
-        if (ctx->items[i].severity == DIAG_ERROR) total_errors++;
-        else total_warnings++;
-    }
 
     /* Errors first (capped at 10), then warnings (capped at 4) */
     for (int i = 0; i < ctx->n_items; i++) {

@@ -9,8 +9,8 @@
 #include <ws2tcpip.h>
 #define close closesocket
 #define ssize_t int
-#define read(fd, buf, len) recv(fd, buf, len, 0)
-#define write(fd, buf, len) send(fd, buf, len, 0)
+#define read(fd, buf, len) recv(fd, (char*)(buf), len, 0)
+#define write(fd, buf, len) send(fd, (const char*)(buf), len, 0)
 #else
 #include <unistd.h>
 #include <sys/socket.h>

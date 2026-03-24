@@ -37,6 +37,7 @@ static unsigned int xorshift32(void) {
     return x;
 }
 
+#ifndef _WIN32
 static void sigprof_handler(int sig) {
     (void)sig;
     if (g_profiler && g_profiler->running) {
@@ -44,6 +45,7 @@ static void sigprof_handler(int sig) {
             double r = (double)(xorshift32() & 0xFFFF) / 65535.0;
             if (r > g_profiler->sample_rate) return;
         }
+#endif
         profiler_sample(g_profiler, g_profiler->current_fn, g_profiler->current_line);
     }
 }
