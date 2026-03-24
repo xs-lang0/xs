@@ -23,6 +23,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <limits.h>
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 #include <time.h>
 #ifdef XSC_ENABLE_VM
 #include "vm/bytecode.h"

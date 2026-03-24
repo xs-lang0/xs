@@ -14,6 +14,9 @@
 #include <ctype.h>
 #include <time.h>
 #include <limits.h>
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 #include <sys/stat.h>
 
 Interp *g_current_interp = NULL;
