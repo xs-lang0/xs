@@ -387,18 +387,176 @@ static int value_matches_type(Value *v, const char *type_name) {
     return 1; /* unknown type = pass */
 }
 
+/* check value against a full TypeExpr (handles [int], map<str,int>, (int,str), etc.) */
+static int value_matches_typeexpr(Value *v, TypeExpr *te) {
+    if (!te || !v) return 1;
+
+    switch (te->kind) {
+    case TEXPR_NAMED:
+        if (!value_matches_type(v, te->name)) return 0;
+        /* check generic args for map<K,V> */
+        if (te->name && strcmp(te->name, "map") == 0 && te->nargs >= 2 &&
+            v->tag == XS_MAP && v->map) {
+            int nk = 0;
+            char **keys = map_keys(v->map, &nk);
+            for (int j = 0; j < nk; j++) {
+                /* check key type (keys are always strings in XS maps) */
+                Value *kv = xs_str(keys[j]);
+                if (!value_matches_typeexpr(kv, te->args[0])) {
+                    value_decref(kv); free(keys[j]); 
+                    for (int k = j+1; k < nk; k++) free(keys[k]);
+                    free(keys); return 0;
+                }
+                value_decref(kv);
+                /* check value type */
+                Value *val = map_get(v->map, keys[j]);
+                if (val && !value_matches_typeexpr(val, te->args[1])) {
+                    for (int k = j; k < nk; k++) free(keys[k]);
+                    free(keys); return 0;
+                }
+                free(keys[j]);
+            }
+            free(keys);
+        }
+        return 1;
+
+    case TEXPR_ARRAY:
+        /* [T] — value must be array and all elements must match T */
+        if (v->tag != XS_ARRAY) return 0;
+        if (te->inner && v->arr) {
+            for (int j = 0; j < v->arr->len; j++) {
+                if (!value_matches_typeexpr(v->arr->items[j], te->inner))
+                    return 0;
+            }
+        }
+        return 1;
+
+    case TEXPR_TUPLE:
+        /* (A, B, C) — value must be tuple with matching element types */
+        if (v->tag != XS_TUPLE) return 0;
+        if (v->arr && te->nelems > 0) {
+            if (v->arr->len != te->nelems) return 0;
+            for (int j = 0; j < te->nelems; j++) {
+                if (!value_matches_typeexpr(v->arr->items[j], te->elems[j]))
+                    return 0;
+            }
+        }
+        return 1;
+
+    case TEXPR_FN:
+        /* fn(A,B)->R — just check it's callable */
+        return v->tag == XS_FUNC || v->tag == XS_NATIVE || v->tag == XS_CLOSURE;
+
+    case TEXPR_OPTION:
+        /* T? — value is null or matches T */
+        if (v->tag == XS_NULL) return 1;
+        return value_matches_typeexpr(v, te->inner);
+
+    case TEXPR_INFER:
+        return 1; /* _ matches anything */
+
+    default:
+        return 1;
+    }
+}
+
+/* format a TypeExpr as a string for error messages */
+static const char *typeexpr_str(TypeExpr *te) {
+    static char buf[256];
+    if (!te) return "?";
+    switch (te->kind) {
+    case TEXPR_NAMED:
+        if (te->nargs > 0) {
+            int pos = 0;
+            pos += snprintf(buf + pos, sizeof(buf) - pos, "%s<", te->name ? te->name : "?");
+            for (int j = 0; j < te->nargs; j++) {
+                if (j) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
+                pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", typeexpr_str(te->args[j]));
+            }
+            snprintf(buf + pos, sizeof(buf) - pos, ">");
+            return buf;
+        }
+        return te->name ? te->name : "?";
+    case TEXPR_ARRAY:
+        snprintf(buf, sizeof buf, "[%s]", te->inner ? typeexpr_str(te->inner) : "?");
+        return buf;
+    case TEXPR_TUPLE: {
+        int pos = 0;
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "(");
+        for (int j = 0; j < te->nelems; j++) {
+            if (j) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
+            pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", typeexpr_str(te->elems[j]));
+        }
+        snprintf(buf + pos, sizeof(buf) - pos, ")");
+        return buf;
+    }
+    case TEXPR_OPTION:
+        snprintf(buf, sizeof buf, "%s?", te->inner ? typeexpr_str(te->inner) : "?");
+        return buf;
+    case TEXPR_FN:
+        return "fn";
+    case TEXPR_INFER:
+        return "_";
+    default:
+        return "?";
+    }
+}
+
 static const char *value_type_str(Value *v) {
+    static char tbuf[256];
     if (!v) return "null";
     switch (v->tag) {
         case XS_INT:   return "int";
         case XS_FLOAT: return "float";
         case XS_STR:   return "str";
         case XS_BOOL:  return "bool";
-        case XS_ARRAY: return "array";
-        case XS_MAP:   return "map";
-        case XS_NULL:  return "null";
+        case XS_ARRAY: {
+            if (!v->arr || v->arr->len == 0) return "[?]";
+            /* infer element type from first element */
+            const char *first = value_type_str(v->arr->items[0]);
+            int all_same = 1;
+            for (int j = 1; j < v->arr->len; j++) {
+                if (strcmp(value_type_str(v->arr->items[j]), first) != 0) {
+                    all_same = 0; break;
+                }
+            }
+            if (all_same) snprintf(tbuf, sizeof tbuf, "[%s]", first);
+            else snprintf(tbuf, sizeof tbuf, "[mixed]");
+            return tbuf;
+        }
+        case XS_TUPLE: {
+            if (!v->arr || v->arr->len == 0) return "()";
+            int pos = 0;
+            pos += snprintf(tbuf + pos, sizeof(tbuf) - pos, "(");
+            for (int j = 0; j < v->arr->len && pos < 240; j++) {
+                if (j) pos += snprintf(tbuf + pos, sizeof(tbuf) - pos, ", ");
+                pos += snprintf(tbuf + pos, sizeof(tbuf) - pos, "%s", value_type_str(v->arr->items[j]));
+            }
+            snprintf(tbuf + pos, sizeof(tbuf) - pos, ")");
+            return tbuf;
+        }
+        case XS_MAP: {
+            if (!v->map || v->map->len == 0) return "map<?, ?>";
+            /* infer value type from first value */
+            int nk = 0;
+            char **keys = map_keys(v->map, &nk);
+            if (nk == 0) { free(keys); return "map<?, ?>"; }
+            Value *first_val = map_get(v->map, keys[0]);
+            const char *vtype = first_val ? value_type_str(first_val) : "?";
+            int all_same = 1;
+            for (int j = 1; j < nk; j++) {
+                Value *vv = map_get(v->map, keys[j]);
+                if (vv && strcmp(value_type_str(vv), vtype) != 0) {
+                    all_same = 0; break;
+                }
+            }
+            for (int j = 0; j < nk; j++) free(keys[j]);
+            free(keys);
+            if (all_same) snprintf(tbuf, sizeof tbuf, "map<str, %s>", vtype);
+            else snprintf(tbuf, sizeof tbuf, "map<str, mixed>");
+            return tbuf;
+        }
         case XS_FUNC: case XS_NATIVE: return "fn";
-        case XS_TUPLE: return "tuple";
         case XS_STRUCT_VAL: return v->st ? v->st->type_name : "struct";
         case XS_INST:  return (v->inst && v->inst->class_) ? v->inst->class_->name : "instance";
         case XS_ENUM_VAL: return v->en ? v->en->type_name : "enum";
@@ -7240,11 +7398,11 @@ void interp_exec(Interp *i, Node *stmt) {
     case NODE_LET:
     case NODE_VAR: {
         Value *val = stmt->let.value ? EVAL(i, stmt->let.value) : value_incref(XS_NULL_VAL);
-        if (stmt->let.type_ann && stmt->let.type_ann->name) {
-            if (!value_matches_type(val, stmt->let.type_ann->name)) {
+        if (stmt->let.type_ann) {
+            if (!value_matches_typeexpr(val, stmt->let.type_ann)) {
                 xs_runtime_error(stmt->span, "type mismatch", NULL,
                     "expected '%s', got '%s'",
-                    stmt->let.type_ann->name, value_type_str(val));
+                    typeexpr_str(stmt->let.type_ann), value_type_str(val));
                 i->cf.signal = CF_PANIC;
                 i->cf.value = xs_str("type error");
             }
@@ -7261,11 +7419,11 @@ void interp_exec(Interp *i, Node *stmt) {
 
     case NODE_CONST: {
         Value *val = EVAL(i, stmt->const_.value);
-        if (stmt->const_.type_ann && stmt->const_.type_ann->name) {
-            if (!value_matches_type(val, stmt->const_.type_ann->name)) {
+        if (stmt->const_.type_ann) {
+            if (!value_matches_typeexpr(val, stmt->const_.type_ann)) {
                 xs_runtime_error(stmt->span, "type mismatch", NULL,
                     "expected '%s', got '%s'",
-                    stmt->const_.type_ann->name, value_type_str(val));
+                    typeexpr_str(stmt->const_.type_ann), value_type_str(val));
                 i->cf.signal = CF_PANIC;
                 i->cf.value = xs_str("type error");
             }
