@@ -1,96 +1,156 @@
 # XS
 
-A general-purpose programming language with gradual typing and multiple backends. Made privately starting 2024, published in early stage 2026.
+A general-purpose programming language with gradual typing, multiple execution backends, and a plugin system that lets you modify anything. Written in C, builds on Linux, macOS, and Windows with zero dependencies.
 
 ```xs
--- no types required, but you can add them
-fn greet(name) {
-    print("Hello, {name}!")
+-- types are optional. add them when you want enforcement.
+fn fib(n) {
+    if n <= 1 { return n }
+    return fib(n - 1) + fib(n - 2)
 }
 
-fn greet_typed(name: str) -> str {
-    return "Hello, {name}!"
+fn fib_typed(n: int) -> int {
+    if n <= 1 { return n }
+    return fib_typed(n - 1) + fib_typed(n - 2)
 }
 
--- closures, pattern matching, the usual
-let nums = [1, 2, 3, 4, 5]
-let doubled = nums.map((x) => x * 2)
+-- closures, pipes, comprehensions
+let squares = [x * x for x in 0..10 if x % 2 == 0]
+let total = squares |> reduce(fn(a, b) { a + b }, 0)
 
--- algebraic effects
-effect Ask {
-    fn prompt(msg) -> str
+-- structs with traits
+struct Point { x, y }
+impl Point {
+    fn distance(self) -> f64 {
+        return (self.x ** 2 + self.y ** 2) ** 0.5
+    }
 }
 
-let result = handle ask_user() {
-    Ask.prompt(msg) => resume("World")
+-- pattern matching
+fn describe(val) {
+    match val {
+        0 => "zero"
+        x if x < 0 => "negative"
+        _ => "positive"
+    }
 }
+
+-- plugins can add new syntax
+use plugin "unless.xs"
+unless false { println("this runs") }
 ```
 
-## Build
+## Install
+
+Download a prebuilt binary from [releases](https://github.com/xs-lang0/xs/releases), or build from source:
 
 ```bash
-make          # produces ./xs
-make test     # runs the test suite
-make clean    # clean build artifacts
+make            # produces ./xs
+make test       # 13 test suites
+make release    # optimized build (-O3, LTO, stripped)
+make install    # install to /usr/local/bin/xs
 ```
 
-Requires a C compiler (gcc or clang). Builds on Linux, macOS, and Windows (MinGW).
+Needs gcc or clang. No other dependencies. The binary is ~1.5MB and includes everything (HTTPS via embedded BearSSL, no runtime deps).
 
 ## Run
 
 ```bash
-./xs file.xs          # run a script
-./xs                  # start the REPL
-./xs run file.xs      # explicit run (same as above)
+xs file.xs              # run a script
+xs                      # interactive REPL
+xs -e 'println(42)'     # eval one-liner
+xs --vm file.xs         # bytecode VM backend
+xs --jit file.xs        # JIT backend (x86-64)
+xs --emit js file.xs    # transpile to JavaScript
+xs --emit c file.xs     # transpile to C
+xs --check file.xs      # static type check without running
+xs --strict file.xs     # require type annotations everywhere
 ```
 
-## What works well
+## What's in the box
 
-**Gradual typing** -- Leave types off and everything is dynamic. Add annotations and they get enforced at runtime. `--strict` mode requires annotations everywhere, `--check` does static analysis.
+**Language features:**
+- Gradual typing with `--check` and `--strict`
+- Structs, traits, enums, classes with inheritance
+- Pattern matching with destructuring and guards
+- Closures, generators (`fn*`/`yield`), arrow lambdas
+- Algebraic effects (`effect`/`perform`/`handle`/`resume`)
+- All the concurrency: spawn, async/await, actors, channels, nurseries
+- List/map comprehensions, spread, pipe operator
+- try/catch/finally, defer, throw
 
-**Tree-walk interpreter** -- The default backend. Handles all language features, including the weirder ones like algebraic effects and the plugin system.
+**Backends:**
+- Tree-walk interpreter (default, handles everything)
+- Bytecode VM (faster for compute-heavy code)
+- JIT compiler (x86-64, early stage)
+- Transpilers: JavaScript, C, WebAssembly
 
-**Object system** -- Both struct/trait (composition) and class/inheritance (OOP). Use whichever makes sense for the problem.
+**Tooling:**
+- REPL with syntax highlighting
+- LSP server (`xs lsp`)
+- Formatter (`xs fmt`), linter (`xs lint`)
+- Test runner (`xs test`), benchmarks (`xs bench`)
+- Profiler (`xs profile`), coverage (`xs coverage`)
+- Package manager (`xs install`, `xs remove`)
+- Doc generator (`xs doc`)
 
-**Pattern matching** -- `match` expressions with destructuring, guards, nested patterns. Works well.
+**Standard library** (14 modules, all built in):
+math, string, time, io, fs, path, random, json, os, collections, re, crypto, fmt, net
 
-## What exists but is rough
+**Plugin system:**
+Plugins are XS scripts with direct access to the lexer, parser, and runtime. Add keywords, inject globals, hook evaluation, override syntax, intercept imports -- written in XS, not C.
 
-**Bytecode VM** -- Works for basic programs. Doesn't support everything the tree-walk interpreter does yet.
+**Networking:**
+HTTP/HTTPS client with zero external dependencies (BearSSL embedded for TLS).
 
-**JIT compiler** -- x86-64 only, handles arithmetic and simple functions. Very early stage.
+## Quick examples
 
-**Transpilation** -- JS backend is the most complete. C backend handles a decent chunk. WASM is very early, basically just arithmetic.
+```xs
+-- http request
+import net
+let resp = net.http_get("https://httpbin.org/get")
+println(resp["status"])   -- 200
 
-**Concurrency** -- `spawn`, `async`/`await`, actors, channels, nurseries are all there. Everything is cooperative (no real threads), spawn just runs immediately. It works, but it's not going to win any benchmarks.
+-- file operations
+import fs
+fs.write("/tmp/hello.txt", "hi from xs")
+println(fs.read("/tmp/hello.txt"))
 
-**Algebraic effects** -- `effect`, `perform`, `handle`, `resume`. Covers the common cases, edge cases may still have bugs.
+-- actors
+actor Counter {
+    var count = 0
+    fn increment() { count = count + 1 }
+    fn get() { count }
+}
+let c = spawn Counter
+c.increment()
+c.increment()
+println(c.get())  -- 2
 
-**Plugin system** -- Plugins can inject globals, hook into the parser, add keywords, override syntax. Pretty powerful but the API is still shifting.
-
-## Built-in tools
-
-REPL, LSP server, formatter, linter, profiler, test runner.
+-- gradual typing catches mistakes
+let nums: [int] = [1, 2, "oops"]  -- runtime error: expected '[int]', got '[mixed]'
+```
 
 ## Project layout
 
 ```
-src/          # compiler and runtime source
-tests/        # test files
-Makefile      # build system
-xs.toml       # project config
-LANGUAGE.md   # language reference
-COMMANDS.md   # CLI reference
+src/            compiler and runtime (C)
+src/tls/        embedded BearSSL for HTTPS
+tests/          13 test suites
+examples/       working examples and plugins
+Makefile        build system
+LANGUAGE.md     complete language reference
+COMMANDS.md     CLI commands and flags
+PLUGINS.md      plugin system guide
+xs.toml         project config
 ```
 
-## Reference
+## Docs
 
-- [LANGUAGE.md](LANGUAGE.md) -- language spec with examples
-- [COMMANDS.md](COMMANDS.md) -- CLI commands and flags
-
-## Author
-
-[@xs-lang0](https://github.com/xs-lang0)
+- [LANGUAGE.md](LANGUAGE.md) -- full language reference (~2000 lines, covers everything)
+- [COMMANDS.md](COMMANDS.md) -- every CLI command, flag, and subcommand
+- [PLUGINS.md](PLUGINS.md) -- plugin system guide with working examples
+- [CONTRIBUTING.md](CONTRIBUTING.md) -- how to contribute
 
 ## License
 
