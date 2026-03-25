@@ -9,8 +9,34 @@ static XsType *texpr_to_xstype(TypeExpr *te) {
     if (!te) return ty_unknown();
     switch (te->kind) {
         case TEXPR_NAMED: {
+            /* handle generic array<T> and map<K,V> */
+            if (te->name && strcmp(te->name, "array") == 0) {
+                XsType *elem = (te->nargs > 0) ? texpr_to_xstype(te->args[0]) : ty_unknown();
+                return ty_array(elem);
+            }
+            if (te->name && strcmp(te->name, "map") == 0) {
+                /* map<K,V> — we only track value type for now */
+                return ty_named("map", NULL, 0);
+            }
+            if (te->name && strcmp(te->name, "tuple") == 0 && te->nargs > 0) {
+                XsType **elems = xs_malloc(sizeof(XsType*) * te->nargs);
+                for (int i = 0; i < te->nargs; i++)
+                    elems[i] = texpr_to_xstype(te->args[i]);
+                XsType *t = ty_tuple(elems, te->nargs);
+                free(elems);
+                return t;
+            }
             XsType *t = ty_from_name(te->name);
             if (t) return t;
+            /* pass generic args through for named types */
+            if (te->nargs > 0) {
+                XsType **args = xs_malloc(sizeof(XsType*) * te->nargs);
+                for (int i = 0; i < te->nargs; i++)
+                    args[i] = texpr_to_xstype(te->args[i]);
+                XsType *nt = ty_named(te->name ? te->name : "?", args, te->nargs);
+                free(args);
+                return nt;
+            }
             return ty_named(te->name ? te->name : "?", NULL, 0);
         }
         case TEXPR_ARRAY:  return ty_array(texpr_to_xstype(te->inner));
