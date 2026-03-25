@@ -71,6 +71,9 @@
 #include <dlfcn.h>
 #endif
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #ifdef XSC_ENABLE_JIT
 #include "jit/jit.h"
 #endif
@@ -949,33 +952,46 @@ int main(int argc, char **argv) {
             /* try XS-based LSP first, fall back to C */
             {
                 static char lsp_path[PATH_MAX];
+                static char exe_dir[PATH_MAX];
                 int found_xs_lsp = 0;
 
-                /* check relative to binary */
-                const char *last_sep = strrchr(argv[0], '/');
-                if (!last_sep) last_sep = strrchr(argv[0], '\\');
-                if (last_sep) {
-                    int dir_len = (int)(last_sep - argv[0]);
-                    snprintf(lsp_path, sizeof(lsp_path), "%.*s/src/lsp/lsp.xs", dir_len, argv[0]);
+                /* resolve actual executable path */
+                exe_dir[0] = '\0';
+#ifdef _WIN32
+                GetModuleFileNameA(NULL, exe_dir, sizeof(exe_dir));
+#elif defined(__linux__)
+                { ssize_t r = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir)-1);
+                  if (r > 0) exe_dir[r] = '\0'; }
+#elif defined(__APPLE__)
+                { uint32_t sz = sizeof(exe_dir);
+                  _NSGetExecutablePath(exe_dir, &sz); }
+#endif
+                /* fall back to argv[0] */
+                if (exe_dir[0] == '\0') snprintf(exe_dir, sizeof(exe_dir), "%s", argv[0]);
+
+                /* strip filename to get directory */
+                char *last_sep = strrchr(exe_dir, '/');
+                if (!last_sep) last_sep = strrchr(exe_dir, '\\');
+                if (last_sep) *last_sep = '\0';
+
+                /* check paths relative to exe */
+                const char *rel_paths[] = {
+                    "src/lsp/lsp.xs",   /* dev: running from repo root */
+                    "lsp.xs",           /* installed next to binary */
+                    "../lib/xs/lsp.xs", /* /usr/local/lib/xs/ */
+                    NULL
+                };
+                for (int pi = 0; rel_paths[pi] && !found_xs_lsp; pi++) {
+                    snprintf(lsp_path, sizeof(lsp_path), "%s/%s", exe_dir, rel_paths[pi]);
                     FILE *f = fopen(lsp_path, "r");
                     if (f) { fclose(f); found_xs_lsp = 1; }
-                    if (!found_xs_lsp) {
-                        snprintf(lsp_path, sizeof(lsp_path), "%.*s/lsp.xs", dir_len, argv[0]);
-                        f = fopen(lsp_path, "r");
-                        if (f) { fclose(f); found_xs_lsp = 1; }
-                    }
                 }
-                /* check common install paths */
+                /* also check cwd-relative */
                 if (!found_xs_lsp) {
-                    const char *try_paths[] = {
-                        "src/lsp/lsp.xs",
-                        "/usr/local/lib/xs/lsp.xs",
-                        "/usr/lib/xs/lsp.xs",
-                        NULL
-                    };
-                    for (int pi = 0; try_paths[pi]; pi++) {
-                        FILE *f = fopen(try_paths[pi], "r");
-                        if (f) { fclose(f); snprintf(lsp_path, sizeof(lsp_path), "%s", try_paths[pi]); found_xs_lsp = 1; break; }
+                    const char *cwd_paths[] = { "src/lsp/lsp.xs", "lsp.xs", NULL };
+                    for (int pi = 0; cwd_paths[pi] && !found_xs_lsp; pi++) {
+                        FILE *f = fopen(cwd_paths[pi], "r");
+                        if (f) { fclose(f); snprintf(lsp_path, sizeof(lsp_path), "%s", cwd_paths[pi]); found_xs_lsp = 1; }
                     }
                 }
 
