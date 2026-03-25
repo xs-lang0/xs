@@ -601,9 +601,12 @@ static void ast_dump(Node *n, int depth) {
     }
 }
 
+extern void xs_set_argv(int argc, char **argv);
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+    xs_set_argv(argc, argv);
     if (!g_sema_cache) g_sema_cache = cache_new();
     int do_check    = 0;
     int lenient     = 0;
@@ -943,6 +946,45 @@ int main(int argc, char **argv) {
 #endif
 
         } else if (strcmp(sub, "lsp") == 0) {
+            /* try XS-based LSP first, fall back to C */
+            {
+                static char lsp_path[PATH_MAX];
+                int found_xs_lsp = 0;
+
+                /* check relative to binary */
+                const char *last_sep = strrchr(argv[0], '/');
+                if (!last_sep) last_sep = strrchr(argv[0], '\\');
+                if (last_sep) {
+                    int dir_len = (int)(last_sep - argv[0]);
+                    snprintf(lsp_path, sizeof(lsp_path), "%.*s/src/lsp/lsp.xs", dir_len, argv[0]);
+                    FILE *f = fopen(lsp_path, "r");
+                    if (f) { fclose(f); found_xs_lsp = 1; }
+                    if (!found_xs_lsp) {
+                        snprintf(lsp_path, sizeof(lsp_path), "%.*s/lsp.xs", dir_len, argv[0]);
+                        f = fopen(lsp_path, "r");
+                        if (f) { fclose(f); found_xs_lsp = 1; }
+                    }
+                }
+                /* check common install paths */
+                if (!found_xs_lsp) {
+                    const char *try_paths[] = {
+                        "src/lsp/lsp.xs",
+                        "/usr/local/lib/xs/lsp.xs",
+                        "/usr/lib/xs/lsp.xs",
+                        NULL
+                    };
+                    for (int pi = 0; try_paths[pi]; pi++) {
+                        FILE *f = fopen(try_paths[pi], "r");
+                        if (f) { fclose(f); snprintf(lsp_path, sizeof(lsp_path), "%s", try_paths[pi]); found_xs_lsp = 1; break; }
+                    }
+                }
+
+                if (found_xs_lsp) {
+                    filename = lsp_path;
+                    goto run_file;
+                }
+            }
+            /* fall back to C LSP */
 #ifdef XSC_ENABLE_LSP
             int rc = lsp_run();
             cache_free(g_sema_cache);

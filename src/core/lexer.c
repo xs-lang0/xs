@@ -163,6 +163,18 @@ static char lex_escape(Lexer *l) {
     case 'f': return '\f';
     case 'v': return '\v';
     case 'e': return '\033';
+    case 'x': {
+        int val = 0;
+        for (int hi = 0; hi < 2 && l->pos < l->source_len; hi++) {
+            char c = lpeek(l, 0);
+            if (c >= '0' && c <= '9')      val = val * 16 + (c - '0');
+            else if (c >= 'a' && c <= 'f') val = val * 16 + (c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') val = val * 16 + (c - 'A' + 10);
+            else break;
+            ladvance(l);
+        }
+        return (char)val;
+    }
     default:  return esc;
     }
 }
