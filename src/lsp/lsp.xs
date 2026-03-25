@@ -523,8 +523,11 @@ fn resolve_type_methods(text, var_name) {
             let colon = detail.index_of(":")
             if colon >= 0 {
                 let type_name = detail.slice(colon + 1, detail.len()).trim()
-                if TYPE_TO_METHODS.has(type_name) {
-                    let methods = TYPE_TO_METHODS[type_name]
+                -- strip generics: map<int> -> map, array<str> -> array
+                let angle = type_name.index_of("<")
+                let base_type = if angle > 0 { type_name.slice(0, angle).trim() } else { type_name }
+                if TYPE_TO_METHODS.has(base_type) {
+                    let methods = TYPE_TO_METHODS[base_type]
                     return methods.map(fn(m) { make_completion(m, 2, "{type_name} method") })
                 }
             }
