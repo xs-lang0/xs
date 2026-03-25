@@ -471,31 +471,77 @@ fn make_completion(label, kind, detail) {
     return item
 }
 
+let MODULE_MEMBERS = #{
+    "math": ["sqrt", "pow", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log2", "log10", "exp", "abs", "floor", "ceil", "round", "min", "max", "clamp", "pi", "e", "inf", "nan", "factorial", "gcd", "lcm", "sign", "lerp", "hypot"],
+    "string": ["upper", "lower", "split", "replace", "contains", "starts_with", "ends_with", "trim", "pad_left", "pad_right", "center", "reverse", "chars", "bytes", "lines", "slice", "find", "rfind", "count", "index_of", "repeat", "capitalize", "title"],
+    "io": ["read_file", "write_file", "append_file", "read_lines", "read_bytes", "write_bytes", "exists", "is_file", "is_dir", "size", "delete_file", "copy_file", "rename_file", "make_dir", "list_dir", "glob", "temp_file", "temp_dir", "stdin_read", "stdin_readline", "stdin_read_n", "stdout", "stderr"],
+    "json": ["parse", "stringify", "pretty", "valid", "parse_safe"],
+    "os": ["platform", "arch", "pid", "ppid", "args", "cwd", "chdir", "home", "cpu_count", "exit", "env", "exists", "is_file", "is_dir", "list_dir", "mkdir", "rmdir", "remove", "rename", "glob", "tempdir"],
+    "path": ["join", "basename", "dirname", "ext", "stem", "sep", "is_absolute", "normalize"],
+    "fs": ["read", "write", "append", "exists", "delete", "copy", "rename", "mkdir", "list", "glob", "size"],
+    "time": ["now", "clock", "sleep", "sleep_ms", "millis", "format", "parse", "year", "month", "day", "hour", "minute", "second", "stopwatch"],
+    "random": ["int", "float", "bool", "choice", "shuffle", "sample", "seed"],
+    "collections": ["Counter", "Stack", "PriorityQueue", "Deque", "Set", "OrderedMap"],
+    "re": ["match", "replace", "split", "find", "find_all"],
+    "process": ["run", "pid"],
+    "net": ["tcp_connect", "tcp_listen", "resolve", "url_parse", "http_get", "http_post", "http"],
+    "crypto": ["sha256", "md5", "random_bytes", "uuid4"],
+    "hash": ["md5", "sha1", "sha256", "sha512", "hmac"],
+    "fmt": ["number", "hex", "bin", "pad", "comma", "filesize", "ordinal", "pluralize"],
+    "csv": ["parse", "stringify"],
+    "url": ["parse", "encode", "decode"],
+    "log": ["debug", "info", "warn", "error", "fatal", "set_level"],
+    "buf": ["new", "write_u8", "read_u8", "to_str", "to_hex", "len"],
+    "encode": ["base64_encode", "base64_decode", "hex_encode", "hex_decode", "url_encode", "url_decode"],
+    "db": ["open", "exec", "query", "close"],
+    "reflect": ["type_of", "fields", "methods", "is_instance"],
+    "gc": ["collect", "disable", "enable", "stats"],
+    "cli": ["parse", "flag", "arg"],
+    "thread": ["spawn", "id", "cpu_count", "sleep"],
+    "async": ["spawn", "sleep", "channel", "select", "all", "race", "resolve", "reject"],
+    "reactive": ["signal", "derived", "effect", "batch"]
+}
+
 fn dot_completions(text, line, col) {
     let line_text = get_line(text, line)
     if col <= 0 { return null }
 
-    -- find what's before the dot
     let before = line_text.slice(0, col - 1).trim()
     if before == "" { return null }
 
     let last_ch = before.slice(before.len() - 1, before.len())
 
-    var methods = []
-    if last_ch == "\"" or last_ch == "'" {
-        methods = STRING_METHODS
-    } elif last_ch == "]" {
-        methods = ARRAY_METHODS
-    } elif last_ch == "\}" {
-        methods = MAP_METHODS
-    } elif last_ch >= "0" and last_ch <= "9" {
-        methods = NUMBER_METHODS
-    } else {
-        -- could be a variable, offer all
-        methods = STRING_METHODS.concat(ARRAY_METHODS).concat(MAP_METHODS).concat(NUMBER_METHODS)
+    -- check if it's a module name
+    var word_start = before.len() - 1
+    while word_start > 0 and is_ident_char(before.slice(word_start - 1, word_start)) {
+        word_start = word_start - 1
+    }
+    let word_before = before.slice(word_start, before.len())
+
+    if MODULE_MEMBERS.has(word_before) {
+        let members = MODULE_MEMBERS[word_before]
+        return members.map(fn(m) { make_completion(m, 3, "{word_before} member") })
     }
 
-    return methods.map(fn(m) { make_completion(m, 2, "") })
+    -- detect type from literal syntax
+    if last_ch == "\"" or last_ch == "'" {
+        return STRING_METHODS.map(fn(m) { make_completion(m, 2, "str method") })
+    }
+    if last_ch == "]" {
+        return ARRAY_METHODS.map(fn(m) { make_completion(m, 2, "array method") })
+    }
+    if last_ch == "\}" {
+        return MAP_METHODS.map(fn(m) { make_completion(m, 2, "map method") })
+    }
+    if last_ch >= "0" and last_ch <= "9" {
+        return NUMBER_METHODS.map(fn(m) { make_completion(m, 2, "number method") })
+    }
+
+    -- unknown identifier, offer all methods
+    return STRING_METHODS.map(fn(m) { make_completion(m, 2, "str") })
+        .concat(ARRAY_METHODS.map(fn(m) { make_completion(m, 2, "array") }))
+        .concat(MAP_METHODS.map(fn(m) { make_completion(m, 2, "map") }))
+        .concat(NUMBER_METHODS.map(fn(m) { make_completion(m, 2, "number") }))
 }
 
 fn general_completions(text, word) {
