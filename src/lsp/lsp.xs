@@ -218,8 +218,8 @@ fn run_diagnostics(uri) {
     var i = 0
     while i < lines.len() {
         let line = lines[i]
-        if line.starts_with("error") or line.starts_with("warning") {
-            let severity = if line.starts_with("error") { 1 } else { 2 }
+        if line.contains("error[") or line.contains("warning[") {
+            let severity = if line.contains("warning[") { 2 } else { 1 }
             -- extract message after first ]:
             var msg = line
             let bracket_idx = line.index_of("]: ")
