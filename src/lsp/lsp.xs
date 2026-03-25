@@ -348,7 +348,11 @@ let BUILTINS = [
     "entries", "map", "filter", "reduce", "zip", "any", "all", "min", "max",
     "sum", "sort", "reverse", "push", "pop", "slice", "join", "split",
     "contains", "starts_with", "ends_with", "trim", "upper", "lower", "replace",
-    "int", "float", "str", "bool", "char", "typeof", "assert", "panic"
+    "typeof", "assert", "panic"
+]
+
+let TYPES = [
+    "int", "float", "str", "bool", "char", "array", "map", "tuple", "any", "void"
 ]
 
 let MODULES = [
@@ -457,6 +461,11 @@ fn general_completions(text, word) {
             items.push(make_completion(m, 9, "module"))
         }
     }
+    for t in TYPES {
+        if word == "" or t.starts_with(word) {
+            items.push(make_completion(t, 22, "type"))
+        }
+    }
 
     let syms = extract_symbols(text)
     for s in syms {
@@ -485,6 +494,11 @@ fn handle_hover(uri, line, col) {
         var sig = word
         if BUILTIN_SIGS.has(word) { sig = BUILTIN_SIGS[word]["label"] }
         return #{"contents": #{"kind": "markdown", "value": "```xs\n(builtin) {sig}\n```"}}
+    }
+
+    -- check types
+    if TYPES.contains(word) {
+        return #{"contents": #{"kind": "markdown", "value": "```xs\n(type) {word}\n```"}}
     }
 
     -- check modules
