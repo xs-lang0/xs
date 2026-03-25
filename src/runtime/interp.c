@@ -3880,6 +3880,8 @@ static Value *eval_binop(Interp *i, Node *n) {
                      value_incref(XS_TRUE_VAL) : value_incref(XS_FALSE_VAL);
             goto done;
         }
+        if (op[0]=='<' && op[1]=='=') { result=value_cmp(left,right)<=0?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL); goto done; }
+        if (op[0]=='>' && op[1]=='=') { result=value_cmp(left,right)>=0?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL); goto done; }
         if (op[0]=='<') { result=value_cmp(left,right)<0?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL); goto done; }
         if (op[0]=='>') { result=value_cmp(left,right)>0?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL); goto done; }
         if (op[0]=='*' && right->tag==XS_INT) {

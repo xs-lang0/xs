@@ -283,36 +283,75 @@ fn extract_symbols(text) {
     while i < lines.len() {
         let line = lines[i].trim()
 
-        if line.starts_with("fn ") {
-            let rest = line.slice(3, line.len())
+        if line.starts_with("fn ") or line.starts_with("pub fn ") {
+            var rest = line
+            if rest.starts_with("pub ") { rest = rest.slice(4, rest.len()) }
+            rest = rest.slice(3, rest.len())
             let paren = rest.index_of("(")
             if paren > 0 {
                 let name = rest.slice(0, paren).trim()
-                let params = rest.slice(paren, rest.len())
-                let close = params.index_of(")")
-                let detail = if close >= 0 { "fn {name}{params.slice(0, close + 1)}" } else { "fn {name}" }
+                let params_str = rest.slice(paren, rest.len())
+                let close = params_str.index_of(")")
+                var ret_part = ""
+                if close >= 0 {
+                    let after = rest.slice(paren + close + 1, rest.len()).trim()
+                    if after.starts_with("->") {
+                        let brace = after.index_of("\{")
+                        ret_part = if brace >= 0 { after.slice(0, brace).trim() } else { after.trim() }
+                    }
+                }
+                var detail = if close >= 0 { "fn {name}{params_str.slice(0, close + 1)}" } else { "fn {name}" }
+                if ret_part != "" { detail = "{detail} {ret_part}" }
                 symbols.push(#{"name": name, "kind": SYM_FUNCTION, "line": i, "col": 0, "detail": detail})
+
+                -- extract params as symbols too
+                if close >= 0 {
+                    let param_text = params_str.slice(1, close)
+                    let param_parts = param_text.split(",")
+                    for p in param_parts {
+                        let pt = p.trim()
+                        if pt == "" { continue }
+                        let pc = pt.index_of(":")
+                        let pname = if pc > 0 { pt.slice(0, pc).trim() } else { pt }
+                        let ptype = if pc > 0 { pt.slice(pc + 1, pt.len()).trim() } else { "" }
+                        let pdetail = if ptype != "" { "param {pname}: {ptype}" } else { "param {pname}" }
+                        symbols.push(#{"name": pname, "kind": SYM_VARIABLE, "line": i, "col": 0, "detail": pdetail})
+                    }
+                }
             }
-        } elif line.starts_with("let ") {
-            let rest = line.slice(4, line.len())
+        } elif line.starts_with("let ") or line.starts_with("pub let ") {
+            var rest = line
+            if rest.starts_with("pub ") { rest = rest.slice(4, rest.len()) }
+            rest = rest.slice(4, rest.len())
             let eq = rest.index_of("=")
-            let name = if eq > 0 { rest.slice(0, eq).trim() } else { rest.trim() }
-            -- strip type annotation
-            let colon = name.index_of(":")
-            let clean_name = if colon > 0 { name.slice(0, colon).trim() } else { name }
-            symbols.push(#{"name": clean_name, "kind": SYM_VARIABLE, "line": i, "col": 0, "detail": "let"})
-        } elif line.starts_with("var ") {
-            let rest = line.slice(4, line.len())
+            let name_part = if eq > 0 { rest.slice(0, eq).trim() } else { rest.trim() }
+            let colon = name_part.index_of(":")
+            let clean_name = if colon > 0 { name_part.slice(0, colon).trim() } else { name_part }
+            let type_ann = if colon > 0 { name_part.slice(colon + 1, name_part.len()).trim() } else { "" }
+            let detail = if type_ann != "" { "let {clean_name}: {type_ann}" } else { "let {clean_name}" }
+            symbols.push(#{"name": clean_name, "kind": SYM_VARIABLE, "line": i, "col": 0, "detail": detail})
+        } elif line.starts_with("var ") or line.starts_with("pub var ") {
+            var rest = line
+            if rest.starts_with("pub ") { rest = rest.slice(4, rest.len()) }
+            rest = rest.slice(4, rest.len())
             let eq = rest.index_of("=")
-            let name = if eq > 0 { rest.slice(0, eq).trim() } else { rest.trim() }
-            let colon = name.index_of(":")
-            let clean_name = if colon > 0 { name.slice(0, colon).trim() } else { name }
-            symbols.push(#{"name": clean_name, "kind": SYM_VARIABLE, "line": i, "col": 0, "detail": "var"})
-        } elif line.starts_with("const ") {
-            let rest = line.slice(6, line.len())
+            let name_part = if eq > 0 { rest.slice(0, eq).trim() } else { rest.trim() }
+            let colon = name_part.index_of(":")
+            let clean_name = if colon > 0 { name_part.slice(0, colon).trim() } else { name_part }
+            let type_ann = if colon > 0 { name_part.slice(colon + 1, name_part.len()).trim() } else { "" }
+            let detail = if type_ann != "" { "var {clean_name}: {type_ann}" } else { "var {clean_name}" }
+            symbols.push(#{"name": clean_name, "kind": SYM_VARIABLE, "line": i, "col": 0, "detail": detail})
+        } elif line.starts_with("const ") or line.starts_with("pub const ") {
+            var rest = line
+            if rest.starts_with("pub ") { rest = rest.slice(4, rest.len()) }
+            rest = rest.slice(6, rest.len())
             let eq = rest.index_of("=")
-            let name = if eq > 0 { rest.slice(0, eq).trim() } else { rest.trim() }
-            symbols.push(#{"name": name, "kind": SYM_CONSTANT, "line": i, "col": 0, "detail": "const"})
+            let name_part = if eq > 0 { rest.slice(0, eq).trim() } else { rest.trim() }
+            let colon = name_part.index_of(":")
+            let clean_name = if colon > 0 { name_part.slice(0, colon).trim() } else { name_part }
+            let type_ann = if colon > 0 { name_part.slice(colon + 1, name_part.len()).trim() } else { "" }
+            let detail = if type_ann != "" { "const {clean_name}: {type_ann}" } else { "const {clean_name}" }
+            symbols.push(#{"name": clean_name, "kind": SYM_CONSTANT, "line": i, "col": 0, "detail": detail})
         } elif line.starts_with("struct ") {
             let rest = line.slice(7, line.len())
             let brace = rest.index_of("\{")
