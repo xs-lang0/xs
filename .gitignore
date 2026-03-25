@@ -4,3 +4,4 @@
 /xs_*
 *.wasm
 /core
+/editors/vscode/node_modules

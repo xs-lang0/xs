@@ -440,10 +440,10 @@ Creates:
 
 ```
 myapp/
-├-- xs.toml          # package manifest
-├-- src/
-│   └-- main.xs      # hello world entry point
-└-- .gitignore
+|-- xs.toml          # package manifest
+|-- src/
+|   └-- main.xs      # hello world entry point
+|-- .gitignore
 ```
 
 ### `xs install [pkg]`

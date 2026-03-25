@@ -20,6 +20,319 @@ static int seen_main = 0;
 /* track defers for goto-based cleanup */
 static int defer_label_counter = 0;
 
+/* actor tracking for type-aware dispatch */
+#define MAX_ACTORS 32
+static struct { const char *name; } actors[MAX_ACTORS];
+static int n_actors = 0;
+
+#define MAX_ACTOR_VARS 64
+static struct { const char *var_name; const char *actor_name; } actor_vars[MAX_ACTOR_VARS];
+static int n_actor_vars = 0;
+
+static void register_actor(const char *name) {
+    if (n_actors < MAX_ACTORS) actors[n_actors++].name = name;
+}
+
+static const char *find_actor(const char *name) {
+    for (int i = 0; i < n_actors; i++)
+        if (strcmp(actors[i].name, name) == 0) return name;
+    return NULL;
+}
+
+static void register_actor_var(const char *var, const char *actor) {
+    if (n_actor_vars < MAX_ACTOR_VARS) {
+        actor_vars[n_actor_vars].var_name = var;
+        actor_vars[n_actor_vars].actor_name = actor;
+        n_actor_vars++;
+    }
+}
+
+static const char *lookup_actor_var(const char *var) {
+    for (int i = 0; i < n_actor_vars; i++)
+        if (strcmp(actor_vars[i].var_name, var) == 0) return actor_vars[i].actor_name;
+    return NULL;
+}
+
+/* C keyword escaping */
+static const char *c_keywords[] = {
+    "auto","break","case","char","const","continue","default","do","double",
+    "else","enum","extern","float","for","goto","if","int","long","register",
+    "return","short","signed","sizeof","static","struct","switch","typedef",
+    "union","unsigned","void","volatile","while","inline","restrict",NULL
+};
+static int is_c_keyword(const char *name) {
+    if (!name) return 0;
+    for (int i = 0; c_keywords[i]; i++)
+        if (strcmp(c_keywords[i], name) == 0) return 1;
+    return 0;
+}
+static void emit_safe_name(SB *s, const char *name) {
+    if (is_c_keyword(name)) sb_printf(s, "xs_%s", name);
+    else sb_add(s, name);
+}
+
+/* struct impl tracking (like actor tracking) */
+#define MAX_IMPL_TYPES 32
+static struct { const char *type_name; } impl_types[MAX_IMPL_TYPES];
+static int n_impl_types = 0;
+#define MAX_STRUCT_VARS 64
+static struct { const char *var_name; const char *type_name; } struct_vars[MAX_STRUCT_VARS];
+static int n_struct_vars = 0;
+
+static void register_impl_type(const char *name) {
+    for (int i = 0; i < n_impl_types; i++)
+        if (strcmp(impl_types[i].type_name, name) == 0) return;
+    if (n_impl_types < MAX_IMPL_TYPES) impl_types[n_impl_types++].type_name = name;
+}
+static const char *find_impl_type(const char *name) {
+    for (int i = 0; i < n_impl_types; i++)
+        if (strcmp(impl_types[i].type_name, name) == 0) return name;
+    return NULL;
+}
+static void register_struct_var(const char *var, const char *type) {
+    if (n_struct_vars < MAX_STRUCT_VARS) {
+        struct_vars[n_struct_vars].var_name = var;
+        struct_vars[n_struct_vars].type_name = type;
+        n_struct_vars++;
+    }
+}
+static const char *lookup_struct_var(const char *var) {
+    for (int i = 0; i < n_struct_vars; i++)
+        if (strcmp(struct_vars[i].var_name, var) == 0) return struct_vars[i].type_name;
+    return NULL;
+}
+
+/* lambda tracking */
+#define MAX_LAMBDAS 128
+typedef struct {
+    int id;
+    Node *node;        /* the lambda/fn-expr node */
+    int n_params;
+    /* simple capture list — names of free variables */
+    const char *captures[16];
+    int n_captures;
+} LambdaInfo;
+static LambdaInfo lambdas[MAX_LAMBDAS];
+static int n_lambdas = 0;
+static int lambda_counter = 0;
+
+static int register_lambda(Node *n) {
+    /* check if already registered */
+    for (int i = 0; i < n_lambdas; i++)
+        if (lambdas[i].node == n) return lambdas[i].id;
+    int id = lambda_counter++;
+    if (n_lambdas < MAX_LAMBDAS) {
+        lambdas[n_lambdas].id = id;
+        lambdas[n_lambdas].node = n;
+        lambdas[n_lambdas].n_params = n->tag == NODE_LAMBDA ?
+            n->lambda.params.len : 0;
+        n_lambdas++;
+    }
+    return id;
+}
+
+/* function param count tracking for default param padding */
+#define MAX_FN_SIGS 64
+static struct { const char *name; int n_params; } fn_sigs[MAX_FN_SIGS];
+static int n_fn_sigs = 0;
+static void register_fn_sig(const char *name, int n_params) {
+    if (n_fn_sigs < MAX_FN_SIGS) {
+        fn_sigs[n_fn_sigs].name = name;
+        fn_sigs[n_fn_sigs].n_params = n_params;
+        n_fn_sigs++;
+    }
+}
+static int lookup_fn_param_count(const char *name) {
+    for (int i = 0; i < n_fn_sigs; i++)
+        if (strcmp(fn_sigs[i].name, name) == 0) return fn_sigs[i].n_params;
+    return -1;
+}
+
+/* track if we're inside an impl/actor method (self is a pointer) */
+static int in_method_body = 0;
+
+/* actor field rewriting — when emitting actor method bodies, identifiers
+   that match state fields get rewritten to self->field */
+static const char **actor_fields = NULL;
+static int n_actor_fields = 0;
+
+static int is_actor_field(const char *name) {
+    for (int i = 0; i < n_actor_fields; i++)
+        if (strcmp(actor_fields[i], name) == 0) return 1;
+    return 0;
+}
+
+/* free variable collector for lambda capture analysis */
+static void collect_idents(Node *n, const char **out, int *nout, int max) {
+    if (!n || *nout >= max) return;
+    if (n->tag == NODE_IDENT) {
+        /* check if already in list */
+        for (int i = 0; i < *nout; i++)
+            if (strcmp(out[i], n->ident.name) == 0) return;
+        out[(*nout)++] = n->ident.name;
+        return;
+    }
+    /* recurse into children */
+    switch (n->tag) {
+    case NODE_BINOP: collect_idents(n->binop.left, out, nout, max);
+                     collect_idents(n->binop.right, out, nout, max); break;
+    case NODE_UNARY: collect_idents(n->unary.expr, out, nout, max); break;
+    case NODE_CALL: collect_idents(n->call.callee, out, nout, max);
+                    for (int i=0;i<n->call.args.len;i++) collect_idents(n->call.args.items[i], out, nout, max); break;
+    case NODE_METHOD_CALL: collect_idents(n->method_call.obj, out, nout, max);
+                           for (int i=0;i<n->method_call.args.len;i++) collect_idents(n->method_call.args.items[i], out, nout, max); break;
+    case NODE_INDEX: collect_idents(n->index.obj, out, nout, max);
+                     collect_idents(n->index.index, out, nout, max); break;
+    case NODE_FIELD: collect_idents(n->field.obj, out, nout, max); break;
+    case NODE_ASSIGN: collect_idents(n->assign.target, out, nout, max);
+                      collect_idents(n->assign.value, out, nout, max); break;
+    case NODE_RETURN: collect_idents(n->ret.value, out, nout, max); break;
+    case NODE_IF: collect_idents(n->if_expr.cond, out, nout, max);
+                  collect_idents(n->if_expr.then, out, nout, max);
+                  collect_idents(n->if_expr.else_branch, out, nout, max); break;
+    case NODE_BLOCK: for (int i=0;i<n->block.stmts.len;i++) collect_idents(n->block.stmts.items[i], out, nout, max);
+                     collect_idents(n->block.expr, out, nout, max); break;
+    case NODE_EXPR_STMT: collect_idents(n->expr_stmt.expr, out, nout, max); break;
+    case NODE_LET: case NODE_VAR: collect_idents(n->let.value, out, nout, max); break;
+    default: break;
+    }
+}
+
+/* recursive lambda scanner */
+static void scan_lambdas(Node *n) {
+    if (!n) return;
+    if (n->tag == NODE_LAMBDA) {
+        int lid = register_lambda(n);
+        /* find captures: idents in body that aren't params */
+        const char *all_idents[64];
+        int n_all = 0;
+        collect_idents(n->lambda.body, all_idents, &n_all, 64);
+        /* remove param names and builtins */
+        LambdaInfo *li = NULL;
+        for (int i = 0; i < n_lambdas; i++)
+            if (lambdas[i].id == lid) { li = &lambdas[i]; break; }
+        if (li) {
+            li->n_captures = 0;
+            for (int i = 0; i < n_all && li->n_captures < 16; i++) {
+                int is_param = 0;
+                for (int p = 0; p < n->lambda.params.len; p++) {
+                    if (n->lambda.params.items[p].name &&
+                        strcmp(n->lambda.params.items[p].name, all_idents[i]) == 0)
+                        is_param = 1;
+                }
+                /* skip known builtins/globals */
+                if (is_param) continue;
+                if (strcmp(all_idents[i], "println") == 0 || strcmp(all_idents[i], "print") == 0 ||
+                    strcmp(all_idents[i], "str") == 0 || strcmp(all_idents[i], "len") == 0 ||
+                    strcmp(all_idents[i], "type") == 0 || strcmp(all_idents[i], "assert") == 0 ||
+                    strcmp(all_idents[i], "assert_eq") == 0 || strcmp(all_idents[i], "int") == 0 ||
+                    strcmp(all_idents[i], "float") == 0 || strcmp(all_idents[i], "true") == 0 ||
+                    strcmp(all_idents[i], "false") == 0 || strcmp(all_idents[i], "null") == 0 ||
+                    strcmp(all_idents[i], "sqrt") == 0 || strcmp(all_idents[i], "abs") == 0 ||
+                    strcmp(all_idents[i], "not") == 0) continue;
+                li->captures[li->n_captures++] = all_idents[i];
+            }
+        }
+        /* scan body too for nested lambdas */
+        if (n->lambda.body) scan_lambdas(n->lambda.body);
+        return;
+    }
+    /* walk children looking for lambdas */
+    switch (n->tag) {
+    case NODE_PROGRAM: for (int i=0;i<n->program.stmts.len;i++) scan_lambdas(n->program.stmts.items[i]); break;
+    case NODE_BLOCK: for (int i=0;i<n->block.stmts.len;i++) scan_lambdas(n->block.stmts.items[i]);
+                     if (n->block.expr) scan_lambdas(n->block.expr); break;
+    case NODE_BINOP: scan_lambdas(n->binop.left); scan_lambdas(n->binop.right); break;
+    case NODE_UNARY: scan_lambdas(n->unary.expr); break;
+    case NODE_CALL: scan_lambdas(n->call.callee);
+                    for (int i=0;i<n->call.args.len;i++) scan_lambdas(n->call.args.items[i]); break;
+    case NODE_METHOD_CALL: scan_lambdas(n->method_call.obj);
+                           for (int i=0;i<n->method_call.args.len;i++) scan_lambdas(n->method_call.args.items[i]); break;
+    case NODE_INDEX: scan_lambdas(n->index.obj); scan_lambdas(n->index.index); break;
+    case NODE_FIELD: scan_lambdas(n->field.obj); break;
+    case NODE_ASSIGN: scan_lambdas(n->assign.target); scan_lambdas(n->assign.value); break;
+    case NODE_IF: scan_lambdas(n->if_expr.cond); scan_lambdas(n->if_expr.then);
+                  scan_lambdas(n->if_expr.else_branch); break;
+    case NODE_FOR: scan_lambdas(n->for_loop.iter); scan_lambdas(n->for_loop.body); break;
+    case NODE_WHILE: scan_lambdas(n->while_loop.cond); scan_lambdas(n->while_loop.body); break;
+    case NODE_RETURN: scan_lambdas(n->ret.value); break;
+    case NODE_LET: case NODE_VAR: scan_lambdas(n->let.value); break;
+    case NODE_CONST: scan_lambdas(n->const_.value); break;
+    case NODE_FN_DECL: scan_lambdas(n->fn_decl.body); break;
+    case NODE_EXPR_STMT: scan_lambdas(n->expr_stmt.expr); break;
+    case NODE_TRY: scan_lambdas(n->try_.body); scan_lambdas(n->try_.finally_block); break;
+    case NODE_THROW: scan_lambdas(n->throw_.value); break;
+    case NODE_MATCH: scan_lambdas(n->match.subject);
+                     for (int i=0;i<n->match.arms.len;i++) {
+                         scan_lambdas(n->match.arms.items[i].guard);
+                         scan_lambdas(n->match.arms.items[i].body);
+                     } break;
+    case NODE_LIT_ARRAY: case NODE_LIT_TUPLE:
+        for (int i=0;i<n->lit_array.elems.len;i++) scan_lambdas(n->lit_array.elems.items[i]); break;
+    case NODE_LIT_MAP:
+        for (int i=0;i<n->lit_map.vals.len;i++) scan_lambdas(n->lit_map.vals.items[i]); break;
+    case NODE_IMPL_DECL:
+        for (int i=0;i<n->impl_decl.members.len;i++) scan_lambdas(n->impl_decl.members.items[i]); break;
+    case NODE_ACTOR_DECL:
+        for (int i=0;i<n->actor_decl.methods.len;i++) scan_lambdas(n->actor_decl.methods.items[i]); break;
+    case NODE_NURSERY: scan_lambdas(n->nursery_.body); break;
+    case NODE_SPAWN: scan_lambdas(n->spawn_.expr); break;
+    case NODE_AWAIT: scan_lambdas(n->await_.expr); break;
+    case NODE_SEND_EXPR: scan_lambdas(n->send_expr.target); scan_lambdas(n->send_expr.message); break;
+    case NODE_RANGE: scan_lambdas(n->range.start); scan_lambdas(n->range.end); break;
+    case NODE_LIST_COMP: scan_lambdas(n->list_comp.element);
+        for (int i=0;i<n->list_comp.clause_iters.len;i++) scan_lambdas(n->list_comp.clause_iters.items[i]);
+        for (int i=0;i<n->list_comp.clause_conds.len;i++) scan_lambdas(n->list_comp.clause_conds.items[i]); break;
+    default: break;
+    }
+}
+
+/* pre-scan to collect actor declarations and actor variable bindings */
+static void prescan_stmts(Node *program) {
+    if (!program || program->tag != NODE_PROGRAM) return;
+    for (int i = 0; i < program->program.stmts.len; i++) {
+        Node *st = program->program.stmts.items[i];
+        if (!st) continue;
+        /* register actor declarations */
+        if (st->tag == NODE_EXPR_STMT && st->expr_stmt.expr &&
+            st->expr_stmt.expr->tag == NODE_ACTOR_DECL) {
+            Node *ad = st->expr_stmt.expr;
+            if (ad->actor_decl.name) register_actor(ad->actor_decl.name);
+        }
+        if (st->tag == NODE_ACTOR_DECL && st->actor_decl.name)
+            register_actor(st->actor_decl.name);
+        /* register let x = spawn ActorName */
+        if ((st->tag == NODE_LET || st->tag == NODE_VAR) && st->let.name && st->let.value) {
+            Node *val = st->let.value;
+            if (val->tag == NODE_SPAWN && val->spawn_.expr &&
+                val->spawn_.expr->tag == NODE_IDENT) {
+                const char *aname = val->spawn_.expr->ident.name;
+                if (find_actor(aname))
+                    register_actor_var(st->let.name, aname);
+            }
+            /* register let x = StructName { ... } */
+            if (val->tag == NODE_STRUCT_INIT && val->struct_init.path) {
+                const char *sname = val->struct_init.path;
+                if (find_impl_type(sname))
+                    register_struct_var(st->let.name, sname);
+            }
+            /* register let x = y.method(...) where y is a known struct var */
+            if (val->tag == NODE_METHOD_CALL && val->method_call.obj &&
+                val->method_call.obj->tag == NODE_IDENT) {
+                const char *otype = lookup_struct_var(val->method_call.obj->ident.name);
+                if (otype)
+                    register_struct_var(st->let.name, otype);
+            }
+        }
+        /* register impl declarations */
+        if (st->tag == NODE_IMPL_DECL && st->impl_decl.type_name)
+            register_impl_type(st->impl_decl.type_name);
+        /* register function signatures for default param padding */
+        if (st->tag == NODE_FN_DECL && st->fn_decl.name)
+            register_fn_sig(st->fn_decl.name, st->fn_decl.params.len);
+    }
+}
+
 /* helpers */
 static int is_callee_name(Node *callee, const char *name) {
     return callee && callee->tag == NODE_IDENT && strcmp(callee->ident.name, name) == 0;
@@ -152,7 +465,12 @@ static void emit_expr(SB *s, Node *n, int depth) {
         sb_printf(s, "xs_map(%d", n->lit_map.keys.len);
         for (int i = 0; i < n->lit_map.keys.len; i++) {
             sb_add(s, ", ");
-            emit_expr(s, n->lit_map.keys.items[i], depth);
+            /* map keys: if ident, emit as string */
+            Node *mk = n->lit_map.keys.items[i];
+            if (mk && mk->tag == NODE_IDENT)
+                sb_printf(s, "XS_STR(\"%s\")", mk->ident.name);
+            else
+                emit_expr(s, mk, depth);
             sb_add(s, ", ");
             emit_expr(s, n->lit_map.vals.items[i], depth);
         }
@@ -160,7 +478,10 @@ static void emit_expr(SB *s, Node *n, int depth) {
         break;
     }
     case NODE_IDENT:
-        sb_add(s, n->ident.name);
+        if (n_actor_fields > 0 && is_actor_field(n->ident.name))
+            sb_printf(s, "self->%s", n->ident.name);
+        else
+            emit_safe_name(s, n->ident.name);
         break;
     case NODE_BINOP: {
         const char *op = n->binop.op;
@@ -255,6 +576,19 @@ static void emit_expr(SB *s, Node *n, int depth) {
             sb_add(s, " (");
             emit_expr(s, n->binop.right, depth);
             sb_add(s, ").i)");
+        } else if (strcmp(op, "is") == 0) {
+            /* type check: val is int/str/bool/float/null/array/map */
+            sb_add(s, "xs_is_type(");
+            emit_expr(s, n->binop.left, depth);
+            sb_add(s, ", ");
+            if (n->binop.right && n->binop.right->tag == NODE_LIT_STRING &&
+                n->binop.right->lit_string.sval)
+                sb_printf(s, "\"%s\"", n->binop.right->lit_string.sval);
+            else if (n->binop.right && n->binop.right->tag == NODE_IDENT)
+                sb_printf(s, "\"%s\"", n->binop.right->ident.name);
+            else
+                sb_add(s, "\"?\"");
+            sb_addc(s, ')');
         } else if (strcmp(op, "??") == 0) {
             /* null coalescing: if left is null, use right */
             sb_add(s, "((");
@@ -308,27 +642,321 @@ static void emit_expr(SB *s, Node *n, int depth) {
             else
                 sb_add(s, "XS_NULL");
             sb_addc(s, ')');
-        } else {
-            emit_expr(s, n->call.callee, depth);
-            sb_addc(s, '(');
+        } else if (n->call.callee && n->call.callee->tag == NODE_SCOPE &&
+                   n->call.callee->scope.nparts == 2) {
+            /* enum constructor call: Shape::Circle(5) -> map */
+            sb_printf(s, "xs_map(%d, XS_STR(\"_type\"), XS_STR(\"%s\"), XS_STR(\"_variant\"), XS_STR(\"%s\")",
+                      2 + n->call.args.len,
+                      n->call.callee->scope.parts[0],
+                      n->call.callee->scope.parts[1]);
             for (int i = 0; i < n->call.args.len; i++) {
-                if (i) sb_add(s, ", ");
+                sb_printf(s, ", XS_STR(\"%d\"), ", i);
                 emit_expr(s, n->call.args.items[i], depth);
             }
             sb_addc(s, ')');
+        } else if (is_callee_name(n->call.callee, "sqrt")) {
+            sb_add(s, "XS_FLOAT(sqrt(xs_to_f64(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_INT(0)");
+            sb_add(s, ")))");
+        } else if (is_callee_name(n->call.callee, "abs")) {
+            sb_add(s, "XS_FLOAT(fabs(xs_to_f64(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_INT(0)");
+            sb_add(s, ")))");
+        } else if (is_callee_name(n->call.callee, "int")) {
+            sb_add(s, "XS_INT((int64_t)xs_to_f64(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_INT(0)");
+            sb_add(s, "))");
+        } else if (is_callee_name(n->call.callee, "float")) {
+            sb_add(s, "XS_FLOAT(xs_to_f64(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_INT(0)");
+            sb_add(s, "))");
+        } else if (is_callee_name(n->call.callee, "len")) {
+            sb_add(s, "xs_len(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_addc(s, ')');
+        } else if (is_callee_name(n->call.callee, "type")) {
+            sb_add(s, "xs_type(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_addc(s, ')');
+        } else if (is_callee_name(n->call.callee, "channel")) {
+            sb_add(s, "xs_channel_new(");
+            if (n->call.args.len > 0) {
+                sb_add(s, "(");
+                emit_expr(s, n->call.args.items[0], depth);
+                sb_add(s, ").i");
+            } else {
+                sb_add(s, "0");
+            }
+            sb_addc(s, ')');
+        } else if (is_callee_name(n->call.callee, "assert_eq")) {
+            sb_add(s, "xs_assert_eq(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_add(s, ", ");
+            if (n->call.args.len > 1) emit_expr(s, n->call.args.items[1], depth);
+            else sb_add(s, "XS_NULL");
+            sb_addc(s, ')');
+        } else if (is_callee_name(n->call.callee, "Err")) {
+            sb_add(s, "xs_map(2, XS_STR(\"tag\"), XS_STR(\"Err\"), XS_STR(\"value\"), ");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_addc(s, ')');
+        } else if (is_callee_name(n->call.callee, "Ok")) {
+            sb_add(s, "xs_map(2, XS_STR(\"tag\"), XS_STR(\"Ok\"), XS_STR(\"value\"), ");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_addc(s, ')');
+        } else if (is_callee_name(n->call.callee, "str")) {
+            sb_add(s, "XS_STR(strdup(xs_to_str(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_add(s, ")))");
+        } else if (is_callee_name(n->call.callee, "assert")) {
+            sb_add(s, "xs_assert(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_add(s, ", ");
+            if (n->call.args.len > 1) emit_expr(s, n->call.args.items[1], depth);
+            else sb_add(s, "XS_STR(\"assertion failed\")");
+            sb_addc(s, ')');
+        } else {
+            /* check if callee might be a closure (variable holding fn) */
+            int might_be_closure = 0;
+            if (n->call.callee && n->call.callee->tag == NODE_INDEX) {
+                /* e.g. counter["inc"]() — indexing into map, likely returns closure */
+                might_be_closure = 1;
+            }
+            /* variable calls might be closures if the var was assigned from a function
+               that returns closures */
+            if (n->call.callee && n->call.callee->tag == NODE_IDENT &&
+                lookup_fn_param_count(n->call.callee->ident.name) < 0 &&
+                !is_c_keyword(n->call.callee->ident.name)) {
+                /* not a known function — might be a closure variable */
+                might_be_closure = 1;
+            }
+            if (might_be_closure) {
+                sb_add(s, "xs_call(");
+                emit_expr(s, n->call.callee, depth);
+                sb_add(s, ", (xs_val[]){");
+                for (int i = 0; i < n->call.args.len; i++) {
+                    if (i) sb_add(s, ", ");
+                    emit_expr(s, n->call.args.items[i], depth);
+                }
+                sb_printf(s, "}, %d)", n->call.args.len);
+            } else {
+                emit_expr(s, n->call.callee, depth);
+                sb_addc(s, '(');
+                /* determine expected param count for padding */
+                int expected = -1;
+                if (n->call.callee && n->call.callee->tag == NODE_IDENT)
+                    expected = lookup_fn_param_count(n->call.callee->ident.name);
+                for (int i = 0; i < n->call.args.len; i++) {
+                    if (i) sb_add(s, ", ");
+                    emit_expr(s, n->call.args.items[i], depth);
+                }
+                /* pad missing args with XS_NULL for default params */
+                if (expected > n->call.args.len) {
+                    for (int i = n->call.args.len; i < expected; i++) {
+                        if (i) sb_add(s, ", ");
+                        sb_add(s, "(xs_val){.tag=4}");
+                    }
+                }
+                sb_addc(s, ')');
+            }
         }
         break;
     }
     case NODE_METHOD_CALL: {
-        /* method call -> function call with obj as first arg */
-        sb_add(s, n->method_call.method);
-        sb_addc(s, '(');
-        emit_expr(s, n->method_call.obj, depth);
-        for (int i = 0; i < n->method_call.args.len; i++) {
+        const char *meth = n->method_call.method;
+        /* check if receiver is a known actor variable */
+        const char *actor_type = NULL;
+        if (n->method_call.obj && n->method_call.obj->tag == NODE_IDENT)
+            actor_type = lookup_actor_var(n->method_call.obj->ident.name);
+        if (actor_type) {
+            /* actor method dispatch */
+            sb_printf(s, "%s_%s(&%s_state", actor_type, meth,
+                      n->method_call.obj->ident.name);
+            for (int i = 0; i < n->method_call.args.len; i++) {
+                sb_add(s, ", ");
+                emit_expr(s, n->method_call.args.items[i], depth);
+            }
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "send") == 0) {
+            sb_add(s, "xs_channel_send(");
+            emit_expr(s, n->method_call.obj, depth);
             sb_add(s, ", ");
-            emit_expr(s, n->method_call.args.items[i], depth);
+            if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "recv") == 0) {
+            sb_add(s, "xs_channel_recv(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "len") == 0) {
+            sb_add(s, "xs_len(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "is_empty") == 0) {
+            sb_add(s, "xs_channel_is_empty(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "is_full") == 0) {
+            sb_add(s, "xs_channel_is_full(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "push") == 0) {
+            sb_add(s, "xs_arr_push(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_add(s, ", ");
+            if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "sort") == 0) {
+            sb_add(s, "xs_arr_sort(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "has") == 0) {
+            sb_add(s, "xs_map_has(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_add(s, ", ");
+            if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+            else sb_add(s, "XS_NULL");
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "split") == 0) {
+            sb_add(s, "xs_str_split(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_add(s, ", ");
+            if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+            else sb_add(s, "XS_STR(\" \")");
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "upper") == 0) {
+            sb_add(s, "xs_str_upper(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "lower") == 0) {
+            sb_add(s, "xs_str_lower(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "join") == 0) {
+            sb_add(s, "xs_arr_join(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_add(s, ", ");
+            if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+            else sb_add(s, "XS_STR(\"\")");
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "parse_float") == 0) {
+            sb_add(s, "xs_str_parse_float(");
+            emit_expr(s, n->method_call.obj, depth);
+            sb_addc(s, ')');
+        } else if (strcmp(meth, "map") == 0 || strcmp(meth, "filter") == 0 ||
+                   strcmp(meth, "reduce") == 0 || strcmp(meth, "any") == 0 ||
+                   strcmp(meth, "all") == 0) {
+            /* array method with callback — use xs_call */
+            int mid = defer_label_counter++;
+            if (strcmp(meth, "map") == 0) {
+                sb_printf(s, "({ xs_val __am_%d = xs_array(0);\n", mid);
+                sb_indent(s, depth+1); sb_printf(s, "xs_arr *__src_%d = (xs_arr*)(", mid);
+                emit_expr(s, n->method_call.obj, depth); sb_printf(s, ").p;\n");
+                sb_indent(s, depth+1); sb_printf(s, "xs_val __fn_%d = ", mid);
+                if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+                sb_add(s, ";\n");
+                sb_indent(s, depth+1); sb_printf(s, "for (int __i=0; __src_%d && __i < __src_%d->len; __i++) {\n", mid, mid);
+                sb_indent(s, depth+2); sb_printf(s, "xs_val __a = __src_%d->items[__i];\n", mid);
+                sb_indent(s, depth+2); sb_printf(s, "xs_arr_push(__am_%d, xs_call(__fn_%d, &__a, 1));\n", mid, mid);
+                sb_indent(s, depth+1); sb_add(s, "}\n");
+                sb_indent(s, depth); sb_printf(s, "__am_%d; })", mid);
+            } else if (strcmp(meth, "filter") == 0) {
+                sb_printf(s, "({ xs_val __am_%d = xs_array(0);\n", mid);
+                sb_indent(s, depth+1); sb_printf(s, "xs_arr *__src_%d = (xs_arr*)(", mid);
+                emit_expr(s, n->method_call.obj, depth); sb_printf(s, ").p;\n");
+                sb_indent(s, depth+1); sb_printf(s, "xs_val __fn_%d = ", mid);
+                if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+                sb_add(s, ";\n");
+                sb_indent(s, depth+1); sb_printf(s, "for (int __i=0; __src_%d && __i < __src_%d->len; __i++) {\n", mid, mid);
+                sb_indent(s, depth+2); sb_printf(s, "xs_val __a = __src_%d->items[__i];\n", mid);
+                sb_indent(s, depth+2); sb_printf(s, "if (xs_truthy(xs_call(__fn_%d, &__a, 1))) xs_arr_push(__am_%d, __a);\n", mid, mid);
+                sb_indent(s, depth+1); sb_add(s, "}\n");
+                sb_indent(s, depth); sb_printf(s, "__am_%d; })", mid);
+            } else if (strcmp(meth, "reduce") == 0) {
+                sb_printf(s, "({ xs_val __acc_%d = ", mid);
+                if (n->method_call.args.len > 1) emit_expr(s, n->method_call.args.items[1], depth);
+                else sb_add(s, "XS_INT(0)");
+                sb_add(s, ";\n");
+                sb_indent(s, depth+1); sb_printf(s, "xs_arr *__src_%d = (xs_arr*)(", mid);
+                emit_expr(s, n->method_call.obj, depth); sb_printf(s, ").p;\n");
+                sb_indent(s, depth+1); sb_printf(s, "xs_val __fn_%d = ", mid);
+                if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+                sb_add(s, ";\n");
+                sb_indent(s, depth+1); sb_printf(s, "for (int __i=0; __src_%d && __i < __src_%d->len; __i++) {\n", mid, mid);
+                sb_indent(s, depth+2); sb_printf(s, "xs_val __ra[2] = { __acc_%d, __src_%d->items[__i] };\n", mid, mid);
+                sb_indent(s, depth+2); sb_printf(s, "__acc_%d = xs_call(__fn_%d, __ra, 2);\n", mid, mid);
+                sb_indent(s, depth+1); sb_add(s, "}\n");
+                sb_indent(s, depth); sb_printf(s, "__acc_%d; })", mid);
+            } else if (strcmp(meth, "any") == 0) {
+                sb_printf(s, "({ int __found_%d = 0;\n", mid);
+                sb_indent(s, depth+1); sb_printf(s, "xs_arr *__src_%d = (xs_arr*)(", mid);
+                emit_expr(s, n->method_call.obj, depth); sb_printf(s, ").p;\n");
+                sb_indent(s, depth+1); sb_printf(s, "xs_val __fn_%d = ", mid);
+                if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+                sb_add(s, ";\n");
+                sb_indent(s, depth+1); sb_printf(s, "for (int __i=0; __src_%d && __i < __src_%d->len; __i++) {\n", mid, mid);
+                sb_indent(s, depth+2); sb_printf(s, "xs_val __a = __src_%d->items[__i];\n", mid);
+                sb_indent(s, depth+2); sb_printf(s, "if (xs_truthy(xs_call(__fn_%d, &__a, 1))) { __found_%d = 1; break; }\n", mid, mid);
+                sb_indent(s, depth+1); sb_add(s, "}\n");
+                sb_indent(s, depth); sb_printf(s, "XS_BOOL(__found_%d); })", mid);
+            } else { /* all */
+                sb_printf(s, "({ int __all_%d = 1;\n", mid);
+                sb_indent(s, depth+1); sb_printf(s, "xs_arr *__src_%d = (xs_arr*)(", mid);
+                emit_expr(s, n->method_call.obj, depth); sb_printf(s, ").p;\n");
+                sb_indent(s, depth+1); sb_printf(s, "xs_val __fn_%d = ", mid);
+                if (n->method_call.args.len > 0) emit_expr(s, n->method_call.args.items[0], depth);
+                sb_add(s, ";\n");
+                sb_indent(s, depth+1); sb_printf(s, "for (int __i=0; __src_%d && __i < __src_%d->len; __i++) {\n", mid, mid);
+                sb_indent(s, depth+2); sb_printf(s, "xs_val __a = __src_%d->items[__i];\n", mid);
+                sb_indent(s, depth+2); sb_printf(s, "if (!xs_truthy(xs_call(__fn_%d, &__a, 1))) { __all_%d = 0; break; }\n", mid, mid);
+                sb_indent(s, depth+1); sb_add(s, "}\n");
+                sb_indent(s, depth); sb_printf(s, "XS_BOOL(__all_%d); })", mid);
+            }
+        } else {
+            /* check if receiver is a known struct with impl */
+            const char *stype = NULL;
+            if (n->method_call.obj && n->method_call.obj->tag == NODE_IDENT)
+                stype = lookup_struct_var(n->method_call.obj->ident.name);
+            if (stype) {
+                sb_printf(s, "%s_%s(", stype, meth);
+                emit_expr(s, n->method_call.obj, depth);
+                for (int i = 0; i < n->method_call.args.len; i++) {
+                    sb_add(s, ", ");
+                    emit_expr(s, n->method_call.args.items[i], depth);
+                }
+                sb_addc(s, ')');
+            } else if (n_impl_types == 1) {
+                /* single impl type — assume method belongs to it */
+                sb_printf(s, "%s_%s(", impl_types[0].type_name, meth);
+                emit_expr(s, n->method_call.obj, depth);
+                for (int i = 0; i < n->method_call.args.len; i++) {
+                    sb_add(s, ", ");
+                    emit_expr(s, n->method_call.args.items[i], depth);
+                }
+                sb_addc(s, ')');
+            } else {
+                /* generic: function-style call */
+                sb_add(s, meth);
+                sb_addc(s, '(');
+                emit_expr(s, n->method_call.obj, depth);
+                for (int i = 0; i < n->method_call.args.len; i++) {
+                    sb_add(s, ", ");
+                    emit_expr(s, n->method_call.args.items[i], depth);
+                }
+                sb_addc(s, ')');
+            }
         }
-        sb_addc(s, ')');
         break;
     }
     case NODE_INDEX:
@@ -339,13 +967,32 @@ static void emit_expr(SB *s, Node *n, int depth) {
         sb_addc(s, ')');
         break;
     case NODE_FIELD:
-        emit_expr(s, n->field.obj, depth);
-        sb_printf(s, ".%s", n->field.name);
+        if (n_actor_fields > 0 && in_method_body && n->field.obj &&
+            n->field.obj->tag == NODE_IDENT &&
+            strcmp(n->field.obj->ident.name, "self") == 0) {
+            /* actor method: self is a struct pointer */
+            sb_printf(s, "self->%s", n->field.name);
+        } else {
+            /* struct/map fields or tuple indices */
+            sb_printf(s, "xs_index(");
+            emit_expr(s, n->field.obj, depth);
+            /* check if field name is numeric (tuple index) */
+            if (n->field.name && n->field.name[0] >= '0' && n->field.name[0] <= '9')
+                sb_printf(s, ", XS_INT(%s))", n->field.name);
+            else
+                sb_printf(s, ", XS_STR(\"%s\"))", n->field.name);
+        }
         break;
     case NODE_SCOPE:
-        for (int i = 0; i < n->scope.nparts; i++) {
-            if (i) sb_add(s, "_");
-            sb_add(s, n->scope.parts[i]);
+        /* enum variant: Foo::Bar -> map with _variant and _type */
+        if (n->scope.nparts == 2) {
+            sb_printf(s, "xs_map(2, XS_STR(\"_type\"), XS_STR(\"%s\"), XS_STR(\"_variant\"), XS_STR(\"%s\"))",
+                      n->scope.parts[0], n->scope.parts[1]);
+        } else {
+            for (int i = 0; i < n->scope.nparts; i++) {
+                if (i) sb_add(s, "_");
+                sb_add(s, n->scope.parts[i]);
+            }
         }
         break;
     case NODE_ASSIGN:
@@ -363,24 +1010,86 @@ static void emit_expr(SB *s, Node *n, int depth) {
         sb_printf(s, ", %d)", n->range.inclusive ? 1 : 0);
         break;
     case NODE_LAMBDA: {
-        /* Lambda -> function pointer (limited in C; emit as named static function) */
-        int lbl = defer_label_counter++;
-        sb_printf(s, "__xs_lambda_%d", lbl);
+        int lid = register_lambda(n);
+        /* find the lambda info to check for captures */
+        LambdaInfo *linfo = NULL;
+        for (int i = 0; i < n_lambdas; i++)
+            if (lambdas[i].id == lid) { linfo = &lambdas[i]; break; }
+        if (linfo && linfo->n_captures > 0) {
+            /* create env: array of xs_val* pointers to captured variables */
+            sb_printf(s, "({ xs_val **__cenv_%d = (xs_val**)malloc(%d * sizeof(xs_val*));\n",
+                      lid, linfo->n_captures);
+            for (int ci = 0; ci < linfo->n_captures; ci++) {
+                sb_indent(s, depth + 1);
+                sb_printf(s, "__cenv_%d[%d] = __box_%s;\n", lid, ci, linfo->captures[ci]);
+            }
+            sb_indent(s, depth);
+            sb_printf(s, "xs_fn_new(__xs_lambda_%d, __cenv_%d); })", lid, lid);
+        } else {
+            sb_printf(s, "xs_fn_new(__xs_lambda_%d, NULL)", lid);
+        }
         break;
     }
-    case NODE_CAST:
-        sb_printf(s, "/* (%s) */ ", n->cast.type_name ? n->cast.type_name : "?");
-        emit_expr(s, n->cast.expr, depth);
-        break;
-    case NODE_STRUCT_INIT:
-        sb_printf(s, "((%s)", n->struct_init.path ? n->struct_init.path : "xs_val");
-        sb_add(s, "{ ");
-        for (int i = 0; i < n->struct_init.fields.len; i++) {
-            if (i) sb_add(s, ", ");
-            sb_printf(s, ".%s = ", n->struct_init.fields.items[i].key);
-            emit_expr(s, n->struct_init.fields.items[i].val, depth);
+    case NODE_CAST: {
+        const char *ty = n->cast.type_name ? n->cast.type_name : "?";
+        if (strcmp(ty, "float") == 0 || strcmp(ty, "f64") == 0 || strcmp(ty, "f32") == 0) {
+            sb_add(s, "XS_FLOAT(xs_to_f64(");
+            emit_expr(s, n->cast.expr, depth);
+            sb_add(s, "))");
+        } else if (strcmp(ty, "int") == 0 || strcmp(ty, "i32") == 0 || strcmp(ty, "i64") == 0) {
+            sb_add(s, "XS_INT((int64_t)xs_to_f64(");
+            emit_expr(s, n->cast.expr, depth);
+            sb_add(s, "))");
+        } else if (strcmp(ty, "str") == 0 || strcmp(ty, "string") == 0) {
+            sb_add(s, "XS_STR(strdup(xs_to_str(");
+            emit_expr(s, n->cast.expr, depth);
+            sb_add(s, ")))");
+        } else if (strcmp(ty, "bool") == 0) {
+            sb_add(s, "XS_BOOL(xs_truthy(");
+            emit_expr(s, n->cast.expr, depth);
+            sb_add(s, "))");
+        } else {
+            emit_expr(s, n->cast.expr, depth);
         }
-        sb_add(s, " })");
+        break;
+    }
+    case NODE_STRUCT_INIT:
+        if (n->struct_init.rest) {
+            /* spread: start with base, override fields */
+            int sid = defer_label_counter++;
+            sb_printf(s, "({ xs_val __si_%d = ", sid);
+            emit_expr(s, n->struct_init.rest, depth);
+            sb_add(s, ";\n");
+            /* copy the base map */
+            sb_indent(s, depth + 1);
+            sb_printf(s, "xs_val __sr_%d = xs_map(0);\n", sid);
+            sb_indent(s, depth + 1);
+            sb_printf(s, "if (__si_%d.tag == 6 && __si_%d.p) {\n", sid, sid);
+            sb_indent(s, depth + 2);
+            sb_printf(s, "xs_hmap *__m = (xs_hmap*)__si_%d.p;\n", sid);
+            sb_indent(s, depth + 2);
+            sb_printf(s, "for (int __k = 0; __k < __m->len; __k++)\n");
+            sb_indent(s, depth + 3);
+            sb_printf(s, "xs_map_put(&__sr_%d, XS_STR(__m->keys[__k]), __m->vals[__k]);\n", sid);
+            sb_indent(s, depth + 1);
+            sb_add(s, "}\n");
+            for (int i = 0; i < n->struct_init.fields.len; i++) {
+                sb_indent(s, depth + 1);
+                sb_printf(s, "xs_map_put(&__sr_%d, XS_STR(\"%s\"), ", sid, n->struct_init.fields.items[i].key);
+                emit_expr(s, n->struct_init.fields.items[i].val, depth);
+                sb_add(s, ");\n");
+            }
+            sb_indent(s, depth);
+            sb_printf(s, "__sr_%d; })", sid);
+        } else {
+            /* emit struct init as map */
+            sb_printf(s, "xs_map(%d", n->struct_init.fields.len);
+            for (int i = 0; i < n->struct_init.fields.len; i++) {
+                sb_printf(s, ", XS_STR(\"%s\"), ", n->struct_init.fields.items[i].key);
+                emit_expr(s, n->struct_init.fields.items[i].val, depth);
+            }
+            sb_addc(s, ')');
+        }
         break;
     case NODE_SPREAD:
         sb_add(s, "(fprintf(stderr, \"xs: spread operator not supported in C target\\n\"), exit(1), XS_NULL)");
@@ -483,66 +1192,57 @@ static void emit_expr(SB *s, Node *n, int depth) {
         break;
     }
     case NODE_AWAIT:
-        sb_add(s, "(fprintf(stderr, \"xs: await not supported in C target\\n\"), exit(1), XS_NULL)");
+        /* await in C target -> just evaluate the expression (single-threaded) */
+        if (n->await_.expr) emit_expr(s, n->await_.expr, depth);
+        else sb_add(s, "XS_NULL");
         break;
     case NODE_YIELD:
         sb_add(s, "(fprintf(stderr, \"xs: yield not supported in C target\\n\"), exit(1), XS_NULL)");
         break;
-    case NODE_SPAWN:
-        sb_add(s, "(fprintf(stderr, \"xs: spawn not supported in C target\\n\"), exit(1), XS_NULL)");
-        break;
-    case NODE_ACTOR_DECL: {
-        /* Emit a C struct for actor state + function pointers for methods */
-        const char *aname = n->actor_decl.name ? n->actor_decl.name : "Actor";
-        sb_printf(s, "({ /* actor %s */\n", aname);
-        sb_indent(s, depth + 1);
-        sb_printf(s, "typedef struct %s_state {\n", aname);
-        /* State fields */
-        for (int i = 0; i < n->actor_decl.state_fields.len; i++) {
-            sb_indent(s, depth + 2);
-            sb_printf(s, "xs_val %s;\n", n->actor_decl.state_fields.items[i].key);
-        }
-        /* Method function pointers */
-        for (int i = 0; i < n->actor_decl.methods.len; i++) {
-            Node *m = n->actor_decl.methods.items[i];
-            if (m->tag != NODE_FN_DECL) continue;
-            sb_indent(s, depth + 2);
-            sb_printf(s, "xs_val (*%s)", m->fn_decl.name ? m->fn_decl.name : "method");
-            sb_addc(s, '(');
-            sb_printf(s, "struct %s_state *self", aname);
-            for (int j = 0; j < m->fn_decl.params.len; j++) {
-                sb_add(s, ", xs_val ");
-                Param *p = &m->fn_decl.params.items[j];
-                sb_add(s, p->name ? p->name : "_");
+    case NODE_SPAWN: {
+        Node *se = n->spawn_.expr;
+        if (se && se->tag == NODE_IDENT && find_actor(se->ident.name)) {
+            /* spawn ActorName -> already handled as statement, return dummy */
+            sb_add(s, "XS_NULL /* spawn actor */");
+        } else if (se && se->tag == NODE_BLOCK) {
+            /* spawn { block } -> execute inline, return result map */
+            sb_add(s, "({ xs_val __spawn_result = XS_NULL;\n");
+            emit_block_body(s, se, depth + 1);
+            if (se->block.expr) {
+                sb_indent(s, depth + 1);
+                sb_add(s, "__spawn_result = ");
+                emit_expr(s, se->block.expr, depth + 1);
+                sb_add(s, ";\n");
             }
-            sb_add(s, ");\n");
+            sb_indent(s, depth + 1);
+            sb_add(s, "xs_val __spawn_map = xs_map(2, XS_STR(\"_result\"), __spawn_result, XS_STR(\"_status\"), XS_STR(\"done\"));\n");
+            sb_indent(s, depth + 1);
+            sb_add(s, "__spawn_map; })");
+        } else {
+            /* spawn <expr> -> just evaluate it */
+            if (se) emit_expr(s, se, depth);
+            else sb_add(s, "XS_NULL");
         }
-        sb_indent(s, depth + 1);
-        sb_printf(s, "} %s_state;\n", aname);
-        sb_indent(s, depth + 1);
-        sb_printf(s, "%s_state __actor = {", aname);
-        /* Initialize state fields */
-        for (int i = 0; i < n->actor_decl.state_fields.len; i++) {
-            if (i) sb_add(s, ", ");
-            if (n->actor_decl.state_fields.items[i].val)
-                emit_expr(s, n->actor_decl.state_fields.items[i].val, depth + 1);
-            else
-                sb_add(s, "XS_NULL");
-        }
-        sb_add(s, "};\n");
-        sb_indent(s, depth + 1);
-        sb_add(s, "(void)__actor;\n");
-        sb_indent(s, depth + 1);
-        sb_add(s, "XS_NULL;\n");
-        sb_indent(s, depth);
-        sb_add(s, "})");
         break;
     }
-    case NODE_SEND_EXPR:
-        sb_add(s, "/* send */ ");
-        emit_expr(s, n->send_expr.target, depth);
-        sb_add(s, " /* ! */ ");
-        emit_expr(s, n->send_expr.message, depth);
+    case NODE_ACTOR_DECL:
+        /* actor decl as expression: already emitted at file scope, just return null */
+        sb_add(s, "XS_NULL");
+        break;
+    case NODE_SEND_EXPR: {
+        /* actor ! message -> call handle method */
+        const char *atype = NULL;
+        if (n->send_expr.target && n->send_expr.target->tag == NODE_IDENT)
+            atype = lookup_actor_var(n->send_expr.target->ident.name);
+        if (atype) {
+            sb_printf(s, "%s_handle(&%s_state, ", atype, n->send_expr.target->ident.name);
+            emit_expr(s, n->send_expr.message, depth);
+            sb_addc(s, ')');
+        } else {
+            sb_add(s, "/* send */ XS_NULL");
+        }
+        break;
+    }
         break;
     case NODE_RESUME:
         sb_add(s, "(fprintf(stderr, \"xs: resume not supported in C target\\n\"), exit(1), XS_NULL)");
@@ -558,7 +1258,8 @@ static void emit_expr(SB *s, Node *n, int depth) {
         sb_add(s, "), XS_NULL)");
         break;
     case NODE_RETURN:
-        sb_add(s, "/* return expr */ XS_NULL");
+        if (n->ret.value) emit_expr(s, n->ret.value, depth);
+        else sb_add(s, "XS_NULL");
         break;
     case NODE_IF: {
         /* if as expression — ternary */
@@ -590,32 +1291,57 @@ static void emit_expr(SB *s, Node *n, int depth) {
         for (int i = 0; i < n->match.arms.len; i++) {
             MatchArm *arm = &n->match.arms.items[i];
             sb_indent(s, depth + 1);
-            if (i == 0) sb_add(s, "if (");
-            else sb_add(s, "else if (");
-            emit_pattern_cond(s, arm->pattern, "__subject", depth + 1);
             if (arm->guard) {
-                sb_add(s, " && xs_truthy(");
-                emit_expr(s, arm->guard, depth + 1);
-                sb_addc(s, ')');
-            }
-            sb_add(s, ") {\n");
-            emit_pattern_bindings(s, arm->pattern, "__subject", depth + 2);
-            if (arm->body && arm->body->tag == NODE_BLOCK) {
-                emit_block_body(s, arm->body, depth + 2);
-                if (arm->body->block.expr) {
-                    sb_indent(s, depth + 2);
+                if (i == 0) sb_add(s, "if (");
+                else sb_add(s, "else if (");
+                emit_pattern_cond(s, arm->pattern, "__subject", depth + 1);
+                sb_add(s, ") {\n");
+                emit_pattern_bindings(s, arm->pattern, "__subject", depth + 2);
+                sb_indent(s, depth + 2);
+                sb_add(s, "if (xs_truthy(");
+                emit_expr(s, arm->guard, depth + 2);
+                sb_add(s, ")) {\n");
+                if (arm->body && arm->body->tag == NODE_BLOCK) {
+                    emit_block_body(s, arm->body, depth + 3);
+                    if (arm->body->block.expr) {
+                        sb_indent(s, depth + 3);
+                        sb_add(s, "__match_result = ");
+                        emit_expr(s, arm->body->block.expr, depth + 3);
+                        sb_add(s, ";\n");
+                    }
+                } else if (arm->body) {
+                    sb_indent(s, depth + 3);
                     sb_add(s, "__match_result = ");
-                    emit_expr(s, arm->body->block.expr, depth + 2);
+                    emit_expr(s, arm->body, depth + 3);
                     sb_add(s, ";\n");
                 }
-            } else if (arm->body) {
                 sb_indent(s, depth + 2);
-                sb_add(s, "__match_result = ");
-                emit_expr(s, arm->body, depth + 2);
-                sb_add(s, ";\n");
+                sb_add(s, "}\n");
+                sb_indent(s, depth + 1);
+                sb_add(s, "}\n");
+            } else {
+                if (i == 0) sb_add(s, "if (");
+                else sb_add(s, "else if (");
+                emit_pattern_cond(s, arm->pattern, "__subject", depth + 1);
+                sb_add(s, ") {\n");
+                emit_pattern_bindings(s, arm->pattern, "__subject", depth + 2);
+                if (arm->body && arm->body->tag == NODE_BLOCK) {
+                    emit_block_body(s, arm->body, depth + 2);
+                    if (arm->body->block.expr) {
+                        sb_indent(s, depth + 2);
+                        sb_add(s, "__match_result = ");
+                        emit_expr(s, arm->body->block.expr, depth + 2);
+                        sb_add(s, ";\n");
+                    }
+                } else if (arm->body) {
+                    sb_indent(s, depth + 2);
+                    sb_add(s, "__match_result = ");
+                    emit_expr(s, arm->body, depth + 2);
+                    sb_add(s, ";\n");
+                }
+                sb_indent(s, depth + 1);
+                sb_add(s, "}\n");
             }
-            sb_indent(s, depth + 1);
-            sb_add(s, "}\n");
         }
         sb_indent(s, depth + 1);
         sb_add(s, "__match_result;\n");
@@ -682,7 +1408,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
         break;
     /* declaration nodes as expressions emit their identifier */
     case NODE_FN_DECL:
-        if (n->fn_decl.name) sb_add(s, n->fn_decl.name);
+        if (n->fn_decl.name) emit_safe_name(s, n->fn_decl.name);
         else sb_add(s, "XS_NULL");
         break;
     case NODE_STRUCT_DECL:
@@ -765,12 +1491,22 @@ static void emit_pattern_cond(SB *s, Node *pat, const char *subject, int depth) 
         emit_expr(s, pat->pat_expr.expr, depth);
         sb_addc(s, ')');
         break;
-    case NODE_PAT_GUARD:
-        emit_pattern_cond(s, pat->pat_guard.pattern, subject, depth);
-        sb_add(s, " && xs_truthy(");
-        emit_expr(s, pat->pat_guard.guard, depth);
-        sb_addc(s, ')');
+    case NODE_PAT_GUARD: {
+        /* for guards with ident patterns, bind first then check */
+        Node *inner = pat->pat_guard.pattern;
+        if (inner && inner->tag == NODE_PAT_IDENT) {
+            /* (({ xs_val name = subject; truthy(guard) })) */
+            sb_printf(s, "({ xs_val %s = %s; xs_truthy(", inner->pat_ident.name, subject);
+            emit_expr(s, pat->pat_guard.guard, depth);
+            sb_add(s, "); })");
+        } else {
+            emit_pattern_cond(s, inner, subject, depth);
+            sb_add(s, " && xs_truthy(");
+            emit_expr(s, pat->pat_guard.guard, depth);
+            sb_addc(s, ')');
+        }
         break;
+    }
     case NODE_PAT_CAPTURE:
         emit_pattern_cond(s, pat->pat_capture.pattern, subject, depth);
         break;
@@ -800,13 +1536,20 @@ static void emit_pattern_cond(SB *s, Node *pat, const char *subject, int depth) 
     }
     case NODE_PAT_ENUM: {
         if (pat->pat_enum.path) {
-            sb_printf(s, "(%s.tag != 4", subject);
+            /* check _variant matches — extract variant name from path like "Shape::Circle" */
+            const char *vname = pat->pat_enum.path;
+            if (vname) {
+                const char *sep = strstr(vname, "::");
+                if (sep) vname = sep + 2;
+            }
+            sb_printf(s, "(xs_eq(xs_index(%s, XS_STR(\"_variant\")), XS_STR(\"%s\"))",
+                      subject, vname ? vname : "?");
         } else {
             sb_add(s, "(1");
         }
         for (int i = 0; i < pat->pat_enum.args.len; i++) {
             char sub[256];
-            snprintf(sub, sizeof sub, "xs_index(%s, XS_INT(%d))", subject, i);
+            snprintf(sub, sizeof sub, "xs_index(%s, XS_STR(\"%d\"))", subject, i);
             sb_add(s, " && ");
             emit_pattern_cond(s, pat->pat_enum.args.items[i], sub, depth);
         }
@@ -867,6 +1610,13 @@ static void emit_pattern_bindings(SB *s, Node *pat, const char *subject, int dep
     case NODE_PAT_GUARD:
         emit_pattern_bindings(s, pat->pat_guard.pattern, subject, depth);
         break;
+    case NODE_PAT_ENUM:
+        for (int i = 0; i < pat->pat_enum.args.len; i++) {
+            char sub[256];
+            snprintf(sub, sizeof sub, "xs_index(%s, XS_STR(\"%d\"))", subject, i);
+            emit_pattern_bindings(s, pat->pat_enum.args.items[i], sub, depth);
+        }
+        break;
     default:
         break;
     }
@@ -883,9 +1633,20 @@ static void emit_block_body(SB *s, Node *block, int depth) {
         emit_stmt(s, block->block.stmts.items[i], depth);
     }
     if (block->block.expr) {
-        sb_indent(s, depth);
-        emit_expr(s, block->block.expr, depth);
-        sb_add(s, ";\n");
+        /* statement-like nodes should be emitted as statements */
+        if (block->block.expr->tag == NODE_SPAWN ||
+            block->block.expr->tag == NODE_NURSERY ||
+            block->block.expr->tag == NODE_FOR ||
+            block->block.expr->tag == NODE_WHILE ||
+            block->block.expr->tag == NODE_LOOP ||
+            block->block.expr->tag == NODE_IF ||
+            block->block.expr->tag == NODE_BLOCK) {
+            emit_stmt(s, block->block.expr, depth);
+        } else {
+            sb_indent(s, depth);
+            emit_expr(s, block->block.expr, depth);
+            sb_add(s, ";\n");
+        }
     }
 }
 
@@ -893,34 +1654,90 @@ static void emit_block_body(SB *s, Node *block, int depth) {
 static void emit_stmt(SB *s, Node *n, int depth) {
     if (!n) return;
     switch (n->tag) {
-    case NODE_LET:
-        sb_indent(s, depth);
-        sb_add(s, "const xs_val ");
-        if (n->let.name) sb_add(s, n->let.name);
-        else if (n->let.pattern) emit_expr(s, n->let.pattern, depth);
-        else sb_add(s, "_");
-        if (n->let.value) {
-            sb_add(s, " = ");
-            emit_expr(s, n->let.value, depth);
-        } else {
-            sb_add(s, " = XS_NULL");
+    case NODE_LET: {
+        /* check if captured by lambda (needs boxing for closures) */
+        if (n->let.name) {
+            int is_captured = 0;
+            for (int li = 0; li < n_lambdas && !is_captured; li++)
+                for (int ci = 0; ci < lambdas[li].n_captures; ci++)
+                    if (strcmp(lambdas[li].captures[ci], n->let.name) == 0)
+                        { is_captured = 1; break; }
+            if (is_captured) {
+                sb_indent(s, depth);
+                sb_printf(s, "xs_val *__box_%s = (xs_val*)malloc(sizeof(xs_val));\n", n->let.name);
+                sb_indent(s, depth);
+                sb_printf(s, "*__box_%s = ", n->let.name);
+                if (n->let.value) emit_expr(s, n->let.value, depth);
+                else sb_add(s, "XS_NULL");
+                sb_add(s, ";\n");
+                sb_indent(s, depth);
+                sb_printf(s, "#define %s (*__box_%s)\n", n->let.name, n->let.name);
+                break;
+            }
         }
-        sb_add(s, ";\n");
-        break;
-    case NODE_VAR:
-        sb_indent(s, depth);
-        sb_add(s, "xs_val ");
-        if (n->let.name) sb_add(s, n->let.name);
-        else if (n->let.pattern) emit_expr(s, n->let.pattern, depth);
-        else sb_add(s, "_");
-        if (n->let.value) {
-            sb_add(s, " = ");
-            emit_expr(s, n->let.value, depth);
-        } else {
-            sb_add(s, " = XS_NULL");
+        /* check for let x = spawn ActorName */
+        int is_actor_spawn = 0;
+        if (n->let.name && n->let.value && n->let.value->tag == NODE_SPAWN) {
+            Node *se = n->let.value->spawn_.expr;
+            if (se && se->tag == NODE_IDENT && find_actor(se->ident.name)) {
+                is_actor_spawn = 1;
+                sb_indent(s, depth);
+                sb_printf(s, "/* spawn actor %s */\n", se->ident.name);
+            }
         }
-        sb_add(s, ";\n");
+        if (!is_actor_spawn) {
+            sb_indent(s, depth);
+            sb_add(s, "const xs_val ");
+            if (n->let.name) sb_add(s, n->let.name);
+            else if (n->let.pattern) emit_expr(s, n->let.pattern, depth);
+            else sb_add(s, "_");
+            if (n->let.value) {
+                sb_add(s, " = ");
+                emit_expr(s, n->let.value, depth);
+            } else {
+                sb_add(s, " = XS_NULL");
+            }
+            sb_add(s, ";\n");
+        }
         break;
+    }
+    case NODE_VAR: {
+        /* check if this variable is captured by any lambda */
+        int is_captured = 0;
+        if (n->let.name) {
+            for (int li = 0; li < n_lambdas && !is_captured; li++)
+                for (int ci = 0; ci < lambdas[li].n_captures; ci++)
+                    if (strcmp(lambdas[li].captures[ci], n->let.name) == 0)
+                        { is_captured = 1; break; }
+        }
+        if (is_captured && n->let.name) {
+            /* heap-allocate for closure capture */
+            sb_indent(s, depth);
+            sb_printf(s, "xs_val *__box_%s = (xs_val*)malloc(sizeof(xs_val));\n", n->let.name);
+            sb_indent(s, depth);
+            sb_printf(s, "*__box_%s = ", n->let.name);
+            if (n->let.value) emit_expr(s, n->let.value, depth);
+            else sb_add(s, "XS_NULL");
+            sb_add(s, ";\n");
+            /* create a reference macro */
+            sb_indent(s, depth);
+            sb_printf(s, "#define %s (*__box_%s)\n", n->let.name, n->let.name);
+        } else {
+            sb_indent(s, depth);
+            sb_add(s, "xs_val ");
+            if (n->let.name) sb_add(s, n->let.name);
+            else if (n->let.pattern) emit_expr(s, n->let.pattern, depth);
+            else sb_add(s, "_");
+            if (n->let.value) {
+                sb_add(s, " = ");
+                emit_expr(s, n->let.value, depth);
+            } else {
+                sb_add(s, " = XS_NULL");
+            }
+            sb_add(s, ";\n");
+        }
+        break;
+    }
     case NODE_CONST:
         sb_indent(s, depth);
         sb_printf(s, "const xs_val %s", n->const_.name);
@@ -979,9 +1796,37 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         } else {
             sb_indent(s, depth);
             sb_add(s, "xs_val ");
-            sb_add(s, n->fn_decl.name);
+            emit_safe_name(s, n->fn_decl.name);
             emit_params_c(s, &n->fn_decl.params);
             sb_add(s, " {\n");
+            /* default param handling */
+            for (int p = 0; p < n->fn_decl.params.len; p++) {
+                Param *pm = &n->fn_decl.params.items[p];
+                if (pm->default_val && pm->name) {
+                    sb_indent(s, depth + 1);
+                    sb_printf(s, "if (%s.tag == 4) %s = ", pm->name, pm->name);
+                    emit_expr(s, pm->default_val, depth + 1);
+                    sb_add(s, ";\n");
+                }
+            }
+            /* box params that are captured by lambdas */
+            for (int p = 0; p < n->fn_decl.params.len; p++) {
+                const char *pname = n->fn_decl.params.items[p].name;
+                if (!pname) continue;
+                int is_captured = 0;
+                for (int li = 0; li < n_lambdas && !is_captured; li++)
+                    for (int ci = 0; ci < lambdas[li].n_captures; ci++)
+                        if (strcmp(lambdas[li].captures[ci], pname) == 0)
+                            { is_captured = 1; break; }
+                if (is_captured) {
+                    sb_indent(s, depth + 1);
+                    sb_printf(s, "xs_val *__box_%s = (xs_val*)malloc(sizeof(xs_val));\n", pname);
+                    sb_indent(s, depth + 1);
+                    sb_printf(s, "*__box_%s = %s;\n", pname, pname);
+                    sb_indent(s, depth + 1);
+                    sb_printf(s, "#define %s (*__box_%s)\n", pname, pname);
+                }
+            }
             /* push call stack frame */
             sb_indent(s, depth + 1);
             sb_printf(s, "xs_push_frame(\"%s\");\n", n->fn_decl.name);
@@ -1016,24 +1861,53 @@ static void emit_stmt(SB *s, Node *n, int depth) {
                     sb_indent(s, depth + 1);
                     sb_add(s, "return __retval;\n");
                 } else {
-                    emit_block_body(s, n->fn_decl.body, depth + 1);
+                    /* emit stmts */
+                    for (int bi = 0; bi < n->fn_decl.body->block.stmts.len; bi++)
+                        emit_stmt(s, n->fn_decl.body->block.stmts.items[bi], depth + 1);
+                    /* emit block.expr as return (implicit return) */
                     if (n->fn_decl.body->block.expr) {
-                        sb_indent(s, depth + 1);
-                        sb_add(s, "xs_run_defers(__saved_defer_top);\n");
-                        sb_indent(s, depth + 1);
-                        sb_add(s, "xs_pop_frame();\n");
-                        sb_indent(s, depth + 1);
-                        sb_add(s, "return ");
-                        emit_expr(s, n->fn_decl.body->block.expr, depth + 1);
-                        sb_add(s, ";\n");
-                    } else {
-                        sb_indent(s, depth + 1);
-                        sb_add(s, "xs_run_defers(__saved_defer_top);\n");
-                        sb_indent(s, depth + 1);
-                        sb_add(s, "xs_pop_frame();\n");
-                        sb_indent(s, depth + 1);
-                        sb_add(s, "return XS_NULL;\n");
+                        Node *be = n->fn_decl.body->block.expr;
+                        /* statement-like exprs need special handling */
+                        if (be->tag == NODE_IF || be->tag == NODE_MATCH ||
+                            be->tag == NODE_FOR || be->tag == NODE_WHILE ||
+                            be->tag == NODE_LOOP || be->tag == NODE_BLOCK) {
+                            emit_stmt(s, be, depth + 1);
+                        } else if (be->tag == NODE_RETURN) {
+                            emit_stmt(s, be, depth + 1);
+                        } else {
+                            sb_indent(s, depth + 1);
+                            sb_add(s, "xs_run_defers(__saved_defer_top);\n");
+                            sb_indent(s, depth + 1);
+                            sb_add(s, "xs_pop_frame();\n");
+                            sb_indent(s, depth + 1);
+                            sb_add(s, "return ");
+                            emit_expr(s, be, depth + 1);
+                            sb_add(s, ";\n");
+                        }
                     }
+                    sb_indent(s, depth + 1);
+                    sb_add(s, "xs_run_defers(__saved_defer_top);\n");
+                    sb_indent(s, depth + 1);
+                    sb_add(s, "xs_pop_frame();\n");
+                    sb_indent(s, depth + 1);
+                    sb_add(s, "return XS_NULL;\n");
+                }
+                /* undef any boxed captures (params + local vars) */
+                {
+                    /* collect all names that might have been #defined in this function */
+                    const char *seen[32]; int nseen = 0;
+                    for (int li = 0; li < n_lambdas; li++)
+                        for (int ci = 0; ci < lambdas[li].n_captures; ci++) {
+                            const char *cname = lambdas[li].captures[ci];
+                            int dup = 0;
+                            for (int k = 0; k < nseen; k++)
+                                if (strcmp(seen[k], cname) == 0) { dup = 1; break; }
+                            if (!dup && nseen < 32) {
+                                seen[nseen++] = cname;
+                                sb_indent(s, depth + 1);
+                                sb_printf(s, "#undef %s\n", cname);
+                            }
+                        }
                 }
             } else if (n->fn_decl.body) {
                 sb_indent(s, depth + 1);
@@ -1158,25 +2032,44 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         for (int i = 0; i < n->match.arms.len; i++) {
             MatchArm *arm = &n->match.arms.items[i];
             sb_indent(s, depth + 1);
-            if (i == 0) sb_add(s, "if (");
-            else sb_add(s, "else if (");
-            emit_pattern_cond(s, arm->pattern, "__subject", depth + 1);
             if (arm->guard) {
-                sb_add(s, " && xs_truthy(");
-                emit_expr(s, arm->guard, depth + 1);
-                sb_addc(s, ')');
-            }
-            sb_add(s, ") {\n");
-            emit_pattern_bindings(s, arm->pattern, "__subject", depth + 2);
-            if (arm->body && arm->body->tag == NODE_BLOCK) {
-                emit_block_body(s, arm->body, depth + 2);
-            } else if (arm->body) {
+                /* for guards, bind pattern vars first then check guard */
+                if (i == 0) sb_add(s, "if (");
+                else sb_add(s, "else if (");
+                emit_pattern_cond(s, arm->pattern, "__subject", depth + 1);
+                sb_add(s, ") {\n");
+                emit_pattern_bindings(s, arm->pattern, "__subject", depth + 2);
                 sb_indent(s, depth + 2);
-                emit_expr(s, arm->body, depth + 2);
-                sb_add(s, ";\n");
+                sb_add(s, "if (xs_truthy(");
+                emit_expr(s, arm->guard, depth + 2);
+                sb_add(s, ")) {\n");
+                if (arm->body && arm->body->tag == NODE_BLOCK)
+                    emit_block_body(s, arm->body, depth + 3);
+                else if (arm->body) {
+                    sb_indent(s, depth + 3);
+                    emit_expr(s, arm->body, depth + 3);
+                    sb_add(s, ";\n");
+                }
+                sb_indent(s, depth + 2);
+                sb_add(s, "}\n");
+                sb_indent(s, depth + 1);
+                sb_add(s, "}\n");
+            } else {
+                if (i == 0) sb_add(s, "if (");
+                else sb_add(s, "else if (");
+                emit_pattern_cond(s, arm->pattern, "__subject", depth + 1);
+                sb_add(s, ") {\n");
+                emit_pattern_bindings(s, arm->pattern, "__subject", depth + 2);
+                if (arm->body && arm->body->tag == NODE_BLOCK)
+                    emit_block_body(s, arm->body, depth + 2);
+                else if (arm->body) {
+                    sb_indent(s, depth + 2);
+                    emit_expr(s, arm->body, depth + 2);
+                    sb_add(s, ";\n");
+                }
+                sb_indent(s, depth + 1);
+                sb_add(s, "}\n");
             }
-            sb_indent(s, depth + 1);
-            sb_add(s, "}\n");
         }
         sb_indent(s, depth);
         sb_add(s, "}\n");
@@ -1402,34 +2295,35 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         for (int i = 0; i < n->impl_decl.members.len; i++) {
             Node *m = n->impl_decl.members.items[i];
             if (m && m->tag == NODE_FN_DECL && m->fn_decl.name) {
-                /* Rename method to TypeName_methodName */
+                /* Rename method to TypeName_methodName(xs_val self, ...) */
                 sb_indent(s, depth);
-                sb_add(s, "xs_val ");
-                sb_add(s, n->impl_decl.type_name);
-                sb_addc(s, '_');
-                sb_add(s, m->fn_decl.name);
-                sb_addc(s, '(');
-                /* First param is self */
-                sb_printf(s, "%s *self", n->impl_decl.type_name);
+                sb_printf(s, "static xs_val %s_%s(xs_val self",
+                          n->impl_decl.type_name, m->fn_decl.name);
                 for (int p = 0; p < m->fn_decl.params.len; p++) {
+                    const char *pname = m->fn_decl.params.items[p].name;
+                    if (pname && strcmp(pname, "self") == 0) continue;
                     sb_add(s, ", xs_val ");
-                    if (m->fn_decl.params.items[p].name)
-                        sb_add(s, m->fn_decl.params.items[p].name);
-                    else
-                        sb_add(s, "_");
+                    emit_safe_name(s, pname ? pname : "_");
                 }
                 sb_add(s, ") {\n");
+                in_method_body = 1;
                 if (m->fn_decl.body && m->fn_decl.body->tag == NODE_BLOCK) {
-                    emit_block_body(s, m->fn_decl.body, depth + 1);
+                    for (int si = 0; si < m->fn_decl.body->block.stmts.len; si++)
+                        emit_stmt(s, m->fn_decl.body->block.stmts.items[si], depth + 1);
                     if (m->fn_decl.body->block.expr) {
                         sb_indent(s, depth + 1);
                         sb_add(s, "return ");
                         emit_expr(s, m->fn_decl.body->block.expr, depth + 1);
                         sb_add(s, ";\n");
+                    } else {
+                        sb_indent(s, depth + 1);
+                        sb_add(s, "return XS_NULL;\n");
                     }
+                } else {
+                    sb_indent(s, depth + 1);
+                    sb_add(s, "return XS_NULL;\n");
                 }
-                sb_indent(s, depth + 1);
-                sb_add(s, "return XS_NULL;\n");
+                in_method_body = 0;
                 sb_indent(s, depth);
                 sb_add(s, "}\n\n");
             } else if (m) {
@@ -1460,12 +2354,21 @@ static void emit_stmt(SB *s, Node *n, int depth) {
     case NODE_IMPORT:
     case NODE_USE:
         sb_indent(s, depth);
-        sb_add(s, "#include \"");
-        for (int i = 0; i < n->import.nparts; i++) {
-            if (i) sb_addc(s, '/');
-            sb_add(s, n->import.path[i]);
+        if (n->tag == NODE_USE) {
+            sb_add(s, "/* use ");
+            for (int i = 0; i < n->import.nparts; i++) {
+                if (i) sb_addc(s, '/');
+                sb_add(s, n->import.path[i]);
+            }
+            sb_add(s, " (not supported in C target) */\n");
+        } else {
+            sb_add(s, "/* import ");
+            for (int i = 0; i < n->import.nparts; i++) {
+                if (i) sb_addc(s, '.');
+                sb_add(s, n->import.path[i]);
+            }
+            sb_add(s, " */\n");
         }
-        sb_add(s, ".h\"\n");
         break;
     case NODE_MODULE_DECL:
         sb_indent(s, depth);
@@ -1553,19 +2456,35 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         break;
     case NODE_ASSIGN:
         sb_indent(s, depth);
-        emit_expr(s, n->assign.target, depth);
-        sb_addc(s, ' ');
-        sb_add(s, n->assign.op);
-        sb_addc(s, ' ');
-        emit_expr(s, n->assign.value, depth);
-        sb_add(s, ";\n");
+        /* field assignment on non-self objects → xs_map_put
+           (actor self uses ->, impl self uses xs_index so also needs map_put) */
+        if (n->assign.target && n->assign.target->tag == NODE_FIELD &&
+            !(n_actor_fields > 0 && in_method_body &&
+              n->assign.target->field.obj &&
+              n->assign.target->field.obj->tag == NODE_IDENT &&
+              strcmp(n->assign.target->field.obj->ident.name, "self") == 0)) {
+            sb_add(s, "xs_map_put(&");
+            emit_expr(s, n->assign.target->field.obj, depth);
+            sb_printf(s, ", XS_STR(\"%s\"), ", n->assign.target->field.name);
+            emit_expr(s, n->assign.value, depth);
+            sb_add(s, ");\n");
+        } else {
+            emit_expr(s, n->assign.target, depth);
+            sb_addc(s, ' ');
+            sb_add(s, n->assign.op);
+            sb_addc(s, ' ');
+            emit_expr(s, n->assign.value, depth);
+            sb_add(s, ";\n");
+        }
         break;
     case NODE_EXPR_STMT: {
         Node *inner = n->expr_stmt.expr;
         if (inner && (inner->tag == NODE_IF || inner->tag == NODE_MATCH ||
                       inner->tag == NODE_FOR || inner->tag == NODE_WHILE ||
                       inner->tag == NODE_LOOP || inner->tag == NODE_TRY ||
-                      inner->tag == NODE_BLOCK)) {
+                      inner->tag == NODE_BLOCK || inner->tag == NODE_NURSERY ||
+                      inner->tag == NODE_SPAWN || inner->tag == NODE_ACTOR_DECL ||
+                      inner->tag == NODE_RETURN)) {
             emit_stmt(s, inner, depth);
         } else {
             sb_indent(s, depth);
@@ -1586,12 +2505,38 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         sb_indent(s, depth);
         sb_add(s, "}\n");
         break;
-    case NODE_SPAWN:
+    case NODE_SPAWN: {
+        /* spawn as statement */
+        Node *se = n->spawn_.expr;
+        if (se && se->tag == NODE_IDENT && find_actor(se->ident.name)) {
+            /* spawn ActorName -> not useful as a standalone stmt, skip */
+            sb_indent(s, depth);
+            sb_add(s, "/* spawn actor (see let binding) */\n");
+        } else if (se && se->tag == NODE_BLOCK) {
+            /* spawn { block } as statement -> just execute the block */
+            sb_indent(s, depth);
+            sb_add(s, "{\n");
+            emit_block_body(s, se, depth + 1);
+            sb_indent(s, depth);
+            sb_add(s, "}\n");
+        } else {
+            sb_indent(s, depth);
+            emit_expr(s, n, depth);
+            sb_add(s, ";\n");
+        }
+        break;
+    }
+    case NODE_ACTOR_DECL:
+        /* actor decl handled at file scope by emit_actor_decl */
+        break;
+    case NODE_SEND_EXPR:
+        sb_indent(s, depth);
+        emit_expr(s, n, depth);
+        sb_add(s, ";\n");
+        break;
     case NODE_PERFORM:
     case NODE_RESUME:
     case NODE_AWAIT:
-    case NODE_ACTOR_DECL:
-    case NODE_SEND_EXPR:
         sb_indent(s, depth);
         emit_expr(s, n, depth);
         sb_add(s, ";\n");
@@ -1616,6 +2561,7 @@ char *transpile_c(Node *program, const char *filename) {
     sb_add(&s, "/* Generated by xs transpile --target c */\n");
     if (filename) sb_printf(&s, "/* Source: %s */\n", filename);
     sb_add(&s,
+        "#define _POSIX_C_SOURCE 200809L\n"
         "#include <stdio.h>\n"
         "#include <stdlib.h>\n"
         "#include <string.h>\n"
@@ -1642,6 +2588,9 @@ char *transpile_c(Node *program, const char *filename) {
         "        default: return 0;\n"
         "    }\n"
         "}\n\n"
+        "/* forward declare heap types */\n"
+        "typedef struct { xs_val *items; int len; int cap; } xs_arr;\n"
+        "typedef struct { char **keys; xs_val *vals; int len; int cap; } xs_hmap;\n\n"
         "static int xs_eq(xs_val a, xs_val b) {\n"
         "    if (a.tag != b.tag) return 0;\n"
         "    switch (a.tag) {\n"
@@ -1650,6 +2599,13 @@ char *transpile_c(Node *program, const char *filename) {
         "        case 2: return a.s && b.s && strcmp(a.s, b.s) == 0;\n"
         "        case 3: return a.b == b.b;\n"
         "        case 4: return 1;\n"
+        "        case 5: if (a.p && b.p) {\n"
+        "            xs_arr *aa = (xs_arr*)a.p, *bb = (xs_arr*)b.p;\n"
+        "            if (aa->len != bb->len) return 0;\n"
+        "            for (int i = 0; i < aa->len; i++)\n"
+        "                if (!xs_eq(aa->items[i], bb->items[i])) return 0;\n"
+        "            return 1;\n"
+        "        } return a.p == b.p;\n"
         "        default: return 0;\n"
         "    }\n"
         "}\n\n"
@@ -1717,13 +2673,40 @@ char *transpile_c(Node *program, const char *filename) {
         "    memcpy(r, sa, la); memcpy(r + la, sb, lb); r[la + lb] = 0;\n"
         "    return XS_STR(r);\n"
         "}\n\n"
+        "static const char *xs_to_str(xs_val v);\n"
+        "/* uses rotating buffers to avoid clobbering on recursive/nested calls */\n"
         "static const char *xs_to_str(xs_val v) {\n"
-        "    static char buf[256];\n"
+        "    static char bufs[8][4096];\n"
+        "    static int buf_idx = 0;\n"
+        "    char *buf = bufs[buf_idx++ & 7];\n"
         "    switch (v.tag) {\n"
-        "        case 0: snprintf(buf, sizeof buf, \"%lld\", (long long)v.i); return buf;\n"
-        "        case 1: snprintf(buf, sizeof buf, \"%g\", v.f); return buf;\n"
+        "        case 0: snprintf(buf, 4096, \"%lld\", (long long)v.i); return buf;\n"
+        "        case 1: snprintf(buf, 4096, \"%g\", v.f); return buf;\n"
         "        case 2: return v.s ? v.s : \"null\";\n"
         "        case 3: return v.b ? \"true\" : \"false\";\n"
+        "        case 5: if (v.p) {\n"
+        "            xs_arr *a = (xs_arr*)v.p;\n"
+        "            int pos = 0;\n"
+        "            pos += snprintf(buf + pos, 4096 - pos, \"[\");\n"
+        "            for (int i = 0; i < a->len && pos < 4096 - 32; i++) {\n"
+        "                if (i) pos += snprintf(buf + pos, 4096 - pos, \", \");\n"
+        "                if (a->items[i].tag == 2) pos += snprintf(buf + pos, 4096 - pos, \"%s\", a->items[i].s ? a->items[i].s : \"null\");\n"
+        "                else pos += snprintf(buf + pos, 4096 - pos, \"%s\", xs_to_str(a->items[i]));\n"
+        "            }\n"
+        "            snprintf(buf + pos, 4096 - pos, \"]\");\n"
+        "            return buf;\n"
+        "        } return \"[]\";\n"
+        "        case 6: if (v.p) {\n"
+        "            xs_hmap *m = (xs_hmap*)v.p;\n"
+        "            int pos = 0;\n"
+        "            pos += snprintf(buf + pos, 4096 - pos, \"{\");\n"
+        "            for (int i = 0; i < m->len && pos < 4096 - 64; i++) {\n"
+        "                if (i) pos += snprintf(buf + pos, 4096 - pos, \", \");\n"
+        "                pos += snprintf(buf + pos, 4096 - pos, \"%s: %s\", m->keys[i], xs_to_str(m->vals[i]));\n"
+        "            }\n"
+        "            snprintf(buf + pos, 4096 - pos, \"}\");\n"
+        "            return buf;\n"
+        "        } return \"{}\";\n"
         "        default: return \"null\";\n"
         "    }\n"
         "}\n\n"
@@ -1734,7 +2717,7 @@ char *transpile_c(Node *program, const char *filename) {
         "    va_end(ap);\n"
         "    return XS_STR(strdup(buf));\n"
         "}\n\n"
-        "static void xs_println(xs_val v) {\n"
+        "static xs_val xs_println(xs_val v) {\n"
         "    switch(v.tag) {\n"
         "        case 0: printf(\"%lld\\n\", (long long)v.i); break;\n"
         "        case 1: printf(\"%g\\n\", v.f); break;\n"
@@ -1742,8 +2725,9 @@ char *transpile_c(Node *program, const char *filename) {
         "        case 3: printf(\"%s\\n\", v.b ? \"true\" : \"false\"); break;\n"
         "        default: printf(\"null\\n\");\n"
         "    }\n"
+        "    return (xs_val){.tag=4};\n"
         "}\n\n"
-        "static void xs_print(xs_val v) {\n"
+        "static xs_val xs_print(xs_val v) {\n"
         "    switch(v.tag) {\n"
         "        case 0: printf(\"%lld\", (long long)v.i); break;\n"
         "        case 1: printf(\"%g\", v.f); break;\n"
@@ -1751,6 +2735,7 @@ char *transpile_c(Node *program, const char *filename) {
         "        case 3: printf(\"%s\", v.b ? \"true\" : \"false\"); break;\n"
         "        default: printf(\"null\");\n"
         "    }\n"
+        "    return (xs_val){.tag=4};\n"
         "}\n\n"
         "/* exception handling runtime */\n"
         "#define XS_MAX_HANDLERS 64\n"
@@ -1832,9 +2817,7 @@ char *transpile_c(Node *program, const char *filename) {
         "}\n"
         "static xs_val xs_get_exception(void) { return __xs_exception; }\n"
         "static int xs_get_exception_tag(void) { return __xs_exception_tag; }\n\n"
-        "/* array/map heap types */\n"
-        "typedef struct { xs_val *items; int len; int cap; } xs_arr;\n"
-        "typedef struct { char **keys; xs_val *vals; int len; int cap; } xs_hmap;\n\n"
+        "/* array/map constructors */\n"
         "static xs_val xs_array(int n, ...) {\n"
         "    xs_arr *a = (xs_arr*)malloc(sizeof(xs_arr));\n"
         "    a->cap = n > 4 ? n : 4;\n"
@@ -1845,9 +2828,9 @@ char *transpile_c(Node *program, const char *filename) {
         "    va_end(ap);\n"
         "    return (xs_val){.tag=5, .p=a};\n"
         "}\n\n"
-        "static void xs_arr_push(xs_val *arr, xs_val v) {\n"
-        "    if (arr->tag != 5 || !arr->p) return;\n"
-        "    xs_arr *a = (xs_arr*)arr->p;\n"
+        "static void xs_arr_push(xs_val arr, xs_val v) {\n"
+        "    if (arr.tag != 5 || !arr.p) return;\n"
+        "    xs_arr *a = (xs_arr*)arr.p;\n"
         "    if (a->len >= a->cap) {\n"
         "        a->cap = a->cap * 2;\n"
         "        a->items = (xs_val*)realloc(a->items, sizeof(xs_val) * a->cap);\n"
@@ -1963,6 +2946,157 @@ char *transpile_c(Node *program, const char *filename) {
         "    m->vals[m->len] = val;\n"
         "    m->len++;\n"
         "}\n\n"
+        "static xs_val xs_map_has(xs_val map, xs_val key) {\n"
+        "    if (map.tag != 6 || !map.p) return XS_BOOL(0);\n"
+        "    xs_hmap *m = (xs_hmap*)map.p;\n"
+        "    const char *ks = key.tag == 2 ? key.s : xs_to_str(key);\n"
+        "    for (int i = 0; i < m->len; i++)\n"
+        "        if (strcmp(m->keys[i], ks) == 0) return XS_BOOL(1);\n"
+        "    return XS_BOOL(0);\n"
+        "}\n\n"
+        "static xs_val xs_len(xs_val v) {\n"
+        "    if (v.tag == 5 && v.p) return XS_INT(((xs_arr*)v.p)->len);\n"
+        "    if (v.tag == 6 && v.p) return XS_INT(((xs_hmap*)v.p)->len);\n"
+        "    if (v.tag == 2 && v.s) return XS_INT((int64_t)strlen(v.s));\n"
+        "    if (v.tag == 7 && v.p) return XS_INT(((xs_arr*)v.p)->len);\n"
+        "    return XS_INT(0);\n"
+        "}\n\n"
+        "/* channel runtime (single-threaded FIFO queue) */\n"
+        "static xs_val xs_channel_new(int max_cap) {\n"
+        "    xs_arr *ch = (xs_arr*)malloc(sizeof(xs_arr));\n"
+        "    ch->cap = max_cap > 0 ? max_cap : 16;\n"
+        "    ch->items = (xs_val*)malloc(sizeof(xs_val) * ch->cap);\n"
+        "    ch->len = 0;\n"
+        "    xs_val v; v.tag = 7; v.p = ch;\n"
+        "    /* store max_cap in a side field: use items[cap-1] trick? no, just embed */\n"
+        "    /* we'll use a wrapper struct instead */\n"
+        "    return v;\n"
+        "}\n\n"
+        "static int __xs_channel_max_caps[256];\n"
+        "static int __xs_channel_count = 0;\n\n"
+        "static void xs_channel_send(xs_val ch, xs_val v) {\n"
+        "    if (ch.tag != 7 || !ch.p) return;\n"
+        "    xs_arr *a = (xs_arr*)ch.p;\n"
+        "    if (a->len >= a->cap) {\n"
+        "        a->cap *= 2;\n"
+        "        a->items = (xs_val*)realloc(a->items, sizeof(xs_val) * a->cap);\n"
+        "    }\n"
+        "    a->items[a->len++] = v;\n"
+        "}\n\n"
+        "static xs_val xs_channel_recv(xs_val ch) {\n"
+        "    if (ch.tag != 7 || !ch.p) return XS_NULL;\n"
+        "    xs_arr *a = (xs_arr*)ch.p;\n"
+        "    if (a->len == 0) return XS_NULL;\n"
+        "    xs_val v = a->items[0];\n"
+        "    memmove(a->items, a->items + 1, sizeof(xs_val) * (a->len - 1));\n"
+        "    a->len--;\n"
+        "    return v;\n"
+        "}\n\n"
+        "static xs_val xs_channel_is_empty(xs_val ch) {\n"
+        "    if (ch.tag != 7 || !ch.p) return XS_BOOL(1);\n"
+        "    return XS_BOOL(((xs_arr*)ch.p)->len == 0);\n"
+        "}\n\n"
+        "static xs_val xs_channel_is_full(xs_val ch) {\n"
+        "    if (ch.tag != 7 || !ch.p) return XS_BOOL(0);\n"
+        "    xs_arr *a = (xs_arr*)ch.p;\n"
+        "    /* bounded channel: cap was set to max_cap */\n"
+        "    return XS_BOOL(a->len >= a->cap);\n"
+        "}\n\n"
+        "/* assert runtime */\n"
+        "static void xs_assert_eq(xs_val a, xs_val b) {\n"
+        "    if (!xs_eq(a, b)) {\n"
+        "        fprintf(stderr, \"assert_eq failed: %s != %s\\n\", xs_to_str(a), xs_to_str(b));\n"
+        "        exit(1);\n"
+        "    }\n"
+        "}\n\n"
+        "static void xs_assert(xs_val cond, xs_val msg) {\n"
+        "    if (!xs_truthy(cond)) {\n"
+        "        fprintf(stderr, \"assert failed: %s\\n\", msg.tag == 2 ? msg.s : xs_to_str(msg));\n"
+        "        exit(1);\n"
+        "    }\n"
+        "}\n\n"
+        "static double xs_to_f64(xs_val v) {\n"
+        "    if (v.tag == 1) return v.f;\n"
+        "    if (v.tag == 0) return (double)v.i;\n"
+        "    return 0.0;\n"
+        "}\n\n"
+        "static xs_val xs_type(xs_val v) {\n"
+        "    static const char *names[] = {\"int\",\"float\",\"str\",\"bool\",\"null\",\"array\",\"map\",\"channel\"};\n"
+        "    if (v.tag >= 0 && v.tag < 8) return XS_STR((char*)names[v.tag]);\n"
+        "    return XS_STR(\"unknown\");\n"
+        "}\n\n"
+        "/* closure runtime */\n"
+        "typedef struct { xs_val (*fn)(void*, xs_val*, int); void *env; } xs_fn_t;\n\n"
+        "static xs_val xs_fn_new(xs_val (*fn)(void*, xs_val*, int), void *env) {\n"
+        "    xs_fn_t *f = (xs_fn_t*)malloc(sizeof(xs_fn_t));\n"
+        "    f->fn = fn; f->env = env;\n"
+        "    return (xs_val){.tag=8, .p=f};\n"
+        "}\n\n"
+        "static xs_val xs_call(xs_val fn, xs_val *args, int argc) {\n"
+        "    if (fn.tag == 8 && fn.p) {\n"
+        "        xs_fn_t *f = (xs_fn_t*)fn.p;\n"
+        "        return f->fn(f->env, args, argc);\n"
+        "    }\n"
+        "    fprintf(stderr, \"xs: called non-function value\\n\"); return (xs_val){.tag=4};\n"
+        "}\n\n"
+        "/* string methods */\n"
+        "static xs_val xs_str_split(xs_val s, xs_val delim) {\n"
+        "    if (s.tag != 2 || !s.s) return xs_array(0);\n"
+        "    const char *d = (delim.tag == 2 && delim.s) ? delim.s : \" \";\n"
+        "    xs_val result = xs_array(0);\n"
+        "    char *copy = strdup(s.s);\n"
+        "    char *tok = strtok(copy, d);\n"
+        "    while (tok) { xs_arr_push(result, XS_STR(strdup(tok))); tok = strtok(NULL, d); }\n"
+        "    free(copy);\n"
+        "    return result;\n"
+        "}\n\n"
+        "static xs_val xs_str_upper(xs_val s) {\n"
+        "    if (s.tag != 2 || !s.s) return s;\n"
+        "    char *r = strdup(s.s);\n"
+        "    for (char *p = r; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;\n"
+        "    return XS_STR(r);\n"
+        "}\n\n"
+        "static xs_val xs_str_lower(xs_val s) {\n"
+        "    if (s.tag != 2 || !s.s) return s;\n"
+        "    char *r = strdup(s.s);\n"
+        "    for (char *p = r; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;\n"
+        "    return XS_STR(r);\n"
+        "}\n\n"
+        "static xs_val xs_arr_join(xs_val arr, xs_val sep) {\n"
+        "    if (arr.tag != 5 || !arr.p) return XS_STR(strdup(\"\"));\n"
+        "    xs_arr *a = (xs_arr*)arr.p;\n"
+        "    const char *s = (sep.tag == 2 && sep.s) ? sep.s : \"\";\n"
+        "    int total = 0;\n"
+        "    for (int i = 0; i < a->len; i++) {\n"
+        "        if (i) total += (int)strlen(s);\n"
+        "        total += (int)strlen(xs_to_str(a->items[i]));\n"
+        "    }\n"
+        "    char *buf = (char*)malloc(total + 1); buf[0] = 0;\n"
+        "    for (int i = 0; i < a->len; i++) {\n"
+        "        if (i) strcat(buf, s);\n"
+        "        strcat(buf, xs_to_str(a->items[i]));\n"
+        "    }\n"
+        "    return XS_STR(buf);\n"
+        "}\n\n"
+        "static xs_val xs_str_parse_float(xs_val s) {\n"
+        "    if (s.tag != 2 || !s.s) return (xs_val){.tag=4};\n"
+        "    return XS_FLOAT(atof(s.s));\n"
+        "}\n\n"
+        "static xs_val xs_is_type(xs_val v, const char *t) {\n"
+        "    static const char *tags[] = {\"int\",\"float\",\"str\",\"bool\",\"null\",\"array\",\"map\"};\n"
+        "    if (v.tag >= 0 && v.tag < 7 && strcmp(tags[v.tag], t) == 0) return XS_BOOL(1);\n"
+        "    return XS_BOOL(0);\n"
+        "}\n\n"
+        "/* array sort */\n"
+        "static int __xs_sort_cmp(const void *a, const void *b) {\n"
+        "    return xs_cmp(*(const xs_val*)a, *(const xs_val*)b);\n"
+        "}\n"
+        "static xs_val xs_arr_sort(xs_val arr) {\n"
+        "    if (arr.tag != 5 || !arr.p) return arr;\n"
+        "    xs_arr *a = (xs_arr*)arr.p;\n"
+        "    qsort(a->items, a->len, sizeof(xs_val), __xs_sort_cmp);\n"
+        "    return arr;\n"
+        "}\n\n"
     );
 
     if (!program) {
@@ -1970,12 +3104,263 @@ char *transpile_c(Node *program, const char *filename) {
         return s.data;
     }
 
+    /* pre-scan for actor declarations, impl types, and variable bindings */
+    n_actors = 0;
+    n_actor_vars = 0;
+    n_impl_types = 0;
+    n_struct_vars = 0;
+    n_lambdas = 0;
+    lambda_counter = 0;
+    n_fn_sigs = 0;
+    prescan_stmts(program);
+    scan_lambdas(program);
+
+    /* emit actor struct + method definitions at file scope */
     if (program->tag == NODE_PROGRAM) {
         for (int i = 0; i < program->program.stmts.len; i++) {
-            emit_stmt(&s, program->program.stmts.items[i], 0);
+            Node *st = program->program.stmts.items[i];
+            if (!st) continue;
+            /* find actor decl nodes (may be wrapped in EXPR_STMT) */
+            Node *ad = NULL;
+            if (st->tag == NODE_ACTOR_DECL) ad = st;
+            else if (st->tag == NODE_EXPR_STMT && st->expr_stmt.expr &&
+                     st->expr_stmt.expr->tag == NODE_ACTOR_DECL)
+                ad = st->expr_stmt.expr;
+            if (!ad || !ad->actor_decl.name) continue;
+
+            const char *aname = ad->actor_decl.name;
+            /* emit state struct */
+            sb_printf(&s, "typedef struct %s_state {\n", aname);
+            for (int j = 0; j < ad->actor_decl.state_fields.len; j++)
+                sb_printf(&s, "    xs_val %s;\n", ad->actor_decl.state_fields.items[j].key);
+            sb_printf(&s, "} %s_state;\n\n", aname);
+
+            /* set up actor field list for identifier rewriting */
+            const char *field_names[64];
+            int nfields = 0;
+            for (int j = 0; j < ad->actor_decl.state_fields.len && nfields < 64; j++)
+                field_names[nfields++] = ad->actor_decl.state_fields.items[j].key;
+            actor_fields = field_names;
+            n_actor_fields = nfields;
+
+            /* emit methods as static functions */
+            for (int j = 0; j < ad->actor_decl.methods.len; j++) {
+                Node *m = ad->actor_decl.methods.items[j];
+                if (!m || m->tag != NODE_FN_DECL || !m->fn_decl.name) continue;
+                sb_printf(&s, "static xs_val %s_%s(%s_state *self",
+                          aname, m->fn_decl.name, aname);
+                for (int p = 0; p < m->fn_decl.params.len; p++) {
+                    sb_add(&s, ", xs_val ");
+                    sb_add(&s, m->fn_decl.params.items[p].name ?
+                           m->fn_decl.params.items[p].name : "_");
+                }
+                sb_add(&s, ") {\n");
+                in_method_body = 1;
+                if (m->fn_decl.body && m->fn_decl.body->tag == NODE_BLOCK) {
+                    /* emit statements but not the trailing expression (it becomes return) */
+                    for (int si = 0; si < m->fn_decl.body->block.stmts.len; si++)
+                        emit_stmt(&s, m->fn_decl.body->block.stmts.items[si], 1);
+                    if (m->fn_decl.body->block.expr) {
+                        sb_add(&s, "    return ");
+                        emit_expr(&s, m->fn_decl.body->block.expr, 1);
+                        sb_add(&s, ";\n");
+                    } else {
+                        sb_add(&s, "    return XS_NULL;\n");
+                    }
+                } else {
+                    sb_add(&s, "    return XS_NULL;\n");
+                }
+                in_method_body = 0;
+                sb_add(&s, "}\n\n");
+            }
+
+            /* clear actor field rewriting */
+            actor_fields = NULL;
+            n_actor_fields = 0;
         }
+
+        /* emit async functions at file scope */
+        for (int i = 0; i < program->program.stmts.len; i++) {
+            Node *st = program->program.stmts.items[i];
+            if (!st || st->tag != NODE_FN_DECL) continue;
+            if (is_main_fn(st)) continue;
+            if (st->fn_decl.is_async) {
+                /* async fn -> regular function at file scope */
+                sb_add(&s, "static xs_val ");
+                sb_add(&s, st->fn_decl.name);
+                emit_params_c(&s, &st->fn_decl.params);
+                sb_add(&s, " {\n");
+                if (st->fn_decl.body && st->fn_decl.body->tag == NODE_BLOCK) {
+                    emit_block_body(&s, st->fn_decl.body, 1);
+                    if (st->fn_decl.body->block.expr) {
+                        sb_add(&s, "    return ");
+                        emit_expr(&s, st->fn_decl.body->block.expr, 1);
+                        sb_add(&s, ";\n");
+                    }
+                }
+                sb_add(&s, "    return XS_NULL;\n}\n\n");
+            }
+        }
+    }
+
+    /* emit lambda static functions */
+    for (int li = 0; li < n_lambdas; li++) {
+        Node *ln = lambdas[li].node;
+        if (!ln || ln->tag != NODE_LAMBDA) continue;
+        sb_printf(&s, "static xs_val __xs_lambda_%d(void *__env, xs_val *__args, int __argc) {\n", lambdas[li].id);
+        /* unpack captures from __env */
+        if (lambdas[li].n_captures > 0) {
+            sb_printf(&s, "    xs_val **__captures = (xs_val **)__env;\n");
+            for (int ci = 0; ci < lambdas[li].n_captures; ci++) {
+                /* create local reference that reads/writes through the pointer */
+                /* using a macro-like approach: #define name (*__captures[i]) */
+            }
+        }
+        /* bind params from __args */
+        for (int p = 0; p < ln->lambda.params.len; p++) {
+            const char *pname = ln->lambda.params.items[p].name;
+            /* skip if this param name shadows a capture */
+            int is_capture = 0;
+            for (int ci = 0; ci < lambdas[li].n_captures; ci++)
+                if (strcmp(lambdas[li].captures[ci], pname ? pname : "") == 0) is_capture = 1;
+            if (!is_capture)
+                sb_printf(&s, "    xs_val %s = __argc > %d ? __args[%d] : (xs_val){.tag=4};\n",
+                          pname ? pname : "_", p, p);
+        }
+        /* emit capture defines — active for entire function body */
+        for (int ci = 0; ci < lambdas[li].n_captures; ci++)
+            sb_printf(&s, "    #define %s (*__captures[%d])\n", lambdas[li].captures[ci], ci);
+        if (ln->lambda.body && ln->lambda.body->tag == NODE_BLOCK) {
+            for (int si = 0; si < ln->lambda.body->block.stmts.len; si++)
+                emit_stmt(&s, ln->lambda.body->block.stmts.items[si], 1);
+            if (ln->lambda.body->block.expr) {
+                sb_add(&s, "    return ");
+                emit_expr(&s, ln->lambda.body->block.expr, 1);
+                sb_add(&s, ";\n");
+            } else {
+                sb_add(&s, "    return (xs_val){.tag=4};\n");
+            }
+        } else if (ln->lambda.body) {
+            sb_add(&s, "    return ");
+            emit_expr(&s, ln->lambda.body, 1);
+            sb_add(&s, ";\n");
+        } else {
+            sb_add(&s, "    return (xs_val){.tag=4};\n");
+        }
+        for (int ci = 0; ci < lambdas[li].n_captures; ci++)
+            sb_printf(&s, "    #undef %s\n", lambdas[li].captures[ci]);
+        sb_add(&s, "}\n\n");
+    }
+
+    /* check if top-level code needs wrapping in main() */
+    int needs_main_wrap = 0;
+    if (program->tag == NODE_PROGRAM) {
+        int has_explicit_main = 0;
+        for (int i = 0; i < program->program.stmts.len; i++) {
+            Node *st = program->program.stmts.items[i];
+            if (st && st->tag == NODE_FN_DECL && is_main_fn(st))
+                has_explicit_main = 1;
+        }
+        /* if there are non-declaration statements and no main, wrap */
+        if (!has_explicit_main) {
+            for (int i = 0; i < program->program.stmts.len; i++) {
+                Node *st = program->program.stmts.items[i];
+                if (!st) continue;
+                if (st->tag != NODE_FN_DECL && st->tag != NODE_STRUCT_DECL &&
+                    st->tag != NODE_ENUM_DECL && st->tag != NODE_CLASS_DECL &&
+                    st->tag != NODE_TRAIT_DECL && st->tag != NODE_IMPL_DECL &&
+                    st->tag != NODE_TYPE_ALIAS && st->tag != NODE_IMPORT &&
+                    st->tag != NODE_USE && st->tag != NODE_MODULE_DECL &&
+                    st->tag != NODE_EFFECT_DECL) {
+                    /* skip actor decls (already emitted) */
+                    if (st->tag == NODE_ACTOR_DECL) continue;
+                    if (st->tag == NODE_EXPR_STMT && st->expr_stmt.expr &&
+                        st->expr_stmt.expr->tag == NODE_ACTOR_DECL) continue;
+                    needs_main_wrap = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (needs_main_wrap) {
+        /* emit file-scope declarations first */
+        if (program->tag == NODE_PROGRAM) {
+            for (int i = 0; i < program->program.stmts.len; i++) {
+                Node *st = program->program.stmts.items[i];
+                if (!st) continue;
+                if (st->tag == NODE_FN_DECL && !is_main_fn(st) && !st->fn_decl.is_async)
+                    emit_stmt(&s, st, 0);
+                else if (st->tag == NODE_STRUCT_DECL || st->tag == NODE_ENUM_DECL ||
+                         st->tag == NODE_CLASS_DECL || st->tag == NODE_TRAIT_DECL ||
+                         st->tag == NODE_IMPL_DECL || st->tag == NODE_TYPE_ALIAS ||
+                         st->tag == NODE_IMPORT || st->tag == NODE_USE ||
+                         st->tag == NODE_MODULE_DECL || st->tag == NODE_EFFECT_DECL)
+                    emit_stmt(&s, st, 0);
+            }
+        }
+
+        sb_add(&s, "int main(int argc, char **argv) {\n");
+        sb_add(&s, "    (void)argc; (void)argv;\n");
+
+        /* emit actor state initializations */
+        for (int i = 0; i < n_actor_vars; i++) {
+            sb_printf(&s, "    %s_state %s_state;\n",
+                      actor_vars[i].actor_name, actor_vars[i].var_name);
+            /* find the actor decl and init fields */
+            if (program->tag == NODE_PROGRAM) {
+                for (int j = 0; j < program->program.stmts.len; j++) {
+                    Node *st = program->program.stmts.items[j];
+                    Node *ad = NULL;
+                    if (st && st->tag == NODE_ACTOR_DECL) ad = st;
+                    else if (st && st->tag == NODE_EXPR_STMT && st->expr_stmt.expr &&
+                             st->expr_stmt.expr->tag == NODE_ACTOR_DECL)
+                        ad = st->expr_stmt.expr;
+                    if (!ad || !ad->actor_decl.name) continue;
+                    if (strcmp(ad->actor_decl.name, actor_vars[i].actor_name) != 0) continue;
+                    for (int k = 0; k < ad->actor_decl.state_fields.len; k++) {
+                        sb_printf(&s, "    %s_state.%s = ",
+                                  actor_vars[i].var_name,
+                                  ad->actor_decl.state_fields.items[k].key);
+                        if (ad->actor_decl.state_fields.items[k].val)
+                            emit_expr(&s, ad->actor_decl.state_fields.items[k].val, 1);
+                        else
+                            sb_add(&s, "XS_NULL");
+                        sb_add(&s, ";\n");
+                    }
+                    break;
+                }
+            }
+        }
+
+        /* emit non-declaration statements */
+        if (program->tag == NODE_PROGRAM) {
+            for (int i = 0; i < program->program.stmts.len; i++) {
+                Node *st = program->program.stmts.items[i];
+                if (!st) continue;
+                /* skip declarations already emitted */
+                if (st->tag == NODE_FN_DECL || st->tag == NODE_STRUCT_DECL ||
+                    st->tag == NODE_ENUM_DECL || st->tag == NODE_CLASS_DECL ||
+                    st->tag == NODE_TRAIT_DECL || st->tag == NODE_IMPL_DECL ||
+                    st->tag == NODE_TYPE_ALIAS || st->tag == NODE_IMPORT ||
+                    st->tag == NODE_USE || st->tag == NODE_MODULE_DECL ||
+                    st->tag == NODE_EFFECT_DECL || st->tag == NODE_ACTOR_DECL)
+                    continue;
+                if (st->tag == NODE_EXPR_STMT && st->expr_stmt.expr &&
+                    st->expr_stmt.expr->tag == NODE_ACTOR_DECL)
+                    continue;
+                emit_stmt(&s, st, 1);
+            }
+        }
+
+        sb_add(&s, "    return 0;\n}\n");
     } else {
-        emit_stmt(&s, program, 0);
+        if (program->tag == NODE_PROGRAM) {
+            for (int i = 0; i < program->program.stmts.len; i++)
+                emit_stmt(&s, program->program.stmts.items[i], 0);
+        } else {
+            emit_stmt(&s, program, 0);
+        }
     }
 
     return s.data;
