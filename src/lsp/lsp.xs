@@ -4,8 +4,21 @@ import process
 import os
 
 var XS_BIN = "xs"
-let TMP_CHECK = io.temp_file(".xs")
-let TMP_FMT = io.temp_file(".xs")
+
+fn get_tmp_dir() {
+    import os
+    let t = os.env("TEMP")
+    if t != null { return t }
+    let t2 = os.env("TMP")
+    if t2 != null { return t2 }
+    let t3 = os.env("TMPDIR")
+    if t3 != null { return t3 }
+    return "/tmp"
+}
+
+let TMP_DIR = get_tmp_dir()
+let TMP_CHECK = "{TMP_DIR}/xs_lsp_check_{os.pid()}.xs"
+let TMP_FMT = "{TMP_DIR}/xs_lsp_fmt_{os.pid()}.xs"
 
 -- document store: uri -> #{"text": ..., "version": ...}
 var documents = #{}
