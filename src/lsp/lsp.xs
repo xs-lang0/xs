@@ -502,6 +502,37 @@ let MODULE_MEMBERS = #{
     "reactive": ["signal", "derived", "effect", "batch"]
 }
 
+let TYPE_TO_METHODS = #{
+    "str": STRING_METHODS,
+    "string": STRING_METHODS,
+    "int": NUMBER_METHODS,
+    "float": NUMBER_METHODS,
+    "number": NUMBER_METHODS,
+    "array": ARRAY_METHODS,
+    "map": MAP_METHODS,
+    "bool": ["to_str"],
+    "tuple": ["len", "first", "last", "contains", "index_of", "slice"]
+}
+
+fn resolve_type_methods(text, var_name) {
+    let syms = extract_symbols(text)
+    for s in syms {
+        if s["name"] == var_name {
+            let detail = s["detail"]
+            -- look for type annotation in detail like "let x: str" or "param name: str"
+            let colon = detail.index_of(":")
+            if colon >= 0 {
+                let type_name = detail.slice(colon + 1, detail.len()).trim()
+                if TYPE_TO_METHODS.has(type_name) {
+                    let methods = TYPE_TO_METHODS[type_name]
+                    return methods.map(fn(m) { make_completion(m, 2, "{type_name} method") })
+                }
+            }
+        }
+    }
+    return null
+}
+
 fn dot_completions(text, line, col) {
     let line_text = get_line(text, line)
     if col <= 0 { return null }
@@ -533,11 +564,21 @@ fn dot_completions(text, line, col) {
     if last_ch == "\}" {
         return MAP_METHODS.map(fn(m) { make_completion(m, 2, "map method") })
     }
+    if last_ch == ")" {
+        let tuple_methods = ["len", "first", "last", "contains", "index_of", "slice"]
+        return tuple_methods.map(fn(m) { make_completion(m, 2, "tuple method") })
+    }
     if last_ch >= "0" and last_ch <= "9" {
         return NUMBER_METHODS.map(fn(m) { make_completion(m, 2, "number method") })
     }
 
-    -- unknown identifier, offer all methods
+    -- check if identifier has a known type from symbols
+    if is_ident_char(last_ch) {
+        let type_methods = resolve_type_methods(text, word_before)
+        if type_methods != null { return type_methods }
+    }
+
+    -- unknown type, offer all methods
     return STRING_METHODS.map(fn(m) { make_completion(m, 2, "str") })
         .concat(ARRAY_METHODS.map(fn(m) { make_completion(m, 2, "array") }))
         .concat(MAP_METHODS.map(fn(m) { make_completion(m, 2, "map") }))
