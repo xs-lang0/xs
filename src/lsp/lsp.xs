@@ -194,8 +194,11 @@ fn run_diagnostics(uri) {
     }
 
     io.write_file(TMP_CHECK, text)
+    log("checking {TMP_CHECK} with {XS_BIN}")
     let res = process.run("{XS_BIN} --no-color --check {TMP_CHECK} 2>&1")
     let output = strip_ansi(res["stdout"])
+    log("check result: code={res["code"]} output_len={output.len()}")
+    if output.len() > 0 { log("output: {output.slice(0, if output.len() > 200 { 200 } else { output.len() })}") }
     var diags = []
 
     let lines = output.split("\n")
