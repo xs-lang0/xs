@@ -878,7 +878,7 @@ fn handle_message(msg) {
             let ctx = params.get("context", #{})
             let trigger = ctx.get("triggerCharacter", "")
             let items = handle_completion(td["uri"], pos["line"], pos["character"], trigger)
-            send_response(id, items)
+            send_response(id, #{"isIncomplete": false, "items": items})
         }
         "textDocument/signatureHelp" => {
             let td = params["textDocument"]
