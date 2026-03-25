@@ -939,6 +939,10 @@ int main(int argc, char **argv) {
 #endif
 
         } else if (strcmp(sub, "dap") == 0) {
+#ifdef _WIN32
+            _setmode(_fileno(stdin), 0x8000);
+            _setmode(_fileno(stdout), 0x8000);
+#endif
 #ifdef XSC_ENABLE_DAP
             int rc = dap_run();
             cache_free(g_sema_cache);
@@ -949,6 +953,10 @@ int main(int argc, char **argv) {
 #endif
 
         } else if (strcmp(sub, "lsp") == 0) {
+#ifdef _WIN32
+            _setmode(_fileno(stdin), 0x8000);
+            _setmode(_fileno(stdout), 0x8000);
+#endif
             /* try XS-based LSP first, fall back to C */
             {
                 static char lsp_path[PATH_MAX];
@@ -1630,6 +1638,10 @@ int main(int argc, char **argv) {
 #endif
         }
         else if (strcmp(argv[i], "--lsp")      == 0) {
+#ifdef _WIN32
+            _setmode(_fileno(stdin), 0x8000);
+            _setmode(_fileno(stdout), 0x8000);
+#endif
 #ifdef XSC_ENABLE_LSP
             int rc = lsp_run(); cache_free(g_sema_cache); return rc;
 #else
@@ -1637,6 +1649,10 @@ int main(int argc, char **argv) {
 #endif
         }
         else if (strcmp(argv[i], "--dap")      == 0) {
+#ifdef _WIN32
+            _setmode(_fileno(stdin), 0x8000);
+            _setmode(_fileno(stdout), 0x8000);
+#endif
 #ifdef XSC_ENABLE_DAP
             int rc = dap_run(); cache_free(g_sema_cache); return rc;
 #else
