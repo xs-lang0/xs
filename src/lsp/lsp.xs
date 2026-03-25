@@ -4,8 +4,8 @@ import process
 import os
 
 var XS_BIN = "xs"
-let TMP_CHECK = "/tmp/xs_lsp_{os.pid()}.xs"
-let TMP_FMT = "/tmp/xs_lsp_fmt_{os.pid()}.xs"
+let TMP_CHECK = io.temp_file(".xs")
+let TMP_FMT = io.temp_file(".xs")
 
 -- document store: uri -> #{"text": ..., "version": ...}
 var documents = #{}
@@ -843,14 +843,14 @@ fn handle_message(msg) {
             let td = params["textDocument"]
             doc_open(td["uri"], td["text"], td.get("version", 0))
             log("opened {td["uri"]}")
-            run_diagnostics(td["uri"])
+            try { run_diagnostics(td["uri"]) } catch e { log("diagnostics error: {e}") }
         }
         "textDocument/didChange" => {
             let td = params["textDocument"]
             let changes = params["contentChanges"]
             if changes.len() > 0 {
                 doc_update(td["uri"], changes[0]["text"], td.get("version", 0))
-                run_diagnostics(td["uri"])
+                try { run_diagnostics(td["uri"]) } catch e { log("diagnostics error: {e}") }
             }
         }
         "textDocument/didClose" => {
@@ -864,7 +864,7 @@ fn handle_message(msg) {
         }
         "textDocument/didSave" => {
             let td = params["textDocument"]
-            run_diagnostics(td["uri"])
+            try { run_diagnostics(td["uri"]) } catch e { log("diagnostics error: {e}") }
         }
         "textDocument/hover" => {
             let td = params["textDocument"]

@@ -2308,6 +2308,8 @@ static Value *native_io_temp_file(Interp *ig, Value **a, int n) {
     const char *suffix = (n>=1 && a[0]->tag==XS_STR) ? a[0]->s : "";
     const char *prefix = (n>=2 && a[1]->tag==XS_STR) ? a[1]->s : "xs_tmp_";
     const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir) tmpdir = getenv("TEMP");
+    if (!tmpdir) tmpdir = getenv("TMP");
     if (!tmpdir) tmpdir = "/tmp";
     char tmpl[4096];
     snprintf(tmpl,sizeof(tmpl),"%s/%sXXXXXX%s",tmpdir,prefix,suffix);
@@ -2336,6 +2338,8 @@ static Value *native_io_temp_dir(Interp *ig, Value **a, int n) {
     (void)ig;
     const char *prefix = (n>=1 && a[0]->tag==XS_STR) ? a[0]->s : "xs_tmpd_";
     const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir) tmpdir = getenv("TEMP");
+    if (!tmpdir) tmpdir = getenv("TMP");
     if (!tmpdir) tmpdir = "/tmp";
     char tmpl[4096];
     snprintf(tmpl,sizeof(tmpl),"%s/%sXXXXXX",tmpdir,prefix);
