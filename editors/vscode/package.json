@@ -1,0 +1,43 @@
+{
+  "name": "xs-lang",
+  "displayName": "XS Language",
+  "description": "Language support for XS",
+  "publisher": "xs-lang0",
+  "version": "0.3.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "activationEvents": ["onLanguage:xs"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "xs",
+        "aliases": ["XS", "xs"],
+        "extensions": [".xs"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "xs",
+        "scopeName": "source.xs",
+        "path": "./syntaxes/xs.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "XS",
+      "properties": {
+        "xs.path": {
+          "type": "string",
+          "default": "xs",
+          "description": "Path to the XS binary"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

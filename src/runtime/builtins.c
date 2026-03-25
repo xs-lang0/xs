@@ -15,6 +15,14 @@
 #include <math.h>
 #include <time.h>
 #include <ctype.h>
+
+static int    g_xs_argc = 0;
+static char **g_xs_argv = NULL;
+
+void xs_set_argv(int argc, char **argv) {
+    g_xs_argc = argc;
+    g_xs_argv = argv;
+}
 #ifndef __MINGW32__
 #  include <unistd.h>
 #  include <sys/select.h>
@@ -2249,6 +2257,23 @@ static Value *native_io_stdin_readline(Interp *ig, Value **a, int n) {
     }
     return xs_str(buf);
 }
+static Value *native_io_stdin_read_n(Interp *ig, Value **a, int n) {
+    (void)ig;
+    if (n < 1 || a[0]->tag != XS_INT) return value_incref(XS_NULL_VAL);
+    int64_t count = a[0]->i;
+    if (count <= 0) return xs_str("");
+    char *buf = xs_malloc((size_t)count + 1);
+    size_t total = 0;
+    while (total < (size_t)count) {
+        size_t r = fread(buf + total, 1, (size_t)count - total, stdin);
+        if (r == 0) break;
+        total += r;
+    }
+    buf[total] = '\0';
+    Value *v = xs_str(buf);
+    free(buf);
+    return v;
+}
 static Value *native_io_is_file(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1||a[0]->tag!=XS_STR) return value_incref(XS_FALSE_VAL);
@@ -2283,6 +2308,8 @@ static Value *native_io_temp_file(Interp *ig, Value **a, int n) {
     const char *suffix = (n>=1 && a[0]->tag==XS_STR) ? a[0]->s : "";
     const char *prefix = (n>=2 && a[1]->tag==XS_STR) ? a[1]->s : "xs_tmp_";
     const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir) tmpdir = getenv("TEMP");
+    if (!tmpdir) tmpdir = getenv("TMP");
     if (!tmpdir) tmpdir = "/tmp";
     char tmpl[4096];
     snprintf(tmpl,sizeof(tmpl),"%s/%sXXXXXX%s",tmpdir,prefix,suffix);
@@ -2311,6 +2338,8 @@ static Value *native_io_temp_dir(Interp *ig, Value **a, int n) {
     (void)ig;
     const char *prefix = (n>=1 && a[0]->tag==XS_STR) ? a[0]->s : "xs_tmpd_";
     const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir) tmpdir = getenv("TEMP");
+    if (!tmpdir) tmpdir = getenv("TMP");
     if (!tmpdir) tmpdir = "/tmp";
     char tmpl[4096];
     snprintf(tmpl,sizeof(tmpl),"%s/%sXXXXXX",tmpdir,prefix);
@@ -2454,6 +2483,7 @@ Value *make_io_module(void) {
     /* stdin */
     map_set(m,"stdin_read",     xs_native(native_io_stdin_read));
     map_set(m,"stdin_readline", xs_native(native_io_stdin_readline));
+    map_set(m,"stdin_read_n",  xs_native(native_io_stdin_read_n));
     map_set(m,"stdin_lines",    xs_native(native_io_stdin_lines));
     /* keyboard */
     map_set(m,"wait_for_key",   xs_native(native_io_wait_for_key));
@@ -2613,8 +2643,10 @@ static Value *native_os_env_all(Interp *ig, Value **a, int n) {
 
 Value *make_os_module(Interp *ig) {
     XSMap *m=map_new();
-    /* args - empty array for now */
-    Value *args_arr=xs_array_new(); map_set(m,"args",args_arr); value_decref(args_arr);
+    Value *args_arr=xs_array_new();
+    for (int ai = 0; ai < g_xs_argc; ai++)
+        array_push(args_arr->arr, xs_str(g_xs_argv[ai]));
+    map_set(m,"args",args_arr); value_decref(args_arr);
     map_set(m,"cwd",      xs_native(native_os_cwd));
     map_set(m,"chdir",    xs_native(native_os_chdir));
     map_set(m,"home",     xs_native(native_os_home));
