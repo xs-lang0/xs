@@ -16,13 +16,13 @@ Complete reference for the XS programming language. Covers syntax, semantics, th
 #!/usr/bin/env xs   -- shebang line, silently ignored by the interpreter
 ```
 
-Block comments nest properly, so you can comment out code that already contains block comments.
+Block comments nest properly, so you can comment out code that already has block comments in it.
 
 ---
 
 ## Statement Separators
 
-Newlines and semicolons both separate statements. Use whichever reads better.
+Newlines and semicolons both separate statements.
 
 ```xs
 let a = 1
@@ -30,11 +30,10 @@ let b = 2
 
 let x = 10; let y = 20; let z = x + y
 
--- semicolons work everywhere
+-- semicolons inside blocks
 if true { let p = 1; let q = 2 }
-fn add(a, b) { return a + b }; fn mul(a, b) { return a * b }
 
--- extra semicolons are harmless
+-- extra semicolons are fine
 let val = 42;;;
 ```
 
@@ -43,18 +42,18 @@ let val = 42;;;
 ## Variables
 
 ```xs
-let x = 42          -- immutable binding (cannot reassign)
-var y = "hello"     -- mutable binding (can reassign with =)
-const MAX = 100     -- compile-time constant (same as let at runtime)
+let x = 42          -- immutable binding
+var y = "hello"     -- mutable binding (can reassign)
+const MAX = 100     -- constant (same as let at runtime, signals intent)
 
 -- with type annotations
-let x: int = 42
+let count: int = 42
 var name: str = "XS"
 ```
 
-`let` bindings cannot be reassigned — that's a semantic error. Use `var` when you need mutation.
+`let` bindings cannot be reassigned — that's a runtime error. `var` bindings can be reassigned with `=`.
 
-`const` is identical to `let` at runtime. It signals intent that this is a compile-time constant.
+`const` is identical to `let` at runtime.
 
 ### Destructuring
 
@@ -77,7 +76,7 @@ let Point { x: px, y: py } = Point { x: 100, y: 200 }
 println(px)              -- 100
 ```
 
-Array destructuring requires an exact length match (no rest pattern in `let`).
+Array destructuring requires an exact length match.
 
 ---
 
@@ -117,10 +116,10 @@ println(type(0..5))      -- range
 0xFF                -- hexadecimal (255)
 0b1010              -- binary (10)
 0o17                -- octal (15)
-1_000_000           -- underscores as visual separators (1000000)
+1_000_000           -- underscores as separators (1000000)
 
 3.14                -- float
-1e3                 -- scientific notation (1000.0, type is float)
+1e3                 -- scientific notation (1000.0)
 2.5e-3              -- 0.0025
 ```
 
@@ -131,15 +130,13 @@ let max = 9223372036854775807   -- 2^63 - 1
 let wrapped = max + 1           -- -9223372036854775808
 ```
 
-Floats are IEEE 754 double-precision.
-
-There is no bigint type.
+Floats are IEEE 754 double-precision. There is no bigint type.
 
 ---
 
 ## Strings
 
-Both single and double quotes create strings. Both support interpolation and escape sequences — they're identical.
+Both single and double quotes create strings. They're identical — both support interpolation and escape sequences.
 
 ```xs
 let s = "hello world"
@@ -148,16 +145,16 @@ let s2 = 'also a string'
 
 ### Interpolation
 
-Expressions inside `{braces}` are evaluated and embedded in the string.
+Expressions inside `{braces}` are evaluated and embedded.
 
 ```xs
 let name = "XS"
-println("Hello, {name}!")        -- Hello, XS!
-println("{1 + 2} is three")      -- 3 is three
+println("Hello, {name}!")         -- Hello, XS!
+println("{1 + 2} is three")       -- 3 is three
 println("{name} has {len(name)} chars")  -- XS has 2 chars
 
 -- escape the brace to get a literal {
-println("\{not interpolated}")   -- {not interpolated}
+println("\{not interpolated}")    -- {not interpolated}
 ```
 
 ### Escape Sequences
@@ -192,6 +189,8 @@ let text = """
 println(text.contains("\n"))     -- true
 ```
 
+Triple-quoted strings still support interpolation. Use `r"""..."""` for raw triple-quoted.
+
 ### Raw Strings
 
 No escape processing, no interpolation.
@@ -204,8 +203,6 @@ let x = 42
 let raw = r"no {x} here \n raw"
 println(raw)                     -- no {x} here \n raw
 ```
-
-Triple-quoted raw strings also work: `r"""..."""`
 
 ### Color Strings
 
@@ -231,12 +228,12 @@ A reset sequence is appended automatically.
 | 256-color | `fg256,N`, `bg256,N` (N = 0–255) |
 | Truecolor | `rgb,R,G,B`, `bgrgb,R,G,B` |
 
-Color strings support interpolation in the text: `c"bold;x = {x}"`.
+Color strings support interpolation in the text part: `c"bold;x = {x}"`.
 
 ### String Concatenation
 
 ```xs
-"hello" ++ " world"             -- "hello world"
+"hello" ++ " world"              -- "hello world"
 "a" ++ "b" ++ "c"               -- "abc"
 ```
 
@@ -265,6 +262,7 @@ Color strings support interpolation in the text: `c"bold;x = {x}"`.
 "hello".find("ll")               -- 2  (index, or -1)
 "hello".rfind("l")               -- 3  (last occurrence)
 "hi hi hi".count("hi")           -- 3
+"hello".index_of("ll")           -- 2  (alias for find)
 
 -- transformations
 "a,b,c".split(",")               -- ["a", "b", "c"]
@@ -291,6 +289,7 @@ Color strings support interpolation in the text: `c"bold;x = {x}"`.
 "abc".is_alpha()                 -- true
 "abc123".is_alnum()              -- true
 "ABC".is_upper()                 -- true
+"abc".is_lower()                 -- true
 "".is_empty()                    -- true
 
 -- parsing
@@ -303,14 +302,14 @@ Color strings support interpolation in the text: `c"bold;x = {x}"`.
 "hello".char_at(1)               -- "e"
 
 -- truncation (total length including suffix)
-"long text".truncate(7, "...")    -- "long..."
-"long text".truncate(4)           -- "l..."
+"long text".truncate(7, "...")   -- "long..."
+"long text".truncate(4)          -- "l..."
 
 -- joining (called on the separator)
 ",".join(["a", "b", "c"])        -- "a,b,c"
 ```
 
-**`.len()` counts bytes**, not Unicode codepoints. For ASCII strings byte count equals character count.
+**`.len()` counts bytes**, not Unicode codepoints. For ASCII strings, byte count equals character count.
 
 **String indexing (`s[i]`)** returns a one-byte string. Negative indices count from the end. Out-of-bounds returns `null`.
 
@@ -337,7 +336,7 @@ arr[-1]                          -- 5 (negative indexing)
 arr.push(6)                      -- append element
 arr.pop()                        -- remove and return last element
 arr.reverse()                    -- reverse in-place
-arr.sort()                       -- sort in-place
+arr.sort()                       -- sort in-place (ascending)
 arr.sort(fn(a, b) { a - b })    -- sort with comparator
 
 -- non-mutating methods (return new values)
@@ -361,9 +360,9 @@ arr.map(fn(x) { x * 2 })
 arr.filter(fn(x) { x > 2 })
 arr.reduce(fn(acc, x) { acc + x }, 0)   -- reduce(fn, init)
 arr.fold(0, fn(acc, x) { acc + x })     -- fold(init, fn)
-arr.find(fn(x) { x > 3 })
-arr.any(fn(x) { x > 4 })
-arr.all(fn(x) { x > 0 })
+arr.find(fn(x) { x > 3 })       -- first match or null
+arr.any(fn(x) { x > 4 })        -- true if any element matches
+arr.all(fn(x) { x > 0 })        -- true if all elements match
 
 -- aggregates
 arr.sum()                        -- sum of numbers
@@ -379,7 +378,7 @@ let combined = [...arr, 6, 7, 8]
 
 **`reduce` vs `fold`:** Same operation, different argument order. `reduce(fn, init)` puts the function first; `fold(init, fn)` puts the initial value first.
 
-**Mutating vs non-mutating:** `.reverse()` and `.sort()` modify in-place and return `null`. `.reversed()` and `.sorted()` return a new array, leaving the original alone.
+**Mutating vs non-mutating:** `.reverse()` and `.sort()` modify in-place and return `null`. `.reversed()` and `.sorted()` return a new array.
 
 ---
 
@@ -413,7 +412,7 @@ m.entries()                      -- [("name", "Alice"), ("age", 30)]
 m.len()                          -- 2
 m.has("name")                    -- true
 m.get("name", "default")         -- "Alice" (with fallback)
-m.set("key", "val")              -- set entry
+m.set("key", "val")              -- set entry, returns null
 m.delete("key")                  -- remove entry
 m.merge(other_map)               -- merge (right side wins on key conflict)
 
@@ -436,7 +435,7 @@ println(type(r))                 -- range
 println(len(r))                  -- 5
 
 -- iteration
-for i in 0..5 { print("{i} ") } -- 0 1 2 3 4
+for i in 0..5 { print("{i} ") }  -- 0 1 2 3 4
 for i in 1..=3 { print("{i} ") } -- 1 2 3
 
 -- membership test
@@ -487,7 +486,7 @@ println(5 <=> 5)                 -- 0
 | `or` / `\|\|` | Logical OR (short-circuit) |
 | `not` / `!` | Logical NOT |
 
-Short-circuit: `and` stops if the left side is falsy; `or` stops if the left side is truthy. The result is the last evaluated operand (not necessarily `true`/`false`).
+Short-circuit: `and` stops if the left side is falsy; `or` stops if the left side is truthy. The result is the last evaluated operand, not necessarily `true`/`false`.
 
 ### Bitwise
 
@@ -521,6 +520,9 @@ Returns the left side if it's not null, otherwise the right side.
 fn double(x) { x * 2 }
 let r = 5 |> double              -- 10
 let n = [1, 2, 3] |> len        -- 3
+
+-- chain multiple
+let result = 5 |> double |> double  -- 20
 ```
 
 `x |> f` passes `x` as the first argument to `f`.
@@ -546,7 +548,7 @@ println(3.14 is float)           -- true
 println(42 is float)             -- false
 
 -- as: type cast
-println(42 as float)             -- 42 (type is now float)
+println(42 as float)             -- 42.0
 println(42 as str)               -- "42"
 println("42" as int)             -- 42
 ```
@@ -577,25 +579,80 @@ x %= 4                           -- 2
 
 Also available: `&=`, `|=`, `^=`, `<<=`, `>>=`.
 
-### Precedence (lowest to highest)
+### Operator Precedence (lowest to highest)
 
-1. `=` `+=` `-=` ... (assignment)
+1. `=` `+=` `-=` `*=` `/=` `%=` etc. (assignment)
 2. `|>` (pipe)
 3. `??` `..` `..=` (null coalesce, range)
 4. `||` `or` (logical or)
 5. `&&` `and` (logical and)
 6. `==` `!=` (equality)
-7. `<` `>` `<=` `>=` `is` `in` (comparison)
+7. `<` `>` `<=` `>=` `is` `in` `not in` (comparison, membership)
 8. `|` (bitwise or)
 9. `^` (bitwise xor)
 10. `&` (bitwise and)
-11. `<<` `>>` (shift)
-12. `+` `-` `++` (add, subtract, concat)
-13. `*` `/` `%` (multiply, divide, modulo)
+11. `<<` `>>` (bit shift)
+12. `+` `-` `++` (add, subtract, string concat)
+13. `*` `/` `%` `//` (multiply, divide, modulo, floor div)
 14. `**` (power, right-associative)
 15. `as` (cast)
 16. Unary: `-` `!` `not` `~` (prefix)
-17. Postfix: `?` `.` `?.` `[]` `()` (access, call)
+17. Postfix: `?.` `.` `[]` `()` (access, call)
+
+---
+
+## Numeric Behavior
+
+### Integer Division — Truncation Toward Zero
+
+```xs
+println(7 / 3)                   -- 2
+println((-7) / 3)                -- -2  (toward zero, NOT -3)
+println(7 / (-3))                -- -2
+```
+
+### Floor Division — Toward Negative Infinity
+
+```xs
+println(5 // 2)                  -- 2
+println(-7 // 2)                 -- -4
+println(7 // -2)                 -- -4
+```
+
+### Modulo — Sign Follows Dividend
+
+```xs
+println(7 % 3)                   -- 1
+println((-7) % 3)                -- -1  (sign follows -7)
+println(7 % (-3))                -- 1   (sign follows 7)
+```
+
+### Division by Zero
+
+Division by zero doesn't crash — it prints a runtime warning to stderr and returns `null`:
+
+```xs
+let d = 10 / 0                   -- prints warning, d is null
+let m = 10 % 0                   -- prints warning, m is null
+```
+
+### Float-to-Integer Conversion
+
+`int(x)` truncates toward zero (not rounding):
+
+```xs
+println(int(3.9))                -- 3
+println(int(-3.9))               -- -3
+```
+
+### Integer Overflow
+
+Wraps silently via two's complement:
+
+```xs
+let max = 9223372036854775807    -- 2^63 - 1
+println(max + 1)                 -- -9223372036854775808
+```
 
 ---
 
@@ -613,9 +670,9 @@ if x > 0 {
 }
 ```
 
-Braces are always required. No braceless `if`.
+Braces are always required.
 
-`if` works as an expression (returns the value of the taken branch):
+`if` works as an expression — it returns the value of the taken branch:
 
 ```xs
 let sign = if x > 0 { "+" } else { "-" }
@@ -699,7 +756,7 @@ println(result)                  -- 42
 
 ### Labeled Loops
 
-Break or continue an outer loop from a nested one.
+Break or continue an outer loop from an inner one.
 
 ```xs
 outer: for i in range(5) {
@@ -744,7 +801,7 @@ match data {
     _        => "wildcard"
 }
 
--- variable binding
+-- variable binding (captures the value)
 match data {
     x => "bound: {x}"
 }
@@ -788,14 +845,14 @@ match arr {
     []              => "empty"
 }
 
--- @ capture (bind and match simultaneously)
+-- @ capture (bind and test simultaneously)
 match value {
     n @ 1..=10 => "small: {n}"
     n          => "other: {n}"
 }
 ```
 
-The semantic analyzer checks that `match` covers all possible cases. A wildcard `_` or variable pattern makes any match exhaustive.
+The semantic analyzer checks that `match` covers all cases. A wildcard `_` or variable pattern makes a match exhaustive.
 
 ---
 
@@ -856,11 +913,11 @@ fn main() {
 }
 ```
 
-**Implicit return** only applies to the last expression in the block. For early returns or conditional returns, use `return` explicitly.
+**Implicit return** applies to the last expression in the block. For early returns, use `return` explicitly.
 
 ### Closures
 
-Closures capture variables **by reference** through an environment chain. Mutations inside a closure are visible to the outer scope and vice versa.
+Closures capture variables by reference through an environment chain. Mutations inside a closure are visible to the outer scope.
 
 ```xs
 fn make_counter() {
@@ -893,7 +950,7 @@ println(outer())                 -- 30
 
 ### Mutual Recursion
 
-Functions can call each other before both are fully defined (they're hoisted):
+Functions can call each other before both are defined (they're hoisted):
 
 ```xs
 fn is_even(n) {
@@ -942,7 +999,7 @@ let p = Point { x: 10, y: 20 }
 println(p.x)                    -- 10
 println(p.y)                    -- 20
 
--- with type annotations
+-- with type annotations on fields
 struct Config {
     host: str,
     port: int,
@@ -967,9 +1024,11 @@ impl Point {
 
 let p = Point { x: 3, y: 4 }
 println(p.distance())           -- 5
+let moved = p.translate(1, 0)
+println(moved.x)                -- 4
 ```
 
-Methods that access instance data must take `self` as the first parameter. `self` is not implicit.
+Methods that access instance data take `self` as the first parameter. `self` is not implicit.
 
 ### Spread / Update Syntax
 
@@ -1055,6 +1114,26 @@ impl Describe for Car {
 
 let d = Dog { name: "Rex", breed: "Shepherd" }
 println(d.describe())           -- Rex the Shepherd
+let car = Car { make: "Volvo", year: 2024 }
+println(car.describe())         -- 2024 Volvo
+```
+
+A type can implement multiple traits:
+
+```xs
+trait Area {
+    fn area(self) -> f64
+}
+
+struct Circle { radius }
+
+impl Describe for Circle {
+    fn describe(self) -> str { return "circle r={self.radius}" }
+}
+
+impl Area for Circle {
+    fn area(self) -> f64 { return 3.14159 * self.radius * self.radius }
+}
 ```
 
 ---
@@ -1082,6 +1161,8 @@ cat.sound = "meow"
 println(cat.speak())             -- Cat says meow
 ```
 
+The constructor method is `init`. Instantiate with `ClassName(args)`.
+
 ### Inheritance
 
 ```xs
@@ -1102,6 +1183,27 @@ println(d.fetch())               -- Rex fetches the ball
 ```
 
 Subclasses call `super.init(...)` to initialize parent fields. Methods can be overridden.
+
+### Fields with Defaults
+
+```xs
+class Config {
+    host = "localhost"
+    port = 8080
+    debug = false
+
+    fn init(self, host, port) {
+        self.host = host
+        self.port = port
+    }
+
+    fn url(self) { return "{self.host}:{self.port}" }
+}
+
+let c = Config("example.com", 443)
+println(c.url())                 -- example.com:443
+println(c.debug)                 -- false
+```
 
 ---
 
@@ -1130,7 +1232,17 @@ struct Config {
 
 ### Available Type Names
 
-`int`, `i32`, `i64`, `float`, `f64`, `str`, `bool`, `null`, `array`, `map`, `tuple`, `fn`
+```
+int     i32     i64
+float   f64
+str
+bool
+null
+array
+map
+tuple
+fn
+```
 
 Optional types: `int?` (int or null)
 
@@ -1140,13 +1252,11 @@ Function types: `fn(int) -> int`
 
 ### Enforcement Behavior
 
-Type annotations are checked by the semantic analyzer. If you have annotations and there's a mismatch:
+Type annotations are checked by the semantic analyzer. Mismatches are caught before execution:
 
 ```xs
 let x: int = "hello"            -- error: type mismatch: expected 'int', got 'str'
 ```
-
-This error fires both with `xs --check` and at normal runtime. The semantic analyzer runs before execution.
 
 Return type mismatches are caught at runtime:
 
@@ -1158,15 +1268,16 @@ foo(42)                          -- runtime error: expected return type 'str', g
 ### Type Checking Modes
 
 ```bash
-xs script.xs            # normal: annotations checked by semantic analyzer
-xs --check script.xs    # check-only: type check without running
-xs --strict script.xs   # strict: require annotations everywhere
+xs script.xs            -- normal: semantic analysis runs, types checked
+xs --check script.xs    -- check-only: type check without running
+xs --strict script.xs   -- strict: require annotations everywhere
+xs --lenient script.xs  -- lenient: skip some checks
 ```
 
 ### Type Aliases
 
 ```xs
-type UserId = i64                -- parsed but limited usage currently
+type UserId = i64
 ```
 
 ---
@@ -1186,7 +1297,7 @@ try {
 try {
     throw #{"kind": "NotFound", "msg": "missing"}
 } catch e {
-    println(e)
+    println(e["msg"])            -- missing
 }
 
 -- finally always runs
@@ -1252,7 +1363,6 @@ fn example() {
     println("body")
 }
 example()
--- output:
 -- body
 -- first
 -- second
@@ -1261,29 +1371,20 @@ example()
 
 Defers run even if an exception is thrown.
 
-### Division by Zero
-
-Division by zero doesn't crash — it prints a runtime warning to stderr and returns `null`:
-
-```xs
-let d = 10 / 0                  -- prints warning, d is null
-let m = 10 % 0                  -- prints warning, m is null
-```
-
 ### When to Use What
 
 | Mechanism | Catchable? | Use case |
 |-----------|------------|----------|
 | `throw expr` | Yes | Recoverable errors: bad input, validation, missing data |
 | `panic(msg)` | No | Unrecoverable: invariant violations, impossible states |
-| `todo(msg)` | No | Placeholder for unimplemented code |
+| `todo(msg?)` | No | Placeholder for unimplemented code |
 | `unreachable()` | No | Code that should never execute |
 
 ---
 
 ## Algebraic Effects
 
-Effects let you "perform" an operation without knowing how it will be handled — the handler decides. Think of it as exceptions you can resume from.
+Effects let you perform an operation without knowing how it will be handled — the handler decides. Think of it as exceptions you can resume from.
 
 ```xs
 -- declare an effect
@@ -1297,7 +1398,7 @@ fn greet() {
     return "Hello, {name}!"
 }
 
--- handle effects
+-- handle the effect
 let result = handle greet() {
     Ask.prompt(msg) => resume("World")
 }
@@ -1327,13 +1428,15 @@ handle {
 println(logs)                    -- ["first", "second", "third"]
 ```
 
+The `handle` form can take a block as the computation (not just a function call).
+
 ---
 
 ## Concurrency
 
 ### Spawn
 
-`spawn` runs a block as a task. In the current interpreter, it executes **immediately** (cooperative, not preemptive).
+`spawn` runs a block as a task. In the current interpreter, tasks execute immediately (cooperative, not preemptive).
 
 ```xs
 var done = false
@@ -1355,6 +1458,13 @@ async fn compute(x) {
 
 let r = await compute(21)
 println(r)                       -- 42
+
+async fn fetch_user(id) {
+    return #{"id": id, "name": "User {id}"}
+}
+
+let user = await fetch_user(42)
+println(user["name"])            -- User 42
 ```
 
 ### Channels
@@ -1495,6 +1605,7 @@ module Utils {
     fn triple(x) { return x * 3 }
 }
 println(Utils.double(5))         -- 10
+println(Utils.triple(4))         -- 12
 ```
 
 ---
@@ -1536,9 +1647,10 @@ let b = [...a, 4, 5]            -- [1, 2, 3, 4, 5]
 
 -- map spread
 let m = #{"a": 1}
-let m2 = #{...m, "b": 2}        -- {a: 1, b: 2}
+let m2 = #{...m, "b": 2}        -- {"a": 1, "b": 2}
 
 -- struct spread (update syntax)
+let p = Point { x: 10, y: 20 }
 let p2 = Point { ...p, y: 30 }
 ```
 
@@ -1550,18 +1662,23 @@ let p2 = Point { ...p, y: 30 }
 
 | Function | Description |
 |----------|-------------|
-| `println(args...)` | Print with newline. Supports `{}` format placeholders |
+| `println(args...)` | Print with newline. Supports `{}` placeholders |
 | `print(args...)` | Print without trailing newline |
 | `eprint(args...)` | Print to stderr without newline |
 | `eprintln(args...)` | Print to stderr with newline |
 | `input(prompt?)` | Read line from stdin |
 | `clear()` | Clear terminal screen |
 
+```xs
+println("x = {}", 42)           -- x = 42  (positional {} placeholder)
+println("hi", "there")          -- hi there (space-separated if no {})
+```
+
 ### Type Checking
 
 | Function | Description |
 |----------|-------------|
-| `type(val)` | Type name as lowercase string: `"int"`, `"str"`, `"array"`, etc. |
+| `type(val)` | Type name lowercase: `"int"`, `"str"`, `"array"`, etc. |
 | `typeof(val)` | Alias for `type()` |
 | `type_of(val)` | Type name capitalized: `"Int"`, `"Str"`, `"Array"`, etc. |
 | `is_null(val)` | Check if null |
@@ -1584,10 +1701,12 @@ let p2 = Point { ...p, y: 30 }
 | `ord(ch)` | Character (first byte) to integer |
 
 ```xs
-println(int(3.9))                -- 3  (toward zero, not rounded)
+println(int(3.9))                -- 3  (toward zero)
 println(int(-3.9))               -- -3
 println(chr(65))                 -- A
 println(ord("A"))                -- 65
+println(str(42))                 -- "42"
+println(float(10))               -- 10.0
 ```
 
 ### Math
@@ -1595,8 +1714,8 @@ println(ord("A"))                -- 65
 | Function | Description |
 |----------|-------------|
 | `abs(x)` | Absolute value |
-| `min(a, b)` | Minimum |
-| `max(a, b)` | Maximum |
+| `min(a, b)` | Minimum of two values |
+| `max(a, b)` | Maximum of two values |
 | `pow(base, exp)` | Power |
 | `sqrt(x)` | Square root |
 | `floor(x)` | Floor |
@@ -1610,10 +1729,10 @@ println(ord("A"))                -- 65
 | Function | Description |
 |----------|-------------|
 | `len(val)` | Length of array, string, map, tuple, or range |
-| `range(n)` | Range `0..n` |
+| `range(n)` | Create range `0..n` |
 | `array()` | Empty array |
 | `map()` | Empty map |
-| `sorted(arr)` | Sorted copy |
+| `sorted(arr)` | Sorted copy of array |
 | `sum(arr)` | Sum of numeric array |
 | `enumerate(arr)` | Array of `(index, value)` tuples |
 | `zip(a, b)` | Zip two arrays into tuples |
@@ -1623,7 +1742,7 @@ println(ord("A"))                -- 65
 | `entries(map)` | Map entries as `(key, value)` tuples |
 | `chars(str)` | String to array of characters |
 | `bytes(str)` | String to array of byte values |
-| `contains(coll, val)` | Membership test (for strings/maps — see note) |
+| `contains(str, sub)` | Check if string contains substring |
 
 ```xs
 println(enumerate([10, 20, 30]))  -- [(0, 10), (1, 20), (2, 30)]
@@ -1636,12 +1755,12 @@ println(range(5))                -- 0..5
 | Function | Description |
 |----------|-------------|
 | `map(arr, fn)` | Apply fn to each element |
-| `filter(arr, fn)` | Keep elements where fn returns true |
+| `filter(arr, fn)` | Keep elements where fn returns truthy |
 | `reduce(arr, fn, init)` | Reduce array to single value |
 
 ```xs
-println(map([1, 2, 3], fn(x) { x * 2 }))    -- [2, 4, 6]
-println(filter([1, 2, 3, 4], fn(x) { x > 2 }))  -- [3, 4]
+println(map([1, 2, 3], fn(x) { x * 2 }))      -- [2, 4, 6]
+println(filter([1, 2, 3, 4], fn(x) { x > 2 })) -- [3, 4]
 println(reduce([1, 2, 3], fn(a, b) { a + b }, 0))  -- 6
 ```
 
@@ -1649,9 +1768,9 @@ println(reduce([1, 2, 3], fn(a, b) { a + b }, 0))  -- 6
 
 | Function | Description |
 |----------|-------------|
-| `assert(cond, msg?)` | Assert truthy. Panics on failure (not catchable) |
-| `assert_eq(a, b)` | Assert `a == b`. Shows both values on failure |
-| `dbg(val)` | Debug-print to stderr with type info, returns val |
+| `assert(cond, msg?)` | Assert truthy; panics on failure |
+| `assert_eq(a, b)` | Assert `a == b`; shows both values on failure |
+| `dbg(val)` | Debug-print to stderr with type info, returns `val` |
 | `pprint(val)` | Pretty-print with indentation |
 | `repr(val)` | Debug string representation |
 | `panic(msg)` | Print to stderr and exit (not catchable) |
@@ -1663,9 +1782,9 @@ println(reduce([1, 2, 3], fn(a, b) { a + b }, 0))  -- 6
 
 | Function | Description |
 |----------|-------------|
-| `copy(val)` / `clone(val)` | Copy a value (shallow for nested structures) |
+| `copy(val)` / `clone(val)` | Shallow copy of a value |
 
-### Result/Option Constructors
+### Result / Option Constructors
 
 ```xs
 println(Ok(42))                  -- Ok(42)
@@ -1674,11 +1793,14 @@ println(Some(10))                -- Some(10)
 println(None())                  -- null
 ```
 
+These are used for explicit result / option values you can `match` on.
+
 ### String Formatting
 
 ```xs
+-- positional placeholders
 println(format("hello {} you are {}", "world", 42))
--- output: hello world you are 42
+-- hello world you are 42
 ```
 
 `sprintf` is an alias for `format`.
@@ -1689,8 +1811,8 @@ println(format("hello {} you are {}", "world", 42))
 |------|-------|
 | `PI` | 3.14159265358979... |
 | `E` | 2.71828182845904... |
-| `INF` | Infinity |
-| `NAN` | Not a Number |
+| `INF` | Infinity (float) |
+| `NAN` | Not a Number (float) |
 
 ### Globals
 
@@ -1719,13 +1841,26 @@ println((3).is_odd())            -- true
 
 ## Standard Library Modules
 
-Import with `import <module>` and access via `module.member()`.
+Import with `import <module>` and access via `module.member`.
+
+---
 
 ### `math`
 
-**Constants:** `PI`, `E`, `TAU`, `INF`, `NAN`, `inf`, `nan`
+**Constants:** `PI` / `pi`, `E` / `e`, `TAU` / `tau`, `INF` / `inf`, `NAN` / `nan`
 
-**Functions:** `sqrt`, `cbrt`, `pow`, `abs`, `floor`, `ceil`, `round`, `trunc`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `exp`, `log`, `log2`, `log10`, `hypot`, `min`, `max`, `clamp`, `lerp`, `sign`, `gcd`, `lcm`, `factorial`, `degrees`, `radians`, `is_nan`, `is_inf`
+**Functions:**
+
+| Category | Functions |
+|----------|-----------|
+| Trig | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` |
+| Exponents/logs | `sqrt`, `cbrt`, `exp`, `expm1`, `log`, `log2`, `log10`, `log1p` |
+| Rounding | `floor`, `ceil`, `round`, `trunc` |
+| Utility | `abs`, `pow`, `hypot`, `gcd`, `lcm`, `factorial`, `clamp`, `lerp`, `sign`, `degrees`, `radians`, `fmod`, `modf`, `copysign`, `isclose`, `frexp`, `ldexp` |
+| Combinatorial | `comb`, `perm` |
+| Predicates | `is_nan`, `is_inf` |
+| Aggregate | `prod`, `sum`, `min`, `max`, `mean` |
+| Special | `erf`, `erfc`, `gamma`, `lgamma` |
 
 ```xs
 import math
@@ -1735,262 +1870,658 @@ println(math.factorial(5))       -- 120
 println(math.clamp(15, 0, 10))   -- 10
 println(math.sign(-5))           -- -1
 println(math.degrees(math.PI))   -- 180
-println(math.radians(180))       -- 3.14159
+println(math.radians(180))       -- 3.14159...
+println(math.lerp(0, 100, 0.5))  -- 50
+println(math.hypot(3, 4))        -- 5
 ```
+
+---
 
 ### `time`
 
-`now()`, `clock()`, `sleep(secs)`, `sleep_ms(ms)`, `millis()`, `time_since(t)`, `format(t, fmt)`, `parse(s, fmt)`, `year(t)`, `month(t)`, `day(t)`, `hour(t)`, `minute(t)`, `second(t)`, `stopwatch()`
+| Function | Description |
+|----------|-------------|
+| `now()` | Current Unix time as float (seconds since epoch) |
+| `now_ms()` | Current time in milliseconds |
+| `clock()` / `monotonic()` | Monotonic clock (for timing) |
+| `sleep(secs)` | Sleep for seconds (float OK) |
+| `sleep_ms(ms)` | Sleep for milliseconds |
+| `millis()` | Current time in milliseconds |
+| `stopwatch()` | Returns a stopwatch map with `elapsed()` method |
+| `format(t, fmt)` | Format a timestamp as a string |
+| `parse(s, fmt)` | Parse a string into a timestamp |
+| `year(t)` | Year component of timestamp |
+| `month(t)` | Month component |
+| `day(t)` | Day component |
+| `hour(t)` | Hour component |
+| `minute(t)` | Minute component |
+| `second(t)` | Second component |
+
+```xs
+import time
+let t = time.now()
+println("epoch: {t}")
+time.sleep(0.01)
+let sw = time.stopwatch()
+-- sw.elapsed() returns seconds since creation
+```
+
+---
 
 ### `io`
 
-`read_file(path)`, `write_file(path, data)`, `append_file(path, data)`, `read_lines(path)`, `read_json(path)`, `write_json(path, data)`, `exists(path)`, `size(path)`, `delete_file(path)`, `copy_file(src, dst)`, `rename_file(old, new)`, `make_dir(path)`, `list_dir(path)`, `is_file(path)`, `is_dir(path)`, `read_line()`, `wait_for_key()`
+**File operations:**
+
+| Function | Description |
+|----------|-------------|
+| `read_file(path)` | Read entire file as string |
+| `write_file(path, data)` | Write string to file (overwrites) |
+| `append_file(path, data)` | Append string to file |
+| `read_lines(path)` | Read file as array of lines |
+| `write_lines(path, lines)` | Write array of lines to file |
+| `read_bytes(path)` | Read file as byte array |
+| `write_bytes(path, bytes)` | Write byte array to file |
+| `read_json(path)` | Read and parse JSON file |
+| `write_json(path, val)` | Serialize and write JSON file |
+
+**File info:**
+
+| Function | Description |
+|----------|-------------|
+| `exists(path)` / `file_exists(path)` | Check if path exists |
+| `size(path)` / `file_size(path)` | File size in bytes |
+| `file_info(path)` | Map with file metadata |
+| `is_file(path)` | True if path is a regular file |
+| `is_dir(path)` | True if path is a directory |
+
+**File manipulation:**
+
+| Function | Description |
+|----------|-------------|
+| `delete_file(path)` | Delete a file |
+| `copy_file(src, dst)` | Copy a file |
+| `move_file(src, dst)` | Move a file |
+| `rename_file(old, new)` | Rename a file |
+| `symlink(target, link)` | Create a symlink |
+
+**Directories:**
+
+| Function | Description |
+|----------|-------------|
+| `make_dir(path)` | Create directory (recursive) |
+| `list_dir(path)` | List directory entries as array |
+| `glob(pattern)` | Glob matching |
+
+**Temp files:**
+
+| Function | Description |
+|----------|-------------|
+| `temp_file()` | Create a temporary file, return path |
+| `temp_dir()` | Create a temporary directory, return path |
+
+**Stdin:**
+
+| Function | Description |
+|----------|-------------|
+| `read_line(prompt?)` | Read a line from stdin |
+| `wait_for_key(prompt?)` | Wait for user to press enter |
+| `stdin_read()` | Read all of stdin |
+| `stdin_readline()` | Read one line from stdin |
+| `stdin_read_n(n)` | Read n bytes from stdin |
+| `stdin_lines()` | Read all stdin lines as array |
+
+**Sub-modules:** `io.stdout.write(s)`, `io.stdout.writeln(s)`, `io.stdout.flush()`, `io.stderr.write(s)`, `io.stderr.writeln(s)`, `io.stderr.flush()`
+
+```xs
+import io
+let text = io.read_file("hello.txt")
+io.write_file("out.txt", "hello\n")
+let lines = io.read_lines("data.txt")
+println(io.exists("out.txt"))    -- true
+println(io.is_file("out.txt"))   -- true
+```
+
+---
 
 ### `os`
 
-`platform`, `sep`, `pid()`, `args()`, `cwd()`, `chdir(path)`, `home()`, `cpu_count()`, `exit(code)`, `env.get(key)`, `env.set(key, val)`, `env.has(key)`, `env.all()`
+| Member | Description |
+|--------|-------------|
+| `platform` | `"linux"`, `"darwin"`, or `"windows"` |
+| `sep` | Path separator (`"/"` or `"\\"`) |
+| `args` | Command-line arguments array |
+| `pid()` | Current process ID |
+| `ppid()` | Parent process ID |
+| `cwd()` | Current working directory |
+| `chdir(path)` | Change working directory |
+| `home()` | Home directory path |
+| `tempdir()` | Temp directory path |
+| `cpu_count()` | Number of CPU cores |
+| `exit(code)` | Exit process |
+| `mkdir(path)` | Create directory |
+| `rmdir(path)` | Remove directory |
+| `remove(path)` | Remove file or directory |
+| `rename(old, new)` | Rename/move file |
+| `exists(path)` | Check if path exists |
+| `is_file(path)` | True if regular file |
+| `is_dir(path)` | True if directory |
+| `list_dir(path)` | List directory contents |
+| `glob(pattern)` | Glob matching |
+| `env(key)` / `getenv(key)` | Get environment variable |
+| `setenv(key, val)` | Set environment variable |
+| `hasenv(key)` | Check if env var exists |
+| `environ()` | All environment variables as map |
 
 ```xs
 import os
-println(os.platform)             -- linux (or macos, windows)
-println(os.cwd())                -- current directory
+println(os.platform)             -- linux
+println(os.cwd())                -- /home/user
+println(os.env("HOME"))          -- /home/user
 ```
+
+---
 
 ### `json`
 
-`parse(str)`, `stringify(val)`, `pretty(val)`, `valid(str)`
+| Function | Description |
+|----------|-------------|
+| `parse(str)` | Parse JSON string into XS value |
+| `stringify(val)` | Serialize XS value to JSON string |
+| `pretty(val)` | Serialize with indentation |
+| `valid(str)` | Check if string is valid JSON |
 
 ```xs
 import json
-let s = json.stringify(#{"a": 1})
-println(s)                       -- {"a":1}
+let s = json.stringify(#{"a": 1, "b": [1, 2, 3]})
+println(s)                       -- {"a":1,"b":[1,2,3]}
 let m = json.parse(s)
-println(m)                       -- {a: 1}
+println(m["a"])                  -- 1
+println(json.valid("[1,2,3]"))   -- true
 ```
+
+---
 
 ### `string`
 
-`pad_left(s, n, ch)`, `pad_right(s, n, ch)`, `center(s, n, ch)`, `truncate(s, n)`, `escape_html(s)`, `words(s)`, `levenshtein(a, b)`, `is_numeric(s)`, `camel_to_snake(s)`, `snake_to_camel(s)`
+| Function | Description |
+|----------|-------------|
+| `pad_left(s, n, ch?)` | Left-pad string to width n |
+| `pad_right(s, n, ch?)` | Right-pad string to width n |
+| `center(s, n, ch?)` | Center string to width n |
+| `truncate(s, n, suffix?)` | Truncate string to total length n |
+| `camel_to_snake(s)` | Convert `helloWorld` to `hello_world` |
+| `snake_to_camel(s)` | Convert `hello_world` to `helloWorld` |
+| `escape_html(s)` | Escape HTML special characters |
+| `is_numeric(s)` | True if string is a valid number |
+| `words(s)` | Split string into words |
+| `levenshtein(a, b)` | Edit distance between two strings |
+| `similarity(a, b)` | Similarity score (0.0 to 1.0) |
+| `repeat(s, n)` | Repeat string n times |
+| `chars(s)` | String to array of characters |
+| `bytes(s)` | String to array of byte values |
 
 ```xs
 import string
-println(string.words("hello world foo"))    -- [hello, world, foo]
+println(string.words("hello world foo"))     -- ["hello", "world", "foo"]
 println(string.camel_to_snake("helloWorld")) -- hello_world
-println(string.levenshtein("kitten", "sitting"))  -- 3
+println(string.snake_to_camel("hello_world"))-- helloWorld
+println(string.levenshtein("kitten", "sitting")) -- 3
+println(string.escape_html("<b>hi</b>"))     -- &lt;b&gt;hi&lt;/b&gt;
+println(string.is_numeric("3.14"))           -- true
 ```
+
+---
 
 ### `path`
 
-`join(parts...)`, `basename(p)`, `dirname(p)`, `ext(p)`, `stem(p)`, `sep`
+| Member | Description |
+|--------|-------------|
+| `join(parts...)` | Join path components |
+| `basename(p)` | Filename component |
+| `dirname(p)` | Directory component |
+| `ext(p)` | File extension (e.g. `".txt"`) |
+| `stem(p)` | Filename without extension |
+| `sep` | Path separator |
 
 ```xs
 import path
 println(path.basename("/foo/bar/baz.txt"))  -- baz.txt
 println(path.dirname("/foo/bar/baz.txt"))   -- /foo/bar
 println(path.ext("/foo/bar/baz.txt"))       -- .txt
+println(path.stem("/foo/bar/baz.txt"))      -- baz
+println(path.join("/foo", "bar", "baz"))    -- /foo/bar/baz
 ```
 
-### `collections`
+---
 
-`Counter(arr)`, `Stack()`, `PriorityQueue()`, `Deque()`, `Set(arr)`, `OrderedMap()`
+### `re`
+
+| Function | Description |
+|----------|-------------|
+| `test(pattern, str)` / `is_match(pattern, str)` | True if pattern matches |
+| `match(pattern, str)` | Return first match string, or null |
+| `find_all(pattern, str)` | Return array of all matches |
+| `replace(pattern, str, repl)` | Replace first match |
+| `replace_all(pattern, str, repl)` | Replace all matches |
+| `split(pattern, str)` | Split string by pattern |
+| `groups(pattern, str)` | Return capture groups as array |
 
 ```xs
-import collections
-let s = collections.Set([1, 2, 3, 2, 1])
-println(s)                       -- Set with unique values
+import re
+println(re.match("\\d+", "abc 123 def"))      -- 123
+println(re.find_all("\\d+", "1 2 3"))          -- ["1", "2", "3"]
+println(re.replace("\\d+", "abc 123", "N"))    -- abc N
+println(re.replace_all("\\d+", "1 2 3", "N")) -- N N N
+println(re.split("\\s+", "a b c"))             -- ["a", "b", "c"]
+println(re.test("^\\d+$", "123"))              -- true
 ```
+
+---
 
 ### `random`
 
-`int(min, max)`, `float()`, `bool()`, `choice(arr)`, `shuffle(arr)`, `sample(arr, n)`, `seed(n)`
+| Function | Description |
+|----------|-------------|
+| `int(min, max)` | Random integer in [min, max] |
+| `float()` | Random float in [0.0, 1.0) |
+| `bool()` | Random boolean |
+| `choice(arr)` | Random element from array |
+| `shuffle(arr)` | Shuffle array in-place |
+| `sample(arr, n)` | n random elements without replacement |
+| `seed(n)` | Set random seed |
 
 ```xs
 import random
 println(random.int(1, 10))       -- random int between 1 and 10
 println(random.float())          -- random float 0.0–1.0
 println(random.bool())           -- random boolean
+println(random.choice(["a", "b", "c"]))  -- random element
 ```
+
+---
 
 ### `hash`
 
-`md5(data)`, `sha1(data)`, `sha256(data)`, `sha512(data)`, `hmac(key, data)`
+| Function | Description |
+|----------|-------------|
+| `md5(data)` | MD5 hex digest |
+| `sha1(data)` | SHA-1 hex digest |
+| `sha256(data)` | SHA-256 hex digest |
+| `sha512(data)` | SHA-512 hex digest |
+| `hmac(key, data)` | HMAC-SHA256 hex digest |
 
 ```xs
 import hash
-println(hash.sha256("hello"))    -- 2cf24dba5fb0a30e26e83b2ac5b9e29e...
+println(hash.sha256("hello"))    -- 2cf24dba5fb0a30e...
+println(hash.md5("hello"))       -- 5d41402abc4b2a76...
 ```
+
+---
 
 ### `crypto`
 
-`sha256(data)`, `md5(data)`, `random_bytes(n)`, `random_int(min, max)`, `uuid4()`
+| Function | Description |
+|----------|-------------|
+| `sha256(data)` | SHA-256 hex digest |
+| `md5(data)` | MD5 hex digest |
+| `random_bytes(n)` | n random bytes as hex string |
+| `random_int(min, max)` | Cryptographically random integer |
+| `uuid4()` | Generate UUID v4 |
 
 ```xs
 import crypto
 println(crypto.uuid4())          -- e.g. 8cbe806c-cd27-4d93-afd1-dbfa3f1b4f93
+println(crypto.random_bytes(16)) -- 32 hex chars
 ```
+
+---
 
 ### `encode`
 
-`base64_encode(data)`, `base64_decode(data)`, `hex_encode(data)`, `hex_decode(data)`, `url_encode(s)`, `url_decode(s)`
+| Function | Description |
+|----------|-------------|
+| `base64_encode(data)` | Base64 encode string |
+| `base64_decode(data)` | Base64 decode string |
+| `hex_encode(data)` | Hex encode string |
+| `hex_decode(data)` | Hex decode string |
+| `url_encode(s)` | URL-encode a string |
+| `url_decode(s)` | URL-decode a string |
 
 ```xs
 import encode
 println(encode.base64_encode("hello"))  -- aGVsbG8=
+println(encode.base64_decode("aGVsbG8="))  -- hello
 println(encode.hex_encode("AB"))        -- 4142
+println(encode.url_encode("a b+c"))     -- a+b%2Bc
 ```
 
-### `re`
+Note: there's also a standalone `base64` module with `encode()` and `decode()`, and a `uuid` module with `v4()`.
 
-`match(pattern, str)`, `replace(pattern, str, repl)`, `split(pattern, str)`
+---
+
+### `collections`
+
+| Function | Description |
+|----------|-------------|
+| `Counter(arr)` | Map of element counts |
+| `Stack()` | Stack with `push`, `pop`, `peek`, `is_empty`, `len` |
+| `PriorityQueue()` | Min-heap priority queue |
+| `Deque()` | Double-ended queue |
+| `Set(arr)` | Set (unique elements) |
+| `OrderedMap()` | Map that preserves insertion order |
 
 ```xs
-import re
-println(re.match("\\d+", "abc 123 def"))     -- 123
-println(re.replace("\\d+", "abc 123", "N"))   -- abc N
-println(re.split("\\s+", "a b c"))            -- [a, b, c]
+import collections
+
+let s = collections.Set([1, 2, 3, 2, 1])
+println(s)                       -- set with unique values
+
+let c = collections.Counter(["a", "b", "a", "c", "a"])
+println(c["a"])                  -- 3
+
+let stack = collections.Stack()
+stack.push(10)
+stack.push(20)
+println(stack.pop())             -- 20
 ```
+
+---
 
 ### `fmt`
 
-`number(n, decimals)`, `hex(n)`, `bin(n)`, `pad(s, n)`, `comma(n)`, `filesize(n)`, `ordinal(n)`, `pluralize(word, n)`
+| Function | Description |
+|----------|-------------|
+| `number(n, decimals)` | Format number with fixed decimal places |
+| `hex(n)` | Format integer as hex string (e.g. `"0xff"`) |
+| `bin(n)` | Format integer as binary string (e.g. `"0b1010"`) |
+| `pad(s, n)` | Pad string to width |
+| `comma(n)` | Format number with comma separators |
+| `filesize(n)` | Human-readable file size (e.g. `"1.2 MB"`) |
+| `ordinal(n)` | Ordinal string (e.g. `"1st"`, `"2nd"`, `"3rd"`) |
+| `pluralize(word, n)` | Pluralize word based on count |
 
 ```xs
 import fmt
 println(fmt.hex(255))            -- 0xff
 println(fmt.bin(10))             -- 0b1010
 println(fmt.comma(1000000))      -- 1,000,000
+println(fmt.filesize(1536))      -- 1.5 KB
+println(fmt.ordinal(1))          -- 1st
+println(fmt.ordinal(11))         -- 11th
+println(fmt.number(3.14159, 2))  -- 3.14
 ```
 
-### `csv`
-
-`parse(str)`, `stringify(rows)`
-
-### `url`
-
-`parse(str)`, `encode(s)`, `decode(s)`
-
-### `reflect`
-
-`type_of(val)`, `fields(val)`, `methods(val)`, `is_instance(val, type)`
+---
 
 ### `log`
 
-`debug(msg)`, `info(msg)`, `warn(msg)`, `error(msg)`, `set_level(level)`
+| Function | Description |
+|----------|-------------|
+| `debug(msg)` | Log debug message |
+| `info(msg)` | Log info message |
+| `warn(msg)` | Log warning message |
+| `error(msg)` | Log error message |
+| `set_level(level)` | Set minimum log level |
+
+```xs
+import log
+log.info("server started")
+log.warn("disk space low")
+log.error("connection failed")
+log.set_level("warn")           -- only warn and above
+```
+
+---
 
 ### `test`
 
-`assert(cond)`, `assert_eq(a, b)`, `assert_ne(a, b)`, `run(name, fn)`, `summary()`
+| Function | Description |
+|----------|-------------|
+| `assert(cond)` | Assert truthy |
+| `assert_eq(a, b)` | Assert equal |
+| `assert_ne(a, b)` | Assert not equal |
+| `run(name, fn)` | Register a named test |
+| `summary()` | Print test results summary |
+
+```xs
+import test
+test.run("adds correctly", fn() {
+    test.assert_eq(1 + 1, 2)
+})
+test.summary()
+```
+
+---
+
+### `csv`
+
+| Function | Description |
+|----------|-------------|
+| `parse(str)` | Parse CSV string into array of arrays |
+| `stringify(rows)` | Serialize array of arrays to CSV string |
+
+```xs
+import csv
+let rows = csv.parse("a,b,c\n1,2,3")
+println(rows[0])                 -- ["a", "b", "c"]
+```
+
+---
+
+### `url`
+
+| Function | Description |
+|----------|-------------|
+| `parse(str)` | Parse URL string into component map |
+| `encode(s)` | URL-encode a string |
+| `decode(s)` | URL-decode a string |
+
+---
+
+### `reflect`
+
+| Function | Description |
+|----------|-------------|
+| `type_of(val)` | Type name string |
+| `fields(val)` | Field names of struct/class instance |
+| `methods(val)` | Method names of struct/class instance |
+| `is_instance(val, type)` | Check if value is instance of type |
+
+---
 
 ### `net`
 
-`tcp_connect(host, port)`, `tcp_listen(port)`, `resolve(host)`
+| Function | Description |
+|----------|-------------|
+| `tcp_connect(host, port)` | Open a TCP connection |
+| `tcp_listen(port)` | Listen on a TCP port |
+| `resolve(host)` | DNS lookup |
+
+---
 
 ### `async`
 
-`spawn(fn)`, `sleep(secs)`, `channel()`, `select(channels)`, `all(tasks)`, `race(tasks)`, `resolve(val)`, `reject(err)`
+| Function | Description |
+|----------|-------------|
+| `spawn(fn)` | Run function as async task |
+| `sleep(secs)` | Async sleep |
+| `channel()` | Create a channel |
+| `select(channels)` | Poll multiple channels, return first ready |
+| `all(tasks)` | Wait for all tasks, return results array |
+| `race(tasks)` | Return result of first completed task |
+| `resolve(val)` | Create already-resolved task |
+| `reject(err)` | Create already-rejected task |
+
+---
 
 ### `process`
 
-`run(cmd)`, `spawn(cmd)`
+| Function | Description |
+|----------|-------------|
+| `pid()` | Current process ID |
+| `run(cmd)` | Run shell command; returns map with `ok`, `stdout`, `code` |
+
+```xs
+import process
+let r = process.run("echo hello")
+println(r["stdout"])             -- hello
+println(r["ok"])                 -- true
+println(r["code"])               -- 0
+```
+
+---
 
 ### `thread`
 
-`spawn(fn)`, `id()`, `cpu_count()`, `sleep(secs)`
+| Function | Description |
+|----------|-------------|
+| `spawn(fn)` | Spawn a thread |
+| `id()` | Current thread ID |
+| `cpu_count()` | Number of CPU cores |
+| `sleep(secs)` | Sleep current thread |
+
+---
 
 ### `buf`
 
-`new(cap)`, `write_u8(v)`, `read_u8()`, `to_str()`, `to_hex()`, `len()`
+Binary buffer for low-level I/O.
+
+| Function | Description |
+|----------|-------------|
+| `new(cap)` | Create buffer with initial capacity |
+| `write_u8(v)` | Append a byte |
+| `read_u8()` | Read a byte |
+| `to_str()` | Convert buffer to string |
+| `to_hex()` | Convert buffer to hex string |
+| `len()` | Buffer length |
+
+---
 
 ### `db`
 
-`open(path)`, `exec(sql)`, `query(sql)`, `close()`
+Embedded database (SQLite-style).
+
+| Function | Description |
+|----------|-------------|
+| `open(path)` | Open database at path |
+| `exec(sql)` | Execute SQL statement |
+| `query(sql)` | Execute query, return rows |
+| `close()` | Close database |
+
+---
 
 ### `gc`
 
-`collect()`, `disable()`, `enable()`, `stats()`
+Manual control of the garbage collector.
+
+| Function | Description |
+|----------|-------------|
+| `collect()` | Trigger collection |
+| `disable()` | Disable automatic collection |
+| `enable()` | Re-enable automatic collection |
+| `stats()` | Return GC statistics map |
+
+---
 
 ### `reactive`
 
-`signal(val)`, `derived(fn)`, `effect(fn)`, `batch(fn)`
+Reactive state primitives.
+
+| Function | Description |
+|----------|-------------|
+| `signal(val)` | Create a reactive signal (observable value) |
+| `derived(fn)` | Create a derived signal computed from others |
+| `effect(fn)` | Run side effect when dependencies change |
+| `batch(fn)` | Batch multiple signal updates |
+
+These are also available as top-level builtins: `signal(val)` and `derived(fn)`.
+
+---
+
+### `fs`
+
+Additional filesystem operations (mirrors much of `io`).
+
+---
 
 ### `cli`
 
 Command-line argument parsing utilities.
 
-### `ffi`
-
-Foreign function interface for calling native code.
-
 ---
 
-## Numeric Behavior
+### `ffi`
 
-### Integer Division — Truncation Toward Zero
-
-```xs
-println(7 / 3)                   -- 2
-println((-7) / 3)                -- -2  (toward zero, NOT -3)
-println(7 / (-3))                -- -2
-```
-
-### Floor Division — Toward Negative Infinity
-
-```xs
-println(5 // 2)                  -- 2
-println(-7 // 2)                 -- -4
-println(7 // -2)                 -- -4
-```
-
-### Modulo — Sign Follows Dividend
-
-```xs
-println(7 % 3)                   -- 1
-println((-7) % 3)                -- -1  (sign follows -7)
-println(7 % (-3))                -- 1   (sign follows 7)
-```
-
-### Float-to-Integer Conversion
-
-`int(x)` truncates toward zero:
-
-```xs
-println(int(3.9))                -- 3
-println(int(-3.9))               -- -3
-```
+Foreign function interface for calling native C code.
 
 ---
 
 ## Execution Backends
 
 ```bash
-xs script.xs                     # tree-walker interpreter (default)
-xs --vm script.xs                # bytecode VM (faster)
-xs --jit script.xs               # JIT compilation
-xs build script.xs               # compile to bytecode (.xsc)
-xs run script.xsc                # run compiled bytecode
+xs script.xs                     -- tree-walker interpreter (default)
+xs --vm script.xs                -- bytecode VM (faster)
+xs --jit script.xs               -- JIT compilation
+xs build script.xs               -- compile to bytecode (.xsc)
+xs run script.xsc                -- run compiled bytecode
 ```
 
-Both backends produce identical results for correct programs. The VM is faster for compute-heavy code.
+Both the interpreter and VM produce identical results for correct programs. The VM is faster for compute-heavy code.
 
-The `build` command compiles to a `.xsc` file that can be distributed and run without the source. Use `-o` to specify the output path.
+The `build` command compiles to a `.xsc` file that can be distributed and run without the source.
 
 ---
 
-## Other CLI Commands
+## CLI Commands
 
 ```bash
-xs run <file.xs|file.xsc>        # run source or compiled bytecode
-xs repl                          # interactive REPL
-xs test [pattern]                # run tests
-xs check <file.xs>               # type-check only
-xs build <file.xs> [-o out.xsc]  # compile to bytecode
-xs lint [file|dir] [--fix]       # lint source files
-xs fmt [file|dir] [--check]      # format source
-xs doc [dir]                     # generate documentation
+xs <file.xs>                     -- run a script
+xs run <file.xs|file.xsc>        -- run source or compiled bytecode
+xs repl                          -- interactive REPL
+xs test [pattern]                -- run test files matching pattern
+xs check <file.xs>               -- type-check only, no execution
+xs build <file.xs> [-o out.xsc]  -- compile to bytecode
+xs lint [file|dir] [--fix]       -- lint source files
+xs fmt [file|dir] [--check]      -- format source (--check to just verify)
+xs doc [dir]                     -- generate documentation
 xs transpile --target <js|c|wasm32|wasi> <file.xs>
-xs new <name>                    # scaffold project
-xs lsp [-s <lsp.xs>]             # LSP server
-xs dap                           # DAP debug server
+xs new <name>                    -- scaffold a new project
+xs lsp [-s <lsp.xs>]             -- start LSP server
+xs dap                           -- start DAP debug server
 ```
 
-**Flags:** `--check`, `--strict`, `--lenient`, `--optimize`, `--watch`, `--no-color`, `-e <code>`, `--emit <bytecode|ast|ir|js|c|wasm>`, `--record <file.xst>`, `--plugin <path>`, `--sandbox`
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--vm` | Use bytecode VM backend |
+| `--jit` | Use JIT backend |
+| `--check` | Type-check without running |
+| `--strict` | Require type annotations everywhere |
+| `--lenient` | Skip some static checks |
+| `--optimize` | Enable optimizations |
+| `--watch` | Re-run on file changes |
+| `--no-color` | Disable colored output |
+| `-e <code>` | Evaluate code inline |
+| `--emit <bytecode\|ast\|ir\|js\|c\|wasm>` | Print intermediate form |
+| `--record <file.xst>` | Record execution trace |
+| `--plugin <path>` | Load a plugin |
+| `--sandbox` | Run in sandboxed mode |
+
+```bash
+# quick inline eval
+xs -e 'println("hello")'
+
+# check types without running
+xs --check mycode.xs
+
+# compile and run
+xs build mycode.xs -o mycode.xsc
+xs run mycode.xsc
+
+# transpile to JS
+xs transpile --target js mycode.xs
+
+# watch mode
+xs --watch script.xs
+```
