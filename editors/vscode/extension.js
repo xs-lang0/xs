@@ -2,7 +2,7 @@ const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 const vscode = require("vscode");
 const path = require("path");
 const fs = require("fs");
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 
 let client;
 let outputChannel;
@@ -77,15 +77,15 @@ function activate(context) {
       if (!editor || editor.document.languageId !== "xs") return;
       editor.document.save().then(() => {
         const file = editor.document.fileName;
-        // use execFile to run in output channel, not terminal (avoids WSL path issues)
-        outputChannel.show();
-        outputChannel.appendLine(`--- Running ${path.basename(file)} ---`);
-        execFile(bin, [file], { cwd: path.dirname(file), timeout: 30000 }, (err, stdout, stderr) => {
-          if (stdout) outputChannel.appendLine(stripAnsi(stdout));
-          if (stderr) outputChannel.appendLine(stripAnsi(stderr));
-          if (err && err.killed) outputChannel.appendLine("(timed out after 30s)");
-          outputChannel.appendLine("--- Done ---");
-        });
+        outputChannel.clear();
+        outputChannel.show(true);
+        outputChannel.appendLine(`> ${path.basename(bin)} "${file}"`);
+        outputChannel.appendLine("");
+        const proc = spawn(bin, [file], { cwd: path.dirname(file), shell: true });
+        proc.stdout.on("data", (data) => outputChannel.append(stripAnsi(data.toString())));
+        proc.stderr.on("data", (data) => outputChannel.append(stripAnsi(data.toString())));
+        proc.on("error", (err) => outputChannel.appendLine(`Error: ${err.message}`));
+        proc.on("close", (code) => { if (code !== 0) outputChannel.appendLine(`\n[exit code: ${code}]`); });
       });
     }),
 
@@ -94,13 +94,15 @@ function activate(context) {
       if (!editor || editor.document.languageId !== "xs") return;
       editor.document.save().then(() => {
         const file = editor.document.fileName;
-        outputChannel.show();
-        outputChannel.appendLine(`--- Running ${path.basename(file)} (VM) ---`);
-        execFile(bin, ["--vm", file], { cwd: path.dirname(file), timeout: 30000 }, (err, stdout, stderr) => {
-          if (stdout) outputChannel.appendLine(stripAnsi(stdout));
-          if (stderr) outputChannel.appendLine(stripAnsi(stderr));
-          outputChannel.appendLine("--- Done ---");
-        });
+        outputChannel.clear();
+        outputChannel.show(true);
+        outputChannel.appendLine(`> ${bin} --vm "${file}"`);
+        outputChannel.appendLine("");
+        const proc = spawn(bin, ["--vm", file], { cwd: path.dirname(file), shell: true });
+        proc.stdout.on("data", (data) => outputChannel.append(stripAnsi(data.toString())));
+        proc.stderr.on("data", (data) => outputChannel.append(stripAnsi(data.toString())));
+        proc.on("error", (err) => outputChannel.appendLine(`Error: ${err.message}`));
+        proc.on("close", (code) => outputChannel.appendLine(`\n[exit code: ${code}]`));
       });
     }),
 
@@ -110,7 +112,7 @@ function activate(context) {
       editor.document.save().then(() => {
         const file = editor.document.fileName;
         const out = file.replace(/\.xs$/, ".xsc");
-        execFile(bin, ["build", file, "-o", out], { cwd: path.dirname(file) }, (err, stdout, stderr) => {
+        execFile(bin, ["build", file, "-o", out], { cwd: path.dirname(file), shell: true }, (err, stdout, stderr) => {
           const msg = stripAnsi(stderr || stdout || "");
           outputChannel.appendLine(msg || "build complete");
           if (!err) vscode.window.showInformationMessage(`Compiled: ${path.basename(out)}`);
@@ -124,10 +126,12 @@ function activate(context) {
       if (!editor || editor.document.languageId !== "xs") return;
       editor.document.save().then(() => {
         const file = editor.document.fileName;
-        execFile(bin, ["--no-color", "--check", file], { cwd: path.dirname(file) }, (err, stdout, stderr) => {
-          const output = stripAnsi(stderr || stdout || "");
+        execFile(bin, ["--no-color", "--check", file], { cwd: path.dirname(file), shell: true }, (err, stdout, stderr) => {
           outputChannel.clear();
-          if (output) outputChannel.appendLine(output);
+          // diagnostics go to stderr, combine both
+          const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
+          const clean = stripAnsi(combined);
+          if (clean) outputChannel.appendLine(clean);
           if (!err) vscode.window.showInformationMessage("No type errors found");
           else {
             vscode.window.showWarningMessage("Type errors found — see XS output");
@@ -145,34 +149,50 @@ function activate(context) {
     }),
 
     vscode.commands.registerCommand("xs.restartServer", async () => {
-      if (client) {
-        statusItem.text = "$(sync~spin) XS";
-        try {
-          await client.stop();
-          await client.start();
-          statusItem.text = "$(zap) XS";
-          vscode.window.showInformationMessage("XS Language Server restarted");
-        } catch (err) {
-          statusItem.text = "$(warning) XS";
-          vscode.window.showErrorMessage(`Failed to restart: ${err.message}`);
-        }
+      statusItem.text = "$(sync~spin) XS";
+      try {
+        if (client) await client.stop();
+      } catch {}
+      try {
+        const newBin = findXsBinary();
+        client = new LanguageClient("xs", "XS Language Server", {
+          command: newBin,
+          args: lspArgs,
+          transport: TransportKind.stdio,
+        }, {
+          documentSelector: [{ scheme: "file", language: "xs" }],
+          outputChannel,
+        });
+        await client.start();
+        statusItem.text = "$(zap) XS";
+        vscode.window.showInformationMessage("XS Language Server restarted");
+      } catch (err) {
+        statusItem.text = "$(warning) XS";
+        vscode.window.showErrorMessage(`Failed to restart: ${err.message}`);
       }
     }),
 
     vscode.commands.registerCommand("xs.openRepl", () => {
-      outputChannel.show();
-      outputChannel.appendLine("XS REPL not available in output channel — use a terminal:");
-      outputChannel.appendLine(`  ${bin}`);
-      // open a proper terminal
-      const terminal = vscode.window.createTerminal({ name: "XS REPL", shellPath: bin });
+      const terminal = vscode.window.createTerminal({ name: "XS REPL", shellPath: bin, shellArgs: [] });
       terminal.show();
     })
   );
 
-  // LSP
+  // LSP — find bundled lsp.xs
+  const extDir = path.dirname(__dirname);
+  const lspCandidates = [
+    path.resolve(extDir, "lsp.xs"),                    // bundled in extension
+    path.resolve(extDir, "..", "..", "src", "lsp", "lsp.xs"),  // dev: repo root
+  ];
+  let lspSource = null;
+  for (const p of lspCandidates) {
+    try { if (fs.existsSync(p)) { lspSource = p; break; } } catch {}
+  }
+
+  const lspArgs = lspSource ? ["lsp", "-s", lspSource] : ["lsp"];
   const serverOptions = {
     command: bin,
-    args: ["lsp"],
+    args: lspArgs,
     transport: TransportKind.stdio,
   };
 

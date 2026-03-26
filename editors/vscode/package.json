@@ -1,11 +1,15 @@
 {
-  "name": "xs-lang",
-  "displayName": "XS Language",
+  "name": "xsl-vscode-ext",
+  "displayName": "XSL Support",
   "description": "Full language support for XS — syntax highlighting, LSP, debugger, and tooling",
-  "publisher": "xs-lang0",
+  "publisher": "xs",
   "version": "0.4.0",
   "engines": {
     "vscode": "^1.75.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xs-lang0/xs"
   },
   "categories": ["Programming Languages", "Debuggers", "Formatters", "Linters", "Snippets"],
   "keywords": ["xs", "programming language", "gradual typing", "transpiler"],
@@ -20,8 +24,17 @@
         "extensions": [".xs"],
         "configuration": "./language-configuration.json",
         "icon": {
-          "light": "icon.png",
-          "dark": "icon.png"
+          "light": "xs-icon.png",
+          "dark": "xs-icon.png"
+        }
+      },
+      {
+        "id": "xsc",
+        "aliases": ["XS Bytecode"],
+        "extensions": [".xsc"],
+        "icon": {
+          "light": "xsc-icon.png",
+          "dark": "xsc-icon.png"
         }
       }
     ],

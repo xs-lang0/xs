@@ -414,7 +414,7 @@ static void usage(void) {
         "  xs check <file.xs>                Type-check a file\n"
         "  xs build <file.xs> [-o out.xsc]    Compile to bytecode (.xsc)\n"
         "  xs run <file.xsc>                 Run compiled bytecode\n"
-        "  xs lsp                            Start LSP server\n"
+        "  xs lsp [-s <lsp.xs>]              Start LSP server\n"
         "  xs dap                            Start DAP debug server\n"
         "\n"
         "Flags:\n"
@@ -994,13 +994,30 @@ int main(int argc, char **argv) {
             _setmode(_fileno(stdin), 0x8000);
             _setmode(_fileno(stdout), 0x8000);
 #endif
-            /* try XS-based LSP first, fall back to C */
             {
+                /* check for -s / --source flag */
+                const char *explicit_source = NULL;
+                for (int k = 0; k < sub_argc; k++) {
+                    if ((strcmp(sub_arg(k), "-s") == 0 || strcmp(sub_arg(k), "--source") == 0) && k + 1 < sub_argc)
+                        explicit_source = sub_arg(++k);
+                }
+
+                if (explicit_source) {
+                    FILE *f = fopen(explicit_source, "r");
+                    if (f) {
+                        fclose(f);
+                        filename = explicit_source;
+                        goto run_file;
+                    }
+                    fprintf(stderr, "xs lsp: source file not found: %s\n", explicit_source);
+                    return 1;
+                }
+
+                /* auto-discover lsp.xs relative to executable */
                 static char lsp_path[PATH_MAX];
                 static char exe_dir[PATH_MAX];
                 int found_xs_lsp = 0;
 
-                /* resolve actual executable path */
                 exe_dir[0] = '\0';
 #ifdef _WIN32
                 GetModuleFileNameA(NULL, exe_dir, sizeof(exe_dir));
@@ -1011,19 +1028,16 @@ int main(int argc, char **argv) {
                 { uint32_t sz = sizeof(exe_dir);
                   _NSGetExecutablePath(exe_dir, &sz); }
 #endif
-                /* fall back to argv[0] */
                 if (exe_dir[0] == '\0') snprintf(exe_dir, sizeof(exe_dir), "%s", argv[0]);
 
-                /* strip filename to get directory */
                 char *last_sep = strrchr(exe_dir, '/');
                 if (!last_sep) last_sep = strrchr(exe_dir, '\\');
                 if (last_sep) *last_sep = '\0';
 
-                /* check paths relative to exe */
                 const char *rel_paths[] = {
-                    "src/lsp/lsp.xs",   /* dev: running from repo root */
-                    "lsp.xs",           /* installed next to binary */
-                    "../lib/xs/lsp.xs", /* /usr/local/lib/xs/ */
+                    "src/lsp/lsp.xs",
+                    "lsp.xs",
+                    "../lib/xs/lsp.xs",
                     NULL
                 };
                 for (int pi = 0; rel_paths[pi] && !found_xs_lsp; pi++) {
@@ -1031,7 +1045,6 @@ int main(int argc, char **argv) {
                     FILE *f = fopen(lsp_path, "r");
                     if (f) { fclose(f); found_xs_lsp = 1; }
                 }
-                /* also check cwd-relative */
                 if (!found_xs_lsp) {
                     const char *cwd_paths[] = { "src/lsp/lsp.xs", "lsp.xs", NULL };
                     for (int pi = 0; cwd_paths[pi] && !found_xs_lsp; pi++) {

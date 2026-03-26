@@ -5,3 +5,4 @@
 *.wasm
 /core
 /editors/vscode/node_modules
+/editors/vscode/.xs_history
