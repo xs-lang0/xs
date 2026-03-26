@@ -332,6 +332,26 @@ char *value_repr(Value *v) {
             return out;
         }
         case XS_MAP: {
+            /* enum-like map: has _tag and __type */
+            if (v->map) {
+                Value *tag_v = map_get(v->map, "_tag");
+                Value *type_v = map_get(v->map, "__type");
+                if (tag_v && tag_v->tag == XS_STR && type_v && type_v->tag == XS_STR) {
+                    Value *val_v = map_get(v->map, "_val");
+                    if (val_v && val_v->tag != XS_NULL) {
+                        char *vs = value_repr(val_v);
+                        size_t n = strlen(type_v->s) + 2 + strlen(tag_v->s) + 1 + strlen(vs) + 2;
+                        char *out = xs_malloc(n);
+                        snprintf(out, n, "%s::%s(%s)", type_v->s, tag_v->s, vs);
+                        free(vs);
+                        return out;
+                    }
+                    size_t n = strlen(type_v->s) + 2 + strlen(tag_v->s) + 1;
+                    char *out = xs_malloc(n);
+                    snprintf(out, n, "%s::%s", type_v->s, tag_v->s);
+                    return out;
+                }
+            }
             size_t sz = 64;
             char *out = xs_malloc(sz);
             size_t pos = 0;

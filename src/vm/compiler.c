@@ -31,7 +31,10 @@ typedef struct CompilerScope {
 typedef struct {
     int break_patches[MAX_BREAK_PATCHES];
     int n_break_patches;
+    int continue_patches[MAX_BREAK_PATCHES];
+    int n_continue_patches;
     int continue_target;  /* ip to jump for continue */
+    char label[64];       /* loop label (empty string if none) */
 } LoopCtx;
 
 typedef struct {
@@ -160,11 +163,17 @@ static int local_add_hidden(Compiler *c) {
     return local_add(c->current, buf);
 }
 
-static void loop_push(Compiler *c, int continue_target) {
+static void loop_push_label(Compiler *c, int continue_target, const char *label) {
     if (c->loop_depth >= MAX_LOOP_DEPTH) return;
     LoopCtx *lc = &c->loop_stack[c->loop_depth++];
     lc->n_break_patches = 0;
+    lc->n_continue_patches = 0;
     lc->continue_target = continue_target;
+    if (label) { strncpy(lc->label, label, 63); lc->label[63] = '\0'; }
+    else lc->label[0] = '\0';
+}
+static void loop_push(Compiler *c, int continue_target) {
+    loop_push_label(c, continue_target, NULL);
 }
 
 static void loop_pop_patch_breaks(Compiler *c) {
@@ -498,11 +507,13 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
                 compile_node(c, n->assign.value, 1);
             }
             if (want_value) {
+                /* stack: obj val → store val to field, return val */
                 int tmp = local_add_hidden(c);
-                emit_a(c, OP_STORE_LOCAL, tmp);
+                emit(c, MAKE_A(OP_DUP, 0, 0));     /* obj val val */
+                emit_a(c, OP_STORE_LOCAL, tmp);      /* obj val */
                 int ni = emit_global_name(c, tgt->field.name);
-                emit_a(c, OP_STORE_FIELD, ni);
-                emit_a(c, OP_LOAD_LOCAL, tmp);
+                emit_a(c, OP_STORE_FIELD, ni);       /* (empty) */
+                emit_a(c, OP_LOAD_LOCAL, tmp);       /* val */
             } else {
                 int ni = emit_global_name(c, tgt->field.name);
                 emit_a(c, OP_STORE_FIELD, ni);
@@ -882,7 +893,7 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
         emit_a(c, OP_STORE_LOCAL, idx_slot);
 
         int loop_top = c->current->proto->chunk.len;
-        loop_push(c, loop_top);
+        loop_push(c, 0); /* continue_target patched below */
 
         emit_a(c, OP_LOAD_LOCAL, idx_slot);
         emit_a(c, OP_LOAD_LOCAL, len_slot);
@@ -926,6 +937,20 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
 
         compile_node(c, n->for_loop.body, 0);
 
+        /* patch continue target to here (the increment) */
+        {
+            LoopCtx *lc = &c->loop_stack[c->loop_depth - 1];
+            int cont_ip = c->current->proto->chunk.len;
+            lc->continue_target = cont_ip;
+            /* patch deferred continue jumps */
+            for (int ci = 0; ci < lc->n_continue_patches; ci++) {
+                int pidx = lc->continue_patches[ci];
+                int offset = cont_ip - pidx - 1;
+                Instruction *ip2 = &c->current->proto->chunk.code[pidx];
+                *ip2 = (*ip2 & 0x0000FFFFU) | ((Instruction)(uint16_t)(int16_t)offset << 16);
+            }
+        }
+
         emit_a(c, OP_LOAD_LOCAL, idx_slot);
         emit_const(c, xs_int(1));
         emit(c, MAKE_A(OP_ADD, 0, 0));
@@ -962,8 +987,16 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
     case NODE_CONTINUE: {
         if (c->loop_depth > 0) {
             int top = c->loop_stack[c->loop_depth - 1].continue_target;
-            int off = top - (c->current->proto->chunk.len + 1);
-            emit(c, MAKE_A(OP_JUMP, 0, (uint16_t)(int16_t)off));
+            if (top == 0) {
+                /* continue target not yet known (for loop), defer via continue_patches */
+                int idx = emit_jump(c, OP_JUMP);
+                LoopCtx *lc = &c->loop_stack[c->loop_depth - 1];
+                if (lc->n_continue_patches < MAX_BREAK_PATCHES)
+                    lc->continue_patches[lc->n_continue_patches++] = idx;
+            } else {
+                int off = top - (c->current->proto->chunk.len + 1);
+                emit(c, MAKE_A(OP_JUMP, 0, (uint16_t)(int16_t)off));
+            }
         }
         if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
         return;

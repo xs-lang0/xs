@@ -53,6 +53,13 @@ typedef struct {
     int          yield_index;
 } CallFrame;
 
+typedef struct {
+    CallFrame   frames[VM_FRAMES_MAX];
+    int         frame_count;
+    Value     **sp_offset; /* relative to stack base */
+    int         valid;
+} EffectCont;
+
 typedef struct VM {
     Value      *stack[VM_STACK_SIZE];
     Value     **sp;
@@ -65,6 +72,7 @@ typedef struct VM {
     Value      *spawn_task;
     VMTask      tasks[VM_MAX_TASKS];
     int         n_tasks;
+    EffectCont  eff_cont;
 #ifdef XSC_ENABLE_TRACER
     XSTracer   *tracer;
 #endif

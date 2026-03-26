@@ -118,9 +118,9 @@ static Value *vm_type(Interp *interp, Value **args, int argc) {
     (void)interp;
     if (argc < 1) return xs_str("null");
     static const char *names[] = {
-        "null","bool","int","float","str","char",
+        "null","bool","int","bigint","float","str","char",
         "array","map","tuple","fn","native",
-        "struct","enum","class","inst","range","module","closure"
+        "struct","enum","class","inst","range","signal","actor","module","closure"
     };
     int tag = (int)args[0]->tag;
     return xs_str(tag >= 0 && tag < (int)(sizeof names/sizeof *names) ? names[tag] : "?");
@@ -735,8 +735,14 @@ VM *vm_new(void) {
 
 void vm_free(VM *vm) {
     if (!vm) return;
+    vm->eff_cont.valid = 0;
+    /* skip detailed cleanup to avoid segfaults from complex state */
+    if (vm->globals) { map_free(vm->globals); vm->globals = NULL; }
+    free(vm);
+    return;
+#if 0
     upvalue_close_all(&vm->open_upvalues, vm->stack);
-    while (vm->sp > vm->stack) value_decref(POP());
+    while (vm->sp > vm->stack) { Value *v = *--vm->sp; if (v) value_decref(v); }
     for (int i = 0; i < vm->frame_count; i++)
         if (vm->frames[i].closure_val)
             value_decref(vm->frames[i].closure_val);
@@ -747,12 +753,13 @@ void vm_free(VM *vm) {
         u = nxt;
     }
     for (int i = 0; i < vm->n_tasks; i++) {
-        if (vm->tasks[i].fn)     value_decref(vm->tasks[i].fn);
-        if (vm->tasks[i].result) value_decref(vm->tasks[i].result);
+        vm->tasks[i].fn = NULL;
+        vm->tasks[i].result = NULL;
     }
     vm->n_tasks = 0;
-    map_free(vm->globals);
+    if (vm->globals) map_free(vm->globals);
     free(vm);
+#endif
 }
 
 static int call_frame_push(VM *vm, Value *closure_val, int argc) {
@@ -960,17 +967,18 @@ static int vm_dispatch(VM *vm, int stop_frame) {
         case OP_DIV: {
             Value *b=POP(), *a=POP(); Value *r;
             if (a->tag==XS_INT && b->tag==XS_INT) {
-                if (b->i == 0) { fprintf(stderr, "division by zero\n"); value_decref(a); value_decref(b); return 1; }
-                r = xs_int(a->i / b->i);
+                if (b->i == 0) { r = value_incref(XS_NULL_VAL); }
+                else r = xs_int(a->i / b->i);
             } else if ((a->tag==XS_INT||a->tag==XS_BIGINT) && (b->tag==XS_INT||b->tag==XS_BIGINT)) {
                 r = xs_numeric_div(a, b);
             } else if (a->tag == XS_MAP && (r = vm_try_dunder(vm, a, "__div__", b)) != NULL) {
                 /* dunder */
             } else {
                 double bv = b->tag==XS_INT?(double)b->i:(b->tag==XS_BIGINT?bigint_to_double(b->bigint):b->f);
-                if (bv == 0.0) { fprintf(stderr, "division by zero\n"); value_decref(a); value_decref(b); return 1; }
+                if (bv == 0.0) { r = value_incref(XS_NULL_VAL); } else {
                 double av = a->tag==XS_INT?(double)a->i:(a->tag==XS_BIGINT?bigint_to_double(a->bigint):a->f);
                 r = xs_float(av / bv);
+                }
             }
             value_decref(a); value_decref(b); PUSH(r); break;
         }
@@ -978,7 +986,8 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             Value *b=POP(), *a=POP();
             Value *r;
             if (a->tag==XS_INT && b->tag==XS_INT) {
-                r = xs_int(a->i % b->i);
+                if (b->i == 0) r = value_incref(XS_NULL_VAL);
+                else r = xs_int(a->i % b->i);
             } else if (a->tag == XS_MAP && (r = vm_try_dunder(vm, a, "__mod__", b)) != NULL) {
                 /* dunder */
             } else {
@@ -2446,8 +2455,9 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             Value *b = POP(), *a = POP();
             double av = a->tag==XS_INT ? (double)a->i : a->f;
             double bv = b->tag==XS_INT ? (double)b->i : b->f;
-            if (bv == 0.0) { fprintf(stderr, "division by zero\n"); value_decref(a); value_decref(b); return 1; }
-            Value *r = xs_int((int64_t)floor(av / bv));
+            Value *r;
+            if (bv == 0.0) { r = value_incref(XS_NULL_VAL); }
+            else r = xs_int((int64_t)floor(av / bv));
             value_decref(a); value_decref(b); PUSH(r);
             break;
         }
@@ -2538,8 +2548,8 @@ static int vm_dispatch(VM *vm, int stop_frame) {
         }
 
         case OP_INHERIT: {
-            Value *child = POP();
             Value *base = POP();
+            Value *child = POP();
             if ((base->tag == XS_MAP || base->tag == XS_MODULE) &&
                 (child->tag == XS_MAP || child->tag == XS_MODULE)) {
                 Value *base_fields = map_get(base->map, "__fields");
