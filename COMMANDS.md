@@ -54,8 +54,9 @@ Run a script with the bytecode VM backend instead of the tree-walker.
 xs --vm fib.xs
 ```
 
-The VM compiles the AST to bytecode first, then executes it. Significantly
-faster for compute-heavy code (loops, recursion, tight numeric work).
+The VM compiles the AST to bytecode first, then executes it. Has full feature
+parity with the interpreter — all language features, builtins, and methods work.
+Faster for compute-heavy code (loops, recursion, tight numeric work).
 
 ### `xs --backend <interp|vm|jit> <file.xs>`
 

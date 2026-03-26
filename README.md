@@ -80,8 +80,8 @@ xs --strict file.xs     # require type annotations everywhere
 - try/catch/finally, defer, throw
 
 **Backends:**
-- Tree-walk interpreter (default, handles everything)
-- Bytecode VM (faster for compute-heavy code)
+- Tree-walk interpreter (default)
+- Bytecode VM (`--vm`, full feature parity, faster for compute-heavy code)
 - JIT compiler (x86-64, early stage)
 - Transpilers: JavaScript, C, WebAssembly
 
