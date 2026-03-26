@@ -172,9 +172,6 @@ static void loop_push_label(Compiler *c, int continue_target, const char *label)
     if (label) { strncpy(lc->label, label, 63); lc->label[63] = '\0'; }
     else lc->label[0] = '\0';
 }
-static void loop_push(Compiler *c, int continue_target) {
-    loop_push_label(c, continue_target, NULL);
-}
 
 static void loop_pop_patch_breaks(Compiler *c) {
     if (c->loop_depth <= 0) return;
@@ -218,7 +215,15 @@ static void compile_node(Compiler *c, Node *n, int want_value);
 static int compile_fn(Compiler *c, const char *name,
                       ParamList *params, Node *body)
 {
-    int arity = params ? params->len : 0;
+    int total_params = params ? params->len : 0;
+    int has_variadic = 0;
+    int non_variadic = total_params;
+    if (params) {
+        for (int i = 0; i < params->len; i++) {
+            if (params->items[i].variadic) { has_variadic = 1; non_variadic = i; break; }
+        }
+    }
+    int arity = has_variadic ? -(non_variadic + 1) : non_variadic;
     XSProto *parent = c->current->proto;
     XSProto *inner  = proto_new(name ? name : "<lambda>", arity);
 
@@ -234,9 +239,29 @@ static int compile_fn(Compiler *c, const char *name,
     scope_push(c, &fn_scope, inner);
 
     if (params) {
-        for (int i = 0; i < params->len; i++) {
+        for (int i = 0; i < total_params; i++) {
             const char *pname = params->items[i].name;
-            local_add(c->current, pname ? pname : "<param>");
+            if (params->items[i].variadic) {
+                local_add(c->current, pname ? pname : "args");
+            } else {
+                local_add(c->current, pname ? pname : "<param>");
+            }
+        }
+    }
+
+    /* emit default value fill-ins for optional params */
+    if (params) {
+        for (int i = 0; i < total_params; i++) {
+            if (params->items[i].default_val && !params->items[i].variadic) {
+                int slot = i;
+                emit_a(c, OP_LOAD_LOCAL, slot);
+                emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
+                emit(c, MAKE_A(OP_EQ, 0, 0));
+                int skip = emit_jump(c, OP_JUMP_IF_FALSE);
+                compile_node(c, params->items[i].default_val, 1);
+                emit_a(c, OP_STORE_LOCAL, slot);
+                patch_jump(c, skip);
+            }
         }
     }
 
@@ -673,7 +698,7 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
 
     case NODE_WHILE: {
         int loop_start = c->current->proto->chunk.len;
-        loop_push(c, loop_start);
+        loop_push_label(c, loop_start, n->while_loop.label);
         compile_node(c, n->while_loop.cond, 1);
         int j_exit = emit_jump(c, OP_JUMP_IF_FALSE);
         compile_node(c, n->while_loop.body, 0);
@@ -854,26 +879,69 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
 
     case NODE_METHOD_CALL: {
         compile_node(c, n->method_call.obj, 1);
-        int argc = n->method_call.args.len;
-        for (int i = 0; i < argc; i++)
-            compile_node(c, n->method_call.args.items[i], 1);
-        int ni = emit_global_name(c, n->method_call.method);
-        emit(c, MAKE_A(OP_METHOD_CALL, (uint8_t)(unsigned)argc, (uint16_t)(unsigned)ni));
+        if (n->method_call.optional) {
+            emit(c, MAKE_A(OP_DUP, 0, 0));
+            emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
+            emit(c, MAKE_A(OP_EQ, 0, 0));
+            int skip = emit_jump(c, OP_JUMP_IF_TRUE);
+            int argc = n->method_call.args.len;
+            for (int i = 0; i < argc; i++)
+                compile_node(c, n->method_call.args.items[i], 1);
+            int ni = emit_global_name(c, n->method_call.method);
+            emit(c, MAKE_A(OP_METHOD_CALL, (uint8_t)(unsigned)argc, (uint16_t)(unsigned)ni));
+            int end = emit_jump(c, OP_JUMP);
+            patch_jump(c, skip);
+            emit(c, MAKE_A(OP_POP, 0, 0));
+            emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
+            patch_jump(c, end);
+        } else {
+            int argc = n->method_call.args.len;
+            for (int i = 0; i < argc; i++)
+                compile_node(c, n->method_call.args.items[i], 1);
+            int ni = emit_global_name(c, n->method_call.method);
+            emit(c, MAKE_A(OP_METHOD_CALL, (uint8_t)(unsigned)argc, (uint16_t)(unsigned)ni));
+        }
         if (!want_value) emit(c, MAKE_A(OP_POP, 0, 0));
         return;
     }
 
     case NODE_STRUCT_INIT: {
         int cnt = n->struct_init.fields.len;
-        emit_const(c, xs_str("__type"));
-        emit_const(c, xs_str(n->struct_init.path ? n->struct_init.path : "struct"));
-        for (int i = 0; i < cnt; i++) {
-            const char *k = n->struct_init.fields.items[i].key;
-            Node *val     = n->struct_init.fields.items[i].val;
-            emit_const(c, xs_str(k ? k : "?"));
-            compile_node(c, val, 1);
+        if (n->struct_init.rest) {
+            /* has spread: start with spread base, then override fields */
+            emit_const(c, xs_str("__type"));
+            emit_const(c, xs_str(n->struct_init.path ? n->struct_init.path : "struct"));
+            emit(c, MAKE_B(OP_MAKE_MAP, 0, 0, 1));
+            int map_slot = local_add_hidden(c);
+            emit_a(c, OP_STORE_LOCAL, map_slot);
+            /* merge spread source */
+            emit_a(c, OP_LOAD_LOCAL, map_slot);
+            compile_node(c, n->struct_init.rest, 1);
+            emit(c, MAKE_A(OP_MAP_MERGE, 0, 0));
+            emit(c, MAKE_A(OP_POP, 0, 0));
+            /* override with explicit fields */
+            for (int i = 0; i < cnt; i++) {
+                const char *k = n->struct_init.fields.items[i].key;
+                Node *val = n->struct_init.fields.items[i].val;
+                if (k) {
+                    emit_a(c, OP_LOAD_LOCAL, map_slot);
+                    compile_node(c, val, 1);
+                    int fi = emit_global_name(c, k);
+                    emit_a(c, OP_STORE_FIELD, fi);
+                }
+            }
+            emit_a(c, OP_LOAD_LOCAL, map_slot);
+        } else {
+            emit_const(c, xs_str("__type"));
+            emit_const(c, xs_str(n->struct_init.path ? n->struct_init.path : "struct"));
+            for (int i = 0; i < cnt; i++) {
+                const char *k = n->struct_init.fields.items[i].key;
+                Node *val     = n->struct_init.fields.items[i].val;
+                emit_const(c, xs_str(k ? k : "?"));
+                compile_node(c, val, 1);
+            }
+            emit(c, MAKE_B(OP_MAKE_MAP, 0, 0, (uint8_t)(unsigned)(cnt + 1)));
         }
-        emit(c, MAKE_B(OP_MAKE_MAP, 0, 0, (uint8_t)(unsigned)(cnt + 1)));
         break;
     }
 
@@ -893,7 +961,7 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
         emit_a(c, OP_STORE_LOCAL, idx_slot);
 
         int loop_top = c->current->proto->chunk.len;
-        loop_push(c, 0); /* continue_target patched below */
+        loop_push_label(c, 0, n->for_loop.label); /* continue_target patched below */
 
         emit_a(c, OP_LOAD_LOCAL, idx_slot);
         emit_a(c, OP_LOAD_LOCAL, len_slot);
@@ -967,7 +1035,7 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
 
     case NODE_LOOP: {
         int loop_top = c->current->proto->chunk.len;
-        loop_push(c, loop_top);
+        loop_push_label(c, loop_top, n->loop.label);
         compile_node(c, n->loop.body, 0);
         int back_off = loop_top - (c->current->proto->chunk.len + 1);
         emit(c, MAKE_A(OP_JUMP, 0, (uint16_t)(int16_t)back_off));
@@ -981,16 +1049,37 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
             compile_node(c, n->brk.value, 1);
         }
         int idx = emit_jump(c, OP_JUMP);
-        loop_add_break(c, idx);
+        if (n->brk.label && c->loop_depth > 0) {
+            int found_label = 0;
+            for (int li = c->loop_depth - 1; li >= 0; li--) {
+                if (c->loop_stack[li].label[0] && strcmp(c->loop_stack[li].label, n->brk.label) == 0) {
+                    if (c->loop_stack[li].n_break_patches < MAX_BREAK_PATCHES)
+                        c->loop_stack[li].break_patches[c->loop_stack[li].n_break_patches++] = idx;
+                    found_label = 1;
+                    break;
+                }
+            }
+            if (!found_label) loop_add_break(c, idx);
+        } else {
+            loop_add_break(c, idx);
+        }
         return;
     }
     case NODE_CONTINUE: {
-        if (c->loop_depth > 0) {
-            int top = c->loop_stack[c->loop_depth - 1].continue_target;
+        int target_depth = c->loop_depth - 1;
+        if (n->cont.label) {
+            for (int li = c->loop_depth - 1; li >= 0; li--) {
+                if (c->loop_stack[li].label[0] && strcmp(c->loop_stack[li].label, n->cont.label) == 0) {
+                    target_depth = li; break;
+                }
+            }
+        }
+        if (target_depth >= 0) {
+            int top = c->loop_stack[target_depth].continue_target;
             if (top == 0) {
                 /* continue target not yet known (for loop), defer via continue_patches */
                 int idx = emit_jump(c, OP_JUMP);
-                LoopCtx *lc = &c->loop_stack[c->loop_depth - 1];
+                LoopCtx *lc = &c->loop_stack[target_depth];
                 if (lc->n_continue_patches < MAX_BREAK_PATCHES)
                     lc->continue_patches[lc->n_continue_patches++] = idx;
             } else {
@@ -1836,16 +1925,73 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
         emit(c, MAKE_B(OP_MAKE_MAP, 0, 0, (uint8_t)(unsigned)nstate));
         emit_a(c, OP_STORE_LOCAL, state_slot);
 
+        /* compile actor methods: add implicit 'self' param and state var accessors */
+        char **state_names = NULL;
+        if (nstate > 0) {
+            state_names = xs_malloc((size_t)nstate * sizeof(char*));
+            for (int si = 0; si < nstate; si++)
+                state_names[si] = xs_strdup(n->actor_decl.state_fields.items[si].key ?
+                    n->actor_decl.state_fields.items[si].key : "?");
+        }
         int actual_methods = 0;
         for (int mi = 0; mi < nmethods; mi++) {
             Node *m = n->actor_decl.methods.items[mi];
             if (m->tag != NODE_FN_DECL) continue;
             emit_const(c, xs_str(m->fn_decl.name ? m->fn_decl.name : "?"));
-            int fidx = compile_fn(c, m->fn_decl.name,
-                                  &m->fn_decl.params, m->fn_decl.body);
-            emit_make_closure(c, fidx);
+            /* compile actor method with self + state field loading */
+            {
+                int method_arity = m->fn_decl.params.len + 1; /* +1 for self */
+                XSProto *parent = c->current->proto;
+                XSProto *inner = proto_new(m->fn_decl.name ? m->fn_decl.name : "<actor_method>", method_arity);
+                if (parent->n_inner == parent->cap_inner) {
+                    parent->cap_inner = parent->cap_inner ? parent->cap_inner * 2 : 4;
+                    parent->inner = xs_realloc(parent->inner, (size_t)parent->cap_inner * sizeof(XSProto *));
+                }
+                int inner_idx = parent->n_inner;
+                parent->inner[parent->n_inner++] = inner;
+                CompilerScope fn_scope;
+                scope_push(c, &fn_scope, inner);
+                /* self is local 0 */
+                int self_slot = local_add(c->current, "self");
+                (void)self_slot;
+                /* add user params */
+                for (int pi = 0; pi < m->fn_decl.params.len; pi++) {
+                    const char *pname = m->fn_decl.params.items[pi].name;
+                    local_add(c->current, pname ? pname : "<param>");
+                }
+                /* add state field locals and load from self */
+                for (int si = 0; si < nstate; si++) {
+                    int slot = local_add(c->current, state_names[si]);
+                    emit_a(c, OP_LOAD_LOCAL, 0); /* self */
+                    int fi = emit_global_name(c, state_names[si]);
+                    emit_a(c, OP_LOAD_FIELD, fi);
+                    emit_a(c, OP_STORE_LOCAL, slot);
+                }
+                compile_node(c, m->fn_decl.body, 1);
+                /* write back state fields to self */
+                for (int si = 0; si < nstate; si++) {
+                    int slot = local_resolve(c->current, state_names[si]);
+                    if (slot >= 0) {
+                        emit_a(c, OP_LOAD_LOCAL, 0); /* self */
+                        emit_a(c, OP_LOAD_LOCAL, slot);
+                        int fi = emit_global_name(c, state_names[si]);
+                        emit_a(c, OP_STORE_FIELD, fi);
+                    }
+                }
+                XSChunk *ch = &inner->chunk;
+                if (ch->len == 0 || INSTR_OPCODE(ch->code[ch->len - 1]) != OP_RETURN)
+                    emit(c, MAKE_A(OP_RETURN, 0, 0));
+                if (fn_scope.n_upvalues > 0) {
+                    inner->uv_descs = xs_malloc((size_t)fn_scope.n_upvalues * sizeof(UVDesc));
+                    memcpy(inner->uv_descs, fn_scope.uv_descs, (size_t)fn_scope.n_upvalues * sizeof(UVDesc));
+                    inner->n_upvalues = fn_scope.n_upvalues;
+                }
+                scope_pop(c);
+                emit_make_closure(c, inner_idx);
+            }
             actual_methods++;
         }
+        if (state_names) { for (int si = 0; si < nstate; si++) free(state_names[si]); free(state_names); }
         emit(c, MAKE_B(OP_MAKE_MAP, 0, 0, (uint8_t)(unsigned)actual_methods));
         emit_a(c, OP_STORE_LOCAL, meth_slot);
 
@@ -1936,6 +2082,22 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
     case NODE_EFFECT_DECL:
         if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
         return;
+
+    case NODE_USE: {
+        if (n->use_.is_plugin && n->use_.path) {
+            /* emit: __load_plugin("path") */
+            emit_a(c, OP_LOAD_GLOBAL, emit_global_name(c, "__load_plugin"));
+            emit_const(c, xs_str(n->use_.path));
+            emit(c, MAKE_B(OP_CALL, 0, 0, 1));
+            if (!want_value) emit(c, MAKE_A(OP_POP, 0, 0));
+        } else if (n->use_.path) {
+            /* regular use — treat as no-op in VM for now */
+            if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
+        } else {
+            if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
+        }
+        return;
+    }
 
     default:
         fprintf(stderr, "unhandled node tag %d\n", (int)n->tag);

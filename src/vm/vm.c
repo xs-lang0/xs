@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200112L
 #include "vm/vm.h"
 #include "core/value.h"
 #include "core/xs_bigint.h"
@@ -120,7 +120,8 @@ static Value *vm_type(Interp *interp, Value **args, int argc) {
     static const char *names[] = {
         "null","bool","int","bigint","float","str","char",
         "array","map","tuple","fn","native",
-        "struct","enum","class","inst","range","signal","actor","module","closure"
+        "struct","enum","class","inst","range","signal","actor","module",
+        "closure"
     };
     int tag = (int)args[0]->tag;
     return xs_str(tag >= 0 && tag < (int)(sizeof names/sizeof *names) ? names[tag] : "?");
@@ -585,6 +586,257 @@ static Value *vm_cos(Interp *i, Value **a, int n) { (void)i; return n>=1 ? xs_fl
 static Value *vm_tan(Interp *i, Value **a, int n) { (void)i; return n>=1 ? xs_float(tan(a[0]->tag==XS_INT?(double)a[0]->i:a[0]->f)) : xs_float(0); }
 static Value *vm_log_fn(Interp *i, Value **a, int n) { (void)i; return n>=1 ? xs_float(log(a[0]->tag==XS_INT?(double)a[0]->i:a[0]->f)) : xs_float(0); }
 
+/* plugin loading */
+static VM *g_plugin_vm;
+
+static Value *vm_plugin_global_set(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    /* called as method: global.set(name, fn) → args = [self, name, fn] */
+    if (argc >= 3 && args[1]->tag == XS_STR && g_plugin_vm) {
+        map_set(g_plugin_vm->globals, args[1]->s, args[2]);
+    } else if (argc >= 2 && args[0]->tag == XS_STR && g_plugin_vm) {
+        map_set(g_plugin_vm->globals, args[0]->s, args[1]);
+    }
+    return xs_null();
+}
+
+static Value *vm_plugin_add_method(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    /* called as method: runtime.add_method(type, name, fn) → args = [self, type, name, fn] */
+    int off = (argc >= 4 && args[0]->tag == XS_MAP) ? 1 : 0;
+    if (argc >= 3 + off && args[off]->tag == XS_STR && args[off+1]->tag == XS_STR && g_plugin_vm) {
+        Value *pmethods = map_get(g_plugin_vm->globals, "__plugin_methods");
+        if (!pmethods) {
+            pmethods = xs_map_new();
+            map_set(g_plugin_vm->globals, "__plugin_methods", pmethods);
+            value_decref(pmethods);
+            pmethods = map_get(g_plugin_vm->globals, "__plugin_methods");
+        }
+        Value *type_methods = map_get(pmethods->map, args[off]->s);
+        if (!type_methods) {
+            type_methods = xs_map_new();
+            map_set(pmethods->map, args[off]->s, type_methods);
+            value_decref(type_methods);
+            type_methods = map_get(pmethods->map, args[off]->s);
+        }
+        map_set(type_methods->map, args[off+1]->s, args[off+2]);
+    }
+    return xs_null();
+}
+
+extern XSProto *compile_program(Node *program);
+
+#include "core/lexer.h"
+#include "core/parser.h"
+
+static Value *vm_load_plugin(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1 || args[0]->tag != XS_STR || !g_plugin_vm) return xs_null();
+
+    const char *path = args[0]->s;
+    FILE *f = fopen(path, "r");
+    /* try relative to source file directory */
+    char resolved[1024];
+    if (!f) {
+        Value *src_file = map_get(g_plugin_vm->globals, "__source_file");
+        if (src_file && src_file->tag == XS_STR) {
+            const char *dir_end = strrchr(src_file->s, '/');
+            if (!dir_end) dir_end = strrchr(src_file->s, '\\');
+            if (dir_end) {
+                int dir_len = (int)(dir_end - src_file->s + 1);
+                snprintf(resolved, sizeof resolved, "%.*s%s", dir_len, src_file->s, path);
+                f = fopen(resolved, "r");
+                if (f) path = resolved;
+            }
+        }
+    }
+    /* try tests/ prefix */
+    if (!f) {
+        snprintf(resolved, sizeof resolved, "tests/%s", path);
+        f = fopen(resolved, "r");
+        if (f) path = resolved;
+    }
+    if (!f) { fprintf(stderr, "plugin not found: %s\n", args[0]->s); return xs_null(); }
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *src = xs_malloc((size_t)len + 1);
+    fread(src, 1, (size_t)len, f);
+    src[len] = '\0';
+    fclose(f);
+
+    Lexer lex; lexer_init(&lex, src, path);
+    TokenArray ta = lexer_tokenize(&lex);
+    Parser psr; parser_init(&psr, &ta, path);
+    Node *prog = parser_parse(&psr);
+    token_array_free(&ta);
+    comment_list_free(&lex.comments);
+    free(src);
+    if (!prog) return xs_null();
+
+    /* set up plugin object in globals */
+    Value *plugin = xs_map_new();
+    Value *runtime = xs_map_new();
+    Value *global_obj = xs_map_new();
+    { Value *v = xs_native(vm_plugin_global_set); map_set(global_obj->map, "set", v); value_decref(v); }
+    { Value *v = xs_str("plugin_global"); map_set(global_obj->map, "__type", v); value_decref(v); }
+    map_set(runtime->map, "global", global_obj); value_decref(global_obj);
+    { Value *v = xs_native(vm_plugin_add_method); map_set(runtime->map, "add_method", v); value_decref(v); }
+    map_set(plugin->map, "runtime", runtime); value_decref(runtime);
+    Value *meta = xs_map_new();
+    map_set(plugin->map, "meta", meta); value_decref(meta);
+    map_set(g_plugin_vm->globals, "plugin", plugin); value_decref(plugin);
+
+    XSProto *proto = compile_program(prog);
+    node_free(prog);
+
+    /* create a temporary VM for plugin execution, sharing globals */
+    VM *plugin_vm = xs_malloc(sizeof(VM));
+    memset(plugin_vm, 0, sizeof(VM));
+    plugin_vm->sp = plugin_vm->stack;
+    plugin_vm->globals = g_plugin_vm->globals;  /* shared globals */
+    VM *saved_main_vm = g_plugin_vm;
+    VM *saved_invoke = g_vm_for_invoke;
+    /* g_plugin_vm stays pointing to main VM for global.set */
+    g_vm_for_invoke = plugin_vm;
+    vm_run(plugin_vm, proto);
+    g_vm_for_invoke = saved_invoke;
+    g_plugin_vm = saved_main_vm;
+    /* don't free globals — they're shared */
+    plugin_vm->globals = NULL;
+    /* cleanup plugin_vm manually */
+    while (plugin_vm->sp > plugin_vm->stack) value_decref(*--plugin_vm->sp);
+    free(plugin_vm);
+    proto_free(proto);
+
+    return xs_null();
+}
+
+static Value *vm_channel(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *ch = xs_map_new();
+    Value *type = xs_str("channel");
+    map_set(ch->map, "__type", type); value_decref(type);
+    Value *buf = xs_array_new();
+    map_set(ch->map, "_buf", buf); value_decref(buf);
+    int64_t cap = (argc >= 1 && args[0]->tag == XS_INT) ? args[0]->i : 0;
+    Value *cap_v = xs_int(cap);
+    map_set(ch->map, "_cap", cap_v); value_decref(cap_v);
+    return ch;
+}
+
+static Value *vm_is_int(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    return xs_bool(argc >= 1 && (args[0]->tag == XS_INT || args[0]->tag == XS_BIGINT));
+}
+static Value *vm_is_float(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    return xs_bool(argc >= 1 && args[0]->tag == XS_FLOAT);
+}
+static Value *vm_is_str(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    return xs_bool(argc >= 1 && args[0]->tag == XS_STR);
+}
+static Value *vm_is_bool(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    return xs_bool(argc >= 1 && args[0]->tag == XS_BOOL);
+}
+static Value *vm_is_array(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    return xs_bool(argc >= 1 && args[0]->tag == XS_ARRAY);
+}
+static Value *vm_is_fn(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1) return xs_bool(0);
+    ValueTag t = args[0]->tag;
+    return xs_bool(t == XS_FUNC || t == XS_NATIVE || t == XS_CLOSURE);
+}
+static Value *vm_char_fn(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1) return xs_str("");
+    Value *v = args[0];
+    if (v->tag == XS_INT) {
+        char buf[2] = { (char)v->i, '\0' };
+        return xs_str(buf);
+    }
+    if (v->tag == XS_STR && v->s[0]) {
+        char buf[2] = { v->s[0], '\0' };
+        return xs_str(buf);
+    }
+    return xs_str("");
+}
+static Value *vm_ord(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1) return xs_int(0);
+    Value *v = args[0];
+    if (v->tag == XS_STR) return xs_int((int64_t)(unsigned char)v->s[0]);
+    if (v->tag == XS_INT) return xs_int(v->i);
+    return xs_int(0);
+}
+static Value *vm_bytes(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *arr = xs_array_new();
+    if (argc < 1) return arr;
+    Value *v = args[0];
+    if (v->tag == XS_STR) {
+        for (const unsigned char *p = (const unsigned char *)v->s; *p; p++) {
+            Value *b = xs_int((int64_t)*p);
+            array_push(arr->arr, b);
+        }
+    }
+    return arr;
+}
+static Value *vm_array_fn(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *arr = xs_array_new();
+    for (int j = 0; j < argc; j++)
+        array_push(arr->arr, value_incref(args[j]));
+    return arr;
+}
+static Value *vm_print_no_nl(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    for (int j = 0; j < argc; j++) {
+        if (j) printf(" ");
+        char *s = value_str(args[j]);
+        printf("%s", s); free(s);
+    }
+    fflush(stdout);
+    return xs_null();
+}
+static Value *vm_pprint(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    if (argc < 1) { printf("null\n"); return xs_null(); }
+    char *s = value_repr(args[0]);
+    printf("%s\n", s); free(s);
+    return xs_null();
+}
+static Value *vm_clear(Interp *interp, Value **args, int argc) {
+    (void)interp; (void)args; (void)argc;
+    printf("\033[2J\033[H");
+    fflush(stdout);
+    return xs_null();
+}
+static Value *vm_signal_fn(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    XSSignal *sig = xs_calloc(1, sizeof(XSSignal));
+    sig->value = (argc >= 1) ? value_incref(args[0]) : xs_null();
+    sig->subscribers = NULL;
+    sig->nsubs = 0;
+    sig->subcap = 0;
+    sig->compute = NULL;
+    sig->notifying = 0;
+    sig->refcount = 1;
+    Value *v = xs_calloc(1, sizeof(Value));
+    v->tag = XS_SIGNAL;
+    v->refcount = 1;
+    v->signal = sig;
+    return v;
+}
+static Value *vm_derived(Interp *interp, Value **args, int argc) {
+    (void)interp; (void)args; (void)argc;
+    return xs_null();
+}
+
 static void vm_register_stdlib(VM *vm) {
     Value *v;
 #define REG(name, fn) v = xs_native(fn); map_set(vm->globals, name, v); value_decref(v)
@@ -646,6 +898,26 @@ static void vm_register_stdlib(VM *vm) {
     REG("vec",     vm_vec);
     REG("eprint",  vm_eprint);
     REG("eprintln", vm_eprintln);
+    REG("channel", vm_channel);
+    REG("__load_plugin", vm_load_plugin);
+    REG("is_int",      vm_is_int);
+    REG("is_float",    vm_is_float);
+    REG("is_str",      vm_is_str);
+    REG("is_bool",     vm_is_bool);
+    REG("is_array",    vm_is_array);
+    REG("is_fn",       vm_is_fn);
+    REG("i64",         vm_int_fn);
+    REG("f64",         vm_float_fn);
+    REG("char",        vm_char_fn);
+    REG("chr",         vm_char_fn);
+    REG("ord",         vm_ord);
+    REG("bytes",       vm_bytes);
+    REG("array",       vm_array_fn);
+    REG("print_no_nl", vm_print_no_nl);
+    REG("pprint",      vm_pprint);
+    REG("clear",       vm_clear);
+    REG("signal",      vm_signal_fn);
+    REG("derived",     vm_derived);
 #undef REG
     {
         extern Value *make_math_module(void);
@@ -767,15 +1039,49 @@ static int call_frame_push(VM *vm, Value *closure_val, int argc) {
         fprintf(stderr, "stack overflow\n"); return 1;
     }
     XSClosure *cl = closure_val->cl;
-    int arity = cl->proto->arity;
+    int raw_arity = cl->proto->arity;
     int is_gen = 0;
+    int is_variadic = 0;
+    int arity = raw_arity;
     if (arity < 0) {
-        is_gen = 1;
-        arity = -(arity + 1);
+        /* could be generator (old encoding) or variadic (new encoding) */
+        int decoded = -(arity + 1);
+        /* check if proto has more locals than decoded — variadic indicator */
+        if (cl->proto->nlocals > decoded + 1 || argc != decoded) {
+            is_variadic = 1;
+            arity = decoded;
+        } else {
+            is_gen = 1;
+            arity = decoded;
+        }
     }
-    if (argc != arity) {
-        fprintf(stderr, "arity: expected %d got %d\n", arity, argc);
-        return 1;
+    if (is_variadic) {
+        /* arity = min required. Collect extra args into array for variadic param */
+        if (argc < arity) {
+            fprintf(stderr, "arity: expected at least %d got %d\n", arity, argc);
+            return 1;
+        }
+        /* collect variadic args into an array */
+        int n_extra = argc - arity;
+        Value *varargs = xs_array_new();
+        Value *tmp_extra[256];
+        for (int i = n_extra - 1; i >= 0; i--) tmp_extra[i] = POP();
+        for (int i = 0; i < n_extra; i++) {
+            array_push(varargs->arr, tmp_extra[i]);
+            value_decref(tmp_extra[i]);
+        }
+        PUSH(varargs);
+        argc = arity + 1; /* required + 1 varargs array */
+    } else {
+        if (argc < arity) {
+            /* fill missing args with null for default params */
+            for (int i = argc; i < arity; i++) PUSH(value_incref(XS_NULL_VAL));
+            argc = arity;
+        } else if (argc > arity && !is_gen) {
+            /* too many args — pop extras */
+            for (int i = argc; i > arity; i--) value_decref(POP());
+            argc = arity;
+        }
     }
     CallFrame *frame = &vm->frames[vm->frame_count++];
     frame->closure_val = value_incref(closure_val);
@@ -827,6 +1133,7 @@ static Value *vm_try_dunder(VM *vm, Value *obj, const char *dunder, Value *other
 
 int vm_run(VM *vm, XSProto *proto) {
     g_vm_for_invoke = vm;
+    g_plugin_vm = vm;
     XSClosure *top_cl    = xs_malloc(sizeof *top_cl);
     top_cl->proto        = proto; proto->refcount++;
     top_cl->upvalues     = NULL;
@@ -1084,6 +1391,18 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                 int64_t i = idx->i;
                 if (i < 0) i += col->arr->len;
                 r = (i>=0 && i<col->arr->len) ? value_incref(col->arr->items[i]) : value_incref(XS_NULL_VAL);
+            } else if ((col->tag==XS_ARRAY||col->tag==XS_TUPLE) && idx->tag==XS_RANGE && idx->range) {
+                int64_t start = idx->range->start;
+                int64_t end = idx->range->end;
+                if (idx->range->inclusive) end++;
+                if (start < 0) start += col->arr->len;
+                if (end < 0) end += col->arr->len;
+                if (start < 0) start = 0;
+                if (end > col->arr->len) end = col->arr->len;
+                Value *arr = xs_array_new();
+                for (int64_t j = start; j < end; j++)
+                    array_push(arr->arr, value_incref(col->arr->items[j]));
+                r = arr;
             } else if (col->tag==XS_MAP && idx->tag==XS_STR) {
                 Value *v = map_get(col->map, idx->s);
                 r = v ? value_incref(v) : value_incref(XS_NULL_VAL);
@@ -1096,6 +1415,25 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                 if (i < 0) i += slen;
                 if (i >= 0 && i < slen) { char buf[2] = {s[i], 0}; r = xs_str(buf); }
                 else r = value_incref(XS_NULL_VAL);
+            } else if (col->tag==XS_STR && idx->tag==XS_RANGE && idx->range) {
+                const char *s = col->s;
+                int64_t slen = (int64_t)strlen(s);
+                int64_t start = idx->range->start;
+                int64_t end = idx->range->end;
+                if (idx->range->inclusive) end++;
+                if (start < 0) start += slen;
+                if (end < 0) end += slen;
+                if (start < 0) start = 0;
+                if (end > slen) end = slen;
+                if (start >= end) { r = xs_str(""); }
+                else {
+                    int64_t len = end - start;
+                    char *buf = malloc(len + 1);
+                    memcpy(buf, s + start, len);
+                    buf[len] = '\0';
+                    r = xs_str(buf);
+                    free(buf);
+                }
             } else {
                 r = value_incref(XS_NULL_VAL);
             }
@@ -1140,6 +1478,10 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     r = xs_str(obj->en->variant);
                 else if (strcmp(name, "type") == 0 || strcmp(name, "__type") == 0)
                     r = xs_str(obj->en->type_name);
+            } else if ((obj->tag == XS_TUPLE || obj->tag == XS_ARRAY) && name[0] >= '0' && name[0] <= '9') {
+                int64_t idx2 = atoll(name);
+                if (idx2 >= 0 && idx2 < obj->arr->len)
+                    r = value_incref(obj->arr->items[idx2]);
             }
             if (!r) r = value_incref(XS_NULL_VAL);
             value_decref(obj); PUSH(r); break;
@@ -1234,7 +1576,24 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     Value *cls_name = map_get(callee->map, "__name");
                     if (cls_name) map_set(inst->map, "__type", value_incref(cls_name));
                     Value *bases = map_get(callee->map, "__bases");
-                    if (bases) map_set(inst->map, "__bases", value_incref(bases));
+                    if (bases) {
+                        map_set(inst->map, "__bases", value_incref(bases));
+                        if (bases->tag == XS_ARRAY && bases->arr->len > 0) {
+                            Value *super_inst = xs_map_new();
+                            Value *base_cls = bases->arr->items[0];
+                            if (base_cls->tag == XS_MAP) {
+                                Value *bm = map_get(base_cls->map, "__methods");
+                                if (bm && bm->tag == XS_MAP)
+                                    for (int bj = 0; bj < bm->map->cap; bj++)
+                                        if (bm->map->keys[bj])
+                                            map_set(super_inst->map, bm->map->keys[bj],
+                                                    value_incref(bm->map->vals[bj]));
+                            }
+                            map_set(super_inst->map, "__self", value_incref(inst));
+                            map_set(inst->map, "super", super_inst);
+                            value_decref(super_inst);
+                        }
+                    }
                     if (argc > 0 && fields->map->len > 0) {
                         int fi = 0;
                         for (int j = 0; j < fields->map->cap && fi < argc; j++)
@@ -1541,6 +1900,11 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     }
                     mc_result=arr;
                 } else if (strcmp(mc_name,"len")==0||strcmp(mc_name,"size")==0) {
+                    Value *ch_type = map_get(mc_obj->map, "__type");
+                    if (ch_type && ch_type->tag == XS_STR && strcmp(ch_type->s, "channel") == 0) {
+                        Value *buf = map_get(mc_obj->map, "_buf");
+                        mc_result = xs_int(buf && buf->tag == XS_ARRAY ? buf->arr->len : 0);
+                    } else
                     mc_result=xs_int(mc_obj->map->len);
                 } else if (strcmp(mc_name,"has")==0||strcmp(mc_name,"contains_key")==0) {
                     mc_result=(mc_argc>=1&&mc_args[0]->tag==XS_STR&&map_get(mc_obj->map,mc_args[0]->s))
@@ -1549,6 +1913,11 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     Value *v=map_get(mc_obj->map,mc_args[0]->s);
                     mc_result=v?value_incref(v):(mc_argc>=2?value_incref(mc_args[1]):value_incref(XS_NULL_VAL));
                 } else if (strcmp(mc_name,"set")==0&&mc_argc>=2&&mc_args[0]->tag==XS_STR) {
+                    /* check if this is a plugin global.set — delegate to native */
+                    Value *set_fn = map_get(mc_obj->map, "set");
+                    if (set_fn && set_fn->tag == XS_NATIVE) {
+                        goto map_generic_method;
+                    }
                     map_set(mc_obj->map,mc_args[0]->s,mc_args[1]);
                     mc_result=value_incref(XS_NULL_VAL);
                 } else if (strcmp(mc_name,"delete")==0||strcmp(mc_name,"remove")==0) {
@@ -1558,6 +1927,116 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                         value_decref(nv);
                     }
                     mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"send")==0 && mc_argc>=1) {
+                    Value *ch_type = map_get(mc_obj->map, "__type");
+                    if (ch_type && ch_type->tag == XS_STR && strcmp(ch_type->s, "channel") == 0) {
+                        Value *buf = map_get(mc_obj->map, "_buf");
+                        if (buf && buf->tag == XS_ARRAY) array_push(buf->arr, value_incref(mc_args[0]));
+                        mc_result = value_incref(XS_NULL_VAL);
+                    } else goto map_generic_method;
+                } else if (strcmp(mc_name,"recv")==0) {
+                    Value *ch_type = map_get(mc_obj->map, "__type");
+                    if (ch_type && ch_type->tag == XS_STR && strcmp(ch_type->s, "channel") == 0) {
+                        Value *buf = map_get(mc_obj->map, "_buf");
+                        if (buf && buf->tag == XS_ARRAY && buf->arr->len > 0) {
+                            mc_result = value_incref(buf->arr->items[0]);
+                            value_decref(buf->arr->items[0]);
+                            for (int j = 1; j < buf->arr->len; j++) buf->arr->items[j-1] = buf->arr->items[j];
+                            buf->arr->len--;
+                        } else mc_result = value_incref(XS_NULL_VAL);
+                    } else goto map_generic_method;
+                } else if (strcmp(mc_name,"is_empty")==0) {
+                    Value *ch_type = map_get(mc_obj->map, "__type");
+                    if (ch_type && ch_type->tag == XS_STR && strcmp(ch_type->s, "channel") == 0) {
+                        Value *buf = map_get(mc_obj->map, "_buf");
+                        mc_result = xs_bool(buf && buf->tag == XS_ARRAY && buf->arr->len == 0);
+                    } else {
+                        mc_result = xs_bool(mc_obj->map->len == 0);
+                    }
+                } else if (strcmp(mc_name,"is_full")==0) {
+                    Value *ch_type = map_get(mc_obj->map, "__type");
+                    if (ch_type && ch_type->tag == XS_STR && strcmp(ch_type->s, "channel") == 0) {
+                        Value *buf = map_get(mc_obj->map, "_buf");
+                        Value *cap = map_get(mc_obj->map, "_cap");
+                        int64_t c2 = (cap && cap->tag == XS_INT) ? cap->i : 0;
+                        int full = (c2 > 0 && buf && buf->tag == XS_ARRAY && buf->arr->len >= (int)c2);
+                        mc_result = xs_bool(full);
+                    } else goto map_generic_method;
+                } else if (strcmp(mc_name,"merge")==0&&mc_argc>=1&&mc_args[0]->tag==XS_MAP) {
+                    for(int j=0;j<mc_args[0]->map->cap;j++){
+                        if(mc_args[0]->map->keys[j])
+                            map_set(mc_obj->map,mc_args[0]->map->keys[j],value_incref(mc_args[0]->map->vals[j]));
+                    }
+                    mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"clone")==0||strcmp(mc_name,"copy")==0) {
+                    Value *m=xs_map_new();
+                    for(int j=0;j<mc_obj->map->cap;j++){
+                        if(mc_obj->map->keys[j])
+                            map_set(m->map,mc_obj->map->keys[j],value_incref(mc_obj->map->vals[j]));
+                    }
+                    mc_result=m;
+                } else if (strcmp(mc_name,"items")==0) {
+                    /* alias for entries */
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<mc_obj->map->cap;j++){
+                        if(mc_obj->map->keys[j]){
+                            Value *pair=xs_tuple_new();
+                            array_push(pair->arr,xs_str(mc_obj->map->keys[j]));
+                            array_push(pair->arr,value_incref(mc_obj->map->vals[j]));
+                            array_push(arr->arr,pair);
+                        }
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"has_key")==0&&mc_argc>=1&&mc_args[0]->tag==XS_STR) {
+                    mc_result=map_get(mc_obj->map,mc_args[0]->s)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"intersection")==0&&mc_argc>=1&&mc_args[0]->tag==XS_MAP) {
+                    Value *m=xs_map_new();
+                    for(int j=0;j<mc_obj->map->cap;j++){
+                        if(mc_obj->map->keys[j]&&map_get(mc_args[0]->map,mc_obj->map->keys[j]))
+                            map_set(m->map,mc_obj->map->keys[j],value_incref(mc_obj->map->vals[j]));
+                    }
+                    mc_result=m;
+                } else if (strcmp(mc_name,"union")==0&&mc_argc>=1&&mc_args[0]->tag==XS_MAP) {
+                    Value *m=xs_map_new();
+                    for(int j=0;j<mc_obj->map->cap;j++){
+                        if(mc_obj->map->keys[j])
+                            map_set(m->map,mc_obj->map->keys[j],value_incref(mc_obj->map->vals[j]));
+                    }
+                    for(int j=0;j<mc_args[0]->map->cap;j++){
+                        if(mc_args[0]->map->keys[j]&&!map_get(m->map,mc_args[0]->map->keys[j]))
+                            map_set(m->map,mc_args[0]->map->keys[j],value_incref(mc_args[0]->map->vals[j]));
+                    }
+                    mc_result=m;
+                } else if (strcmp(mc_name,"difference")==0&&mc_argc>=1&&mc_args[0]->tag==XS_MAP) {
+                    Value *m=xs_map_new();
+                    for(int j=0;j<mc_obj->map->cap;j++){
+                        if(mc_obj->map->keys[j]&&!map_get(mc_args[0]->map,mc_obj->map->keys[j]))
+                            map_set(m->map,mc_obj->map->keys[j],value_incref(mc_obj->map->vals[j]));
+                    }
+                    mc_result=m;
+                } else if (strcmp(mc_name,"most_common")==0) {
+                    int64_t n2=(mc_argc>=1&&mc_args[0]->tag==XS_INT)?mc_args[0]->i:mc_obj->map->len;
+                    /* collect entries, sort by value descending, return top n */
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<mc_obj->map->cap;j++){
+                        if(mc_obj->map->keys[j]){
+                            Value *pair=xs_tuple_new();
+                            array_push(pair->arr,xs_str(mc_obj->map->keys[j]));
+                            array_push(pair->arr,value_incref(mc_obj->map->vals[j]));
+                            array_push(arr->arr,pair);
+                        }
+                    }
+                    /* bubble sort descending by second element */
+                    int alen=arr->arr->len;
+                    for(int j=0;j<alen-1;j++) for(int k=0;k<alen-1-j;k++){
+                        Value *va=arr->arr->items[k]->arr->items[1];
+                        Value *vb=arr->arr->items[k+1]->arr->items[1];
+                        if(value_cmp(va,vb)<0){
+                            Value *tmp=arr->arr->items[k]; arr->arr->items[k]=arr->arr->items[k+1]; arr->arr->items[k+1]=tmp;
+                        }
+                    }
+                    if(n2<alen) arr->arr->len=(int)n2;
+                    mc_result=arr;
                 } else if (strcmp(mc_name,"elapsed")==0) {
                     Value *start_v = map_get(mc_obj->map, "_start");
                     if (start_v && (start_v->tag == XS_FLOAT || start_v->tag == XS_INT)) {
@@ -1566,15 +2045,123 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                         double start = start_v->tag == XS_FLOAT ? start_v->f : (double)start_v->i;
                         mc_result = xs_float(now - start);
                     } else mc_result = value_incref(XS_NULL_VAL);
-                } else {
+                } else if (strcmp(mc_name,"to_map")==0) {
+                    mc_result=value_incref(mc_obj);
+                } else if (strcmp(mc_name,"unwrap")==0) {
+                    Value *tag_v = map_get(mc_obj->map, "_tag");
+                    Value *val_v = map_get(mc_obj->map, "_val");
+                    if (tag_v && tag_v->tag == XS_STR && strcmp(tag_v->s, "Err")==0) {
+                        char *es = val_v ? value_str(val_v) : xs_strdup("Err");
+                        fprintf(stderr, "unwrap called on Err: %s\n", es); free(es);
+                        mc_result = value_incref(XS_NULL_VAL);
+                    } else if (tag_v && tag_v->tag == XS_STR && strcmp(tag_v->s, "None")==0) {
+                        fprintf(stderr, "unwrap called on None\n");
+                        mc_result = value_incref(XS_NULL_VAL);
+                    } else {
+                        mc_result = val_v ? value_incref(val_v) : value_incref(XS_NULL_VAL);
+                    }
+                } else if (strcmp(mc_name,"unwrap_or")==0&&mc_argc>=1) {
+                    Value *tag_v = map_get(mc_obj->map, "_tag");
+                    Value *val_v = map_get(mc_obj->map, "_val");
+                    int is_err = tag_v && tag_v->tag == XS_STR &&
+                        (strcmp(tag_v->s,"Err")==0 || strcmp(tag_v->s,"None")==0);
+                    mc_result = is_err ? value_incref(mc_args[0]) : (val_v ? value_incref(val_v) : value_incref(XS_NULL_VAL));
+                } else if (strcmp(mc_name,"is_ok")==0) {
+                    Value *tag_v = map_get(mc_obj->map, "_tag");
+                    mc_result = xs_bool(tag_v && tag_v->tag == XS_STR && strcmp(tag_v->s,"Ok")==0);
+                } else if (strcmp(mc_name,"is_err")==0) {
+                    Value *tag_v = map_get(mc_obj->map, "_tag");
+                    mc_result = xs_bool(tag_v && tag_v->tag == XS_STR && strcmp(tag_v->s,"Err")==0);
+                } else if (strcmp(mc_name,"is_some")==0) {
+                    Value *tag_v = map_get(mc_obj->map, "_tag");
+                    mc_result = xs_bool(tag_v && tag_v->tag == XS_STR && strcmp(tag_v->s,"Some")==0);
+                } else if (strcmp(mc_name,"is_none")==0) {
+                    Value *tag_v = map_get(mc_obj->map, "_tag");
+                    mc_result = xs_bool(tag_v && tag_v->tag == XS_STR && strcmp(tag_v->s,"None")==0);
+                } else if (strcmp(mc_name,"ok")==0) {
+                    Value *tag_v = map_get(mc_obj->map, "_tag");
+                    Value *val_v = map_get(mc_obj->map, "_val");
+                    if (tag_v && tag_v->tag == XS_STR && strcmp(tag_v->s,"Ok")==0)
+                        mc_result = val_v ? value_incref(val_v) : value_incref(XS_NULL_VAL);
+                    else mc_result = value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"or_else")==0&&mc_argc>=1) {
+                    Value *tag_v = map_get(mc_obj->map, "_tag");
+                    if (tag_v && tag_v->tag == XS_STR && strcmp(tag_v->s,"Err")==0) {
+                        Value *val_v = map_get(mc_obj->map, "_val");
+                        Value *arg = val_v ? val_v : XS_NULL_VAL;
+                        mc_result = vm_invoke(vm, mc_args[0], &arg, 1);
+                        frame = FRAME;
+                        if (!mc_result) mc_result = value_incref(XS_NULL_VAL);
+                    } else mc_result = value_incref(mc_obj);
+                } else if (strcmp(mc_name,"map_err")==0&&mc_argc>=1) {
+                    Value *tag_v = map_get(mc_obj->map, "_tag");
+                    if (tag_v && tag_v->tag == XS_STR && strcmp(tag_v->s,"Err")==0) {
+                        Value *val_v = map_get(mc_obj->map, "_val");
+                        Value *arg = val_v ? val_v : XS_NULL_VAL;
+                        Value *new_err = vm_invoke(vm, mc_args[0], &arg, 1);
+                        frame = FRAME;
+                        Value *m = xs_map_new();
+                        Value *etag = xs_str("Err");
+                        map_set(m->map, "_tag", etag); value_decref(etag);
+                        if (new_err) { map_set(m->map, "_val", new_err); value_decref(new_err); }
+                        mc_result = m;
+                    } else mc_result = value_incref(mc_obj);
+                } else if (strcmp(mc_name,"is_a")==0&&mc_argc>=1&&mc_args[0]->tag==XS_STR) {
+                    Value *type_name = map_get(mc_obj->map, "__type");
+                    int match = type_name && type_name->tag == XS_STR && strcmp(type_name->s, mc_args[0]->s)==0;
+                    mc_result = xs_bool(match);
+                } else if (strcmp(mc_name,"subscribe")==0||strcmp(mc_name,"reset")==0||
+                           strcmp(mc_name,"peek")==0||strcmp(mc_name,"step")==0||
+                           strcmp(mc_name,"elapsed_ms")==0) {
+                    mc_result = value_incref(XS_NULL_VAL);
+                } else { map_generic_method: {
                     Value *fn = map_get(mc_obj->map, mc_name);
                     if (!fn) {
                         Value *methods = map_get(mc_obj->map, "__methods");
                         if (methods && methods->tag == XS_MAP)
                             fn = map_get(methods->map, mc_name);
                     }
+                    if (!fn) {
+                        Value *impl = map_get(mc_obj->map, "__impl__");
+                        if (impl && impl->tag == XS_MAP)
+                            fn = map_get(impl->map, mc_name);
+                    }
+                    /* look up methods on the type (for struct impl) */
+                    if (!fn) {
+                        Value *type_name = map_get(mc_obj->map, "__type");
+                        if (type_name && type_name->tag == XS_STR) {
+                            Value *type_val = map_get(vm->globals, type_name->s);
+                            if (type_val && type_val->tag == XS_MAP) {
+                                Value *tm = map_get(type_val->map, "__methods");
+                                if (tm && tm->tag == XS_MAP)
+                                    fn = map_get(tm->map, mc_name);
+                                if (!fn) {
+                                    Value *ti = map_get(type_val->map, "__impl__");
+                                    if (ti && ti->tag == XS_MAP)
+                                        fn = map_get(ti->map, mc_name);
+                                }
+                            }
+                        }
+                    }
                     if (fn && (fn->tag == XS_CLOSURE || fn->tag == XS_NATIVE)) {
-                        if (fn->tag == XS_CLOSURE && fn->cl->proto->arity == mc_argc + 1) {
+                        int is_module_call = (mc_obj->tag == XS_MODULE) ||
+                            (mc_obj->tag == XS_MAP && !map_get(mc_obj->map, "__type") &&
+                             !map_get(mc_obj->map, "__methods") && !map_get(mc_obj->map, "__fields"));
+                        /* Check if first param is 'self' for struct/class methods */
+                        int needs_self = 0;
+                        if (fn->tag == XS_CLOSURE) {
+                            int fn_arity = fn->cl->proto->arity;
+                            if (fn_arity < 0) fn_arity = -(fn_arity + 1);
+                            needs_self = (fn_arity == mc_argc + 1);
+                        }
+                        if (fn->tag == XS_CLOSURE && needs_self && !is_module_call) {
+                            /* super proxy: replace self with __self */
+                            Value *self_ref = map_get(mc_obj->map, "__self");
+                            if (self_ref) {
+                                value_incref(self_ref);
+                                value_decref(vm->sp[-mc_argc - 1]);
+                                vm->sp[-mc_argc - 1] = self_ref;
+                            }
                             /* self is on stack below args */
                             Value *fn_val = value_incref(fn);
                             if (call_frame_push(vm, fn_val, mc_argc + 1)) {
@@ -1583,16 +2170,25 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                             value_decref(fn_val); frame = FRAME;
                             mc_called = 1;
                         } else if (fn->tag == XS_NATIVE) {
-                            Value *nargs[17];
-                            nargs[0] = mc_obj;
-                            int total = 1 + mc_argc;
-                            if (total > 17) total = 17;
-                            for (int j = 0; j < mc_argc && j < 16; j++) nargs[j+1] = mc_args[j];
-                            Value *r2 = fn->native(NULL, nargs, total);
-                            for (int j = 0; j < mc_argc; j++) value_decref(POP());
-                            value_decref(POP());
-                            PUSH(r2 ? r2 : value_incref(XS_NULL_VAL));
+                            if (is_module_call) {
+                                /* module call: don't pass module as self */
+                                Value *r2 = fn->native(NULL, mc_args, mc_argc);
+                                for (int j = 0; j < mc_argc; j++) value_decref(POP());
+                                value_decref(POP());
+                                PUSH(r2 ? r2 : value_incref(XS_NULL_VAL));
+                            } else {
+                                Value *nargs[17];
+                                nargs[0] = mc_obj;
+                                int total = 1 + mc_argc;
+                                if (total > 17) total = 17;
+                                for (int j = 0; j < mc_argc && j < 16; j++) nargs[j+1] = mc_args[j];
+                                Value *r2 = fn->native(NULL, nargs, total);
+                                for (int j = 0; j < mc_argc; j++) value_decref(POP());
+                                value_decref(POP());
+                                PUSH(r2 ? r2 : value_incref(XS_NULL_VAL));
+                            }
                         } else {
+                            /* closure without self — treat as plain call */
                             value_decref(mc_obj);
                             vm->sp[-mc_argc - 1] = value_incref(fn);
                             Value *sv = vm->sp[-mc_argc - 1]; value_incref(sv);
@@ -1605,7 +2201,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                         break;
                     }
                     mc_result = value_incref(XS_NULL_VAL);
-                }
+                }}
             }
 
             else if (mc_obj->tag == XS_STR) {
@@ -1752,6 +2348,248 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                         for(int64_t j=(int64_t)slen;j<n2;j++) buf[j]=ch;
                         buf[n2]='\0'; mc_result=xs_str(buf); free(buf);
                     }
+                } else if (strcmp(mc_name,"reverse")==0) {
+                    char *r=xs_malloc((size_t)slen+1);
+                    for(int j=0;j<slen;j++) r[j]=s[slen-1-j];
+                    r[slen]='\0'; mc_result=xs_str(r); free(r);
+                } else if (strcmp(mc_name,"join")==0&&mc_argc>=1) {
+                    /* "sep".join(arr) */
+                    if(mc_args[0]->tag==XS_ARRAY||mc_args[0]->tag==XS_TUPLE){
+                        size_t cap=256; char *buf=xs_malloc(cap); size_t wpos=0;
+                        for(int j=0;j<mc_args[0]->arr->len;j++){
+                            char *sv=value_str(mc_args[0]->arr->items[j]); size_t svl=strlen(sv);
+                            if(j>0){while(wpos+(size_t)slen+svl+2>cap){cap*=2;buf=xs_realloc(buf,cap);}memcpy(buf+wpos,s,(size_t)slen);wpos+=(size_t)slen;}
+                            while(wpos+svl+2>cap){cap*=2;buf=xs_realloc(buf,cap);}
+                            memcpy(buf+wpos,sv,svl); wpos+=svl; free(sv);
+                        }
+                        buf[wpos]='\0'; mc_result=xs_str(buf); free(buf);
+                    } else mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"trim_start")==0||strcmp(mc_name,"ltrim")==0) {
+                    const char *p2=s; while(*p2==' '||*p2=='\t'||*p2=='\n'||*p2=='\r') p2++;
+                    mc_result=xs_str(p2);
+                } else if (strcmp(mc_name,"trim_end")==0||strcmp(mc_name,"rtrim")==0) {
+                    char *r=xs_strdup(s); int rlen=(int)strlen(r);
+                    while(rlen>0&&(r[rlen-1]==' '||r[rlen-1]=='\t'||r[rlen-1]=='\n'||r[rlen-1]=='\r')) rlen--;
+                    r[rlen]='\0'; mc_result=xs_str(r); free(r);
+                } else if (strcmp(mc_name,"title")==0) {
+                    char *r=xs_strdup(s); int prev_space=1;
+                    for(int j=0;r[j];j++){
+                        if(r[j]==' '||r[j]=='\t'||r[j]=='\n'||r[j]=='\r'){prev_space=1;}
+                        else if(prev_space){r[j]=(char)toupper((unsigned char)r[j]);prev_space=0;}
+                        else{r[j]=(char)tolower((unsigned char)r[j]);}
+                    }
+                    mc_result=xs_str(r); free(r);
+                } else if (strcmp(mc_name,"center")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int64_t n2=mc_args[0]->i; char ch=' ';
+                    if(mc_argc>=2&&mc_args[1]->tag==XS_STR&&mc_args[1]->s[0]) ch=mc_args[1]->s[0];
+                    if(n2<=(int64_t)slen) mc_result=xs_str(s);
+                    else{
+                        int64_t total_pad=n2-(int64_t)slen;
+                        int64_t lpad=total_pad/2, rpad=total_pad-lpad;
+                        char *buf=xs_malloc((size_t)n2+1);
+                        for(int64_t j=0;j<lpad;j++) buf[j]=ch;
+                        memcpy(buf+lpad,s,(size_t)slen);
+                        for(int64_t j=0;j<rpad;j++) buf[lpad+(int64_t)slen+j]=ch;
+                        buf[n2]='\0'; mc_result=xs_str(buf); free(buf);
+                    }
+                } else if (strcmp(mc_name,"char_at")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int64_t idx=mc_args[0]->i;
+                    if(idx<0) idx+=slen;
+                    if(idx>=0&&idx<(int64_t)slen){char b[2]={s[idx],0};mc_result=xs_str(b);}
+                    else mc_result=xs_str("");
+                } else if (strcmp(mc_name,"lines")==0) {
+                    Value *arr=xs_array_new(); const char *p2=s;
+                    while(1){
+                        const char *nl=strchr(p2,'\n');
+                        if(!nl){Value *cv=xs_str(p2);array_push(arr->arr,cv);value_decref(cv);break;}
+                        size_t chunk=(size_t)(nl-p2);
+                        /* strip trailing \r */
+                        size_t clen=chunk; if(clen>0&&p2[clen-1]=='\r') clen--;
+                        char *b=xs_malloc(clen+1); memcpy(b,p2,clen); b[clen]='\0';
+                        Value *cv=xs_str(b); free(b); array_push(arr->arr,cv); value_decref(cv);
+                        p2=nl+1;
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"is_empty")==0) {
+                    mc_result=slen==0?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"is_ascii")==0) {
+                    int ok=1; for(int j=0;j<slen;j++) if((unsigned char)s[j]>=128){ok=0;break;}
+                    mc_result=ok?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"is_digit")==0||strcmp(mc_name,"is_numeric")==0) {
+                    int ok=(slen>0); for(int j=0;j<slen;j++) if(!isdigit((unsigned char)s[j])){ok=0;break;}
+                    mc_result=ok?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"is_alpha")==0) {
+                    int ok=(slen>0); for(int j=0;j<slen;j++) if(!isalpha((unsigned char)s[j])){ok=0;break;}
+                    mc_result=ok?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"is_alnum")==0) {
+                    int ok=(slen>0); for(int j=0;j<slen;j++) if(!isalnum((unsigned char)s[j])){ok=0;break;}
+                    mc_result=ok?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"is_upper")==0) {
+                    int ok=(slen>0); for(int j=0;j<slen;j++) if(isalpha((unsigned char)s[j])&&!isupper((unsigned char)s[j])){ok=0;break;}
+                    mc_result=ok?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"is_lower")==0) {
+                    int ok=(slen>0); for(int j=0;j<slen;j++) if(isalpha((unsigned char)s[j])&&!islower((unsigned char)s[j])){ok=0;break;}
+                    mc_result=ok?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"remove_prefix")==0&&mc_argc>=1&&mc_args[0]->tag==XS_STR) {
+                    size_t pl=strlen(mc_args[0]->s);
+                    if(pl>0&&strncmp(s,mc_args[0]->s,pl)==0) mc_result=xs_str(s+pl);
+                    else mc_result=xs_str(s);
+                } else if (strcmp(mc_name,"remove_suffix")==0&&mc_argc>=1&&mc_args[0]->tag==XS_STR) {
+                    size_t pl=strlen(mc_args[0]->s);
+                    if(pl>0&&(size_t)slen>=pl&&strcmp(s+slen-pl,mc_args[0]->s)==0){
+                        char *r=xs_malloc(slen-pl+1); memcpy(r,s,slen-pl); r[slen-pl]='\0';
+                        mc_result=xs_str(r); free(r);
+                    } else mc_result=xs_str(s);
+                } else if (strcmp(mc_name,"truncate")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int64_t n2=mc_args[0]->i; if(n2<0) n2=0;
+                    if((int64_t)slen<=n2) mc_result=xs_str(s);
+                    else{
+                        size_t tlen=(size_t)(n2>3?n2-3:n2);
+                        char *buf=xs_malloc(tlen+4);
+                        memcpy(buf,s,tlen);
+                        if(n2>3){memcpy(buf+tlen,"...",3);buf[tlen+3]='\0';}
+                        else{buf[tlen]='\0';}
+                        mc_result=xs_str(buf); free(buf);
+                    }
+                } else if (strcmp(mc_name,"substr")==0||strcmp(mc_name,"substring")==0) {
+                    int64_t st2=0, en2=(int64_t)slen;
+                    if(mc_argc>=1&&mc_args[0]->tag==XS_INT) st2=mc_args[0]->i;
+                    if(mc_argc>=2&&mc_args[1]->tag==XS_INT) en2=mc_args[1]->i;
+                    if(st2<0) st2+=(int64_t)slen;
+                    if(en2<0) en2+=(int64_t)slen;
+                    if(st2<0) st2=0;
+                    if(en2>(int64_t)slen) en2=(int64_t)slen;
+                    if(st2>=en2){mc_result=xs_str("");}
+                    else{
+                        size_t n2=(size_t)(en2-st2); char *buf=xs_malloc(n2+1);
+                        memcpy(buf,s+st2,n2); buf[n2]='\0'; mc_result=xs_str(buf); free(buf);
+                    }
+                } else if (strcmp(mc_name,"to_str")==0||strcmp(mc_name,"to_string")==0) {
+                    mc_result=value_incref(mc_obj);
+                } else if (strcmp(mc_name,"startswith")==0) {
+                    if(mc_argc>=1&&mc_args[0]->tag==XS_STR){
+                        size_t pl=strlen(mc_args[0]->s);
+                        mc_result=strncmp(s,mc_args[0]->s,pl)==0
+                            ?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                    } else mc_result=value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"endswith")==0) {
+                    if(mc_argc>=1&&mc_args[0]->tag==XS_STR){
+                        size_t pl=strlen(mc_args[0]->s);
+                        mc_result=(size_t)slen>=pl&&strcmp(s+slen-pl,mc_args[0]->s)==0
+                            ?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+                    } else mc_result=value_incref(XS_FALSE_VAL);
+                } else if (strcmp(mc_name,"rfind")==0) {
+                    mc_result=xs_int(-1);
+                    if(mc_argc>=1&&mc_args[0]->tag==XS_STR){
+                        size_t sl2=strlen(mc_args[0]->s);
+                        if(sl2>0){
+                            for(int j=slen-(int)sl2;j>=0;j--){
+                                if(strncmp(s+j,mc_args[0]->s,sl2)==0){value_decref(mc_result);mc_result=xs_int(j);break;}
+                            }
+                        }
+                    }
+                } else if (strcmp(mc_name,"split_at")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int64_t idx=mc_args[0]->i;
+                    if(idx<0) idx+=slen;
+                    if(idx<0) idx=0;
+                    if(idx>(int64_t)slen) idx=(int64_t)slen;
+                    Value *arr=xs_array_new();
+                    char *a=xs_malloc((size_t)idx+1); memcpy(a,s,(size_t)idx); a[idx]='\0';
+                    Value *va=xs_str(a); free(a); array_push(arr->arr,va); value_decref(va);
+                    Value *vb=xs_str(s+idx); array_push(arr->arr,vb); value_decref(vb);
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"to_chars")==0) {
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<slen;j++){char b[2]={s[j],0};Value*cv=xs_str(b);array_push(arr->arr,cv);value_decref(cv);}
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"to_bytes")==0) {
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<slen;j++) array_push(arr->arr,xs_int((unsigned char)s[j]));
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"length")==0) {
+                    mc_result=xs_int(slen);
+                } else if (strcmp(mc_name,"lpad")==0||strcmp(mc_name,"pad_start")==0) {
+                    int64_t n2=(mc_argc>=1&&mc_args[0]->tag==XS_INT)?mc_args[0]->i:(int64_t)slen;
+                    char ch=' ';
+                    if(mc_argc>=2&&mc_args[1]->tag==XS_STR&&mc_args[1]->s[0]) ch=mc_args[1]->s[0];
+                    if(n2<=(int64_t)slen) mc_result=xs_str(s);
+                    else{
+                        char *buf=xs_malloc((size_t)n2+1);
+                        int64_t pad=n2-(int64_t)slen;
+                        for(int64_t j=0;j<pad;j++) buf[j]=ch;
+                        memcpy(buf+pad,s,(size_t)slen); buf[n2]='\0';
+                        mc_result=xs_str(buf); free(buf);
+                    }
+                } else if (strcmp(mc_name,"rpad")==0||strcmp(mc_name,"pad_end")==0) {
+                    int64_t n2=(mc_argc>=1&&mc_args[0]->tag==XS_INT)?mc_args[0]->i:(int64_t)slen;
+                    char ch=' ';
+                    if(mc_argc>=2&&mc_args[1]->tag==XS_STR&&mc_args[1]->s[0]) ch=mc_args[1]->s[0];
+                    if(n2<=(int64_t)slen) mc_result=xs_str(s);
+                    else{
+                        char *buf=xs_malloc((size_t)n2+1);
+                        memcpy(buf,s,(size_t)slen);
+                        for(int64_t j=(int64_t)slen;j<n2;j++) buf[j]=ch;
+                        buf[n2]='\0'; mc_result=xs_str(buf); free(buf);
+                    }
+                } else if (strcmp(mc_name,"reversed")==0) {
+                    char *r=xs_malloc((size_t)slen+1);
+                    for(int j=0;j<slen;j++) r[j]=s[slen-1-j];
+                    r[slen]='\0'; mc_result=xs_str(r); free(r);
+                } else if (strcmp(mc_name,"find")==0) {
+                    mc_result=xs_int(-1);
+                    if(mc_argc>=1&&mc_args[0]->tag==XS_STR){
+                        const char *fnd=strstr(s,mc_args[0]->s);
+                        if(fnd){value_decref(mc_result);mc_result=xs_int((int64_t)(fnd-s));}
+                    }
+                } else if (strcmp(mc_name,"format")==0) {
+                    /* simple sprintf-style: replace %s/%d/%f with args in order */
+                    size_t cap=strlen(s)*2+64; char *buf=xs_malloc(cap); size_t wpos=0;
+                    const char *p2=s; int ai=0;
+                    while(*p2){
+                        if(*p2=='%'&&*(p2+1)){
+                            char spec=*(p2+1);
+                            if(spec=='s'||spec=='d'||spec=='f'||spec=='i'){
+                                char tmp[64]; tmp[0]='\0';
+                                if(ai<mc_argc){
+                                    if(spec=='s'){
+                                        char *sv=value_str(mc_args[ai]);
+                                        size_t svl=strlen(sv);
+                                        while(wpos+svl+1>cap){cap*=2;buf=xs_realloc(buf,cap);}
+                                        memcpy(buf+wpos,sv,svl); wpos+=svl; free(sv); ai++;
+                                        p2+=2; continue;
+                                    } else if((spec=='d'||spec=='i')&&mc_args[ai]->tag==XS_INT){
+                                        snprintf(tmp,sizeof(tmp),"%lld",(long long)mc_args[ai]->i); ai++;
+                                    } else if(spec=='f'&&mc_args[ai]->tag==XS_FLOAT){
+                                        snprintf(tmp,sizeof(tmp),"%g",mc_args[ai]->f); ai++;
+                                    } else if((spec=='d'||spec=='i')&&mc_args[ai]->tag==XS_FLOAT){
+                                        snprintf(tmp,sizeof(tmp),"%lld",(long long)mc_args[ai]->f); ai++;
+                                    } else if(spec=='f'&&mc_args[ai]->tag==XS_INT){
+                                        snprintf(tmp,sizeof(tmp),"%g",(double)mc_args[ai]->i); ai++;
+                                    }
+                                }
+                                size_t tl=strlen(tmp);
+                                while(wpos+tl+1>cap){cap*=2;buf=xs_realloc(buf,cap);}
+                                memcpy(buf+wpos,tmp,tl); wpos+=tl; p2+=2; continue;
+                            }
+                        }
+                        while(wpos+2>cap){cap*=2;buf=xs_realloc(buf,cap);}
+                        buf[wpos++]=*p2++;
+                    }
+                    buf[wpos]='\0'; mc_result=xs_str(buf); free(buf);
+                } else if (strcmp(mc_name,"as_int")==0)
+                    mc_result=xs_int(atoll(s));
+                else if (strcmp(mc_name,"as_float")==0)
+                    mc_result=xs_float(atof(s));
+                else if (strcmp(mc_name,"as_str")==0)
+                    mc_result=value_incref(mc_obj);
+                else if (strcmp(mc_name,"parse")==0) {
+                    int base=(mc_argc>=1&&mc_args[0]->tag==XS_INT)?(int)mc_args[0]->i:10;
+                    mc_result=xs_int((int64_t)strtoll(s,NULL,base));
+                } else if (strcmp(mc_name,"from_chars")==0) {
+                    /* join chars into string — just return self if called on a string */
+                    mc_result=value_incref(mc_obj);
+                } else if (strcmp(mc_name,"is_a")==0&&mc_argc>=1&&mc_args[0]->tag==XS_STR) {
+                    mc_result=xs_bool(strcmp(mc_args[0]->s,"str")==0||strcmp(mc_args[0]->s,"String")==0);
                 } else mc_result=value_incref(XS_NULL_VAL);
             }
             else if (mc_obj->tag==XS_ARRAY||mc_obj->tag==XS_TUPLE) {
@@ -1955,10 +2793,458 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                         if(!dup) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
                     }
                     mc_result=arr;
+                } else if (strcmp(mc_name,"is_empty")==0) {
+                    mc_result=xs_bool(mc_obj->arr->len==0);
+                } else if (strcmp(mc_name,"each")==0||strcmp(mc_name,"for_each")==0) {
+                    if(mc_argc>=1){
+                        for(int j=0;j<mc_obj->arr->len;j++){
+                            Value *r=vm_invoke(vm,mc_args[0],&mc_obj->arr->items[j],1);
+                            value_decref(r);
+                        }
+                        frame=FRAME;
+                    }
+                    mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"take")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int64_t n2=mc_args[0]->i; if(n2<0) n2=0;
+                    if(n2>mc_obj->arr->len) n2=mc_obj->arr->len;
+                    Value *arr=xs_array_new();
+                    for(int64_t j=0;j<n2;j++) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"drop")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int64_t n2=mc_args[0]->i; if(n2<0) n2=0;
+                    if(n2>mc_obj->arr->len) n2=mc_obj->arr->len;
+                    Value *arr=xs_array_new();
+                    for(int64_t j=n2;j<mc_obj->arr->len;j++) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"take_while")==0&&mc_argc>=1) {
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        Value *r=vm_invoke(vm,mc_args[0],&mc_obj->arr->items[j],1);
+                        int ok=value_truthy(r); value_decref(r);
+                        if(!ok) break;
+                        array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    }
+                    frame=FRAME;
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"drop_while")==0&&mc_argc>=1) {
+                    Value *arr=xs_array_new();
+                    int dropping=1;
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        if(dropping){
+                            Value *r=vm_invoke(vm,mc_args[0],&mc_obj->arr->items[j],1);
+                            dropping=value_truthy(r); value_decref(r);
+                        }
+                        if(!dropping) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    }
+                    frame=FRAME;
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"flat_map")==0&&mc_argc>=1) {
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        Value *r=vm_invoke(vm,mc_args[0],&mc_obj->arr->items[j],1);
+                        if(r&&(r->tag==XS_ARRAY||r->tag==XS_TUPLE)){
+                            for(int k=0;k<r->arr->len;k++) array_push(arr->arr,value_incref(r->arr->items[k]));
+                            value_decref(r);
+                        } else if(r) { array_push(arr->arr,r); }
+                        else { array_push(arr->arr,value_incref(XS_NULL_VAL)); }
+                    }
+                    frame=FRAME;
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"zip")==0&&mc_argc>=1&&(mc_args[0]->tag==XS_ARRAY||mc_args[0]->tag==XS_TUPLE)) {
+                    Value *arr=xs_array_new();
+                    int n2=mc_obj->arr->len<mc_args[0]->arr->len?mc_obj->arr->len:mc_args[0]->arr->len;
+                    for(int j=0;j<n2;j++){
+                        Value *pair=xs_tuple_new();
+                        array_push(pair->arr,value_incref(mc_obj->arr->items[j]));
+                        array_push(pair->arr,value_incref(mc_args[0]->arr->items[j]));
+                        array_push(arr->arr,pair);
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"zip_with")==0&&mc_argc>=2&&(mc_args[0]->tag==XS_ARRAY||mc_args[0]->tag==XS_TUPLE)) {
+                    Value *arr=xs_array_new();
+                    int n2=mc_obj->arr->len<mc_args[0]->arr->len?mc_obj->arr->len:mc_args[0]->arr->len;
+                    for(int j=0;j<n2;j++){
+                        Value *pair[2]={mc_obj->arr->items[j],mc_args[0]->arr->items[j]};
+                        Value *r=vm_invoke(vm,mc_args[1],pair,2);
+                        array_push(arr->arr,r?r:value_incref(XS_NULL_VAL));
+                    }
+                    frame=FRAME;
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"partition")==0&&mc_argc>=1) {
+                    Value *yes=xs_array_new(), *no=xs_array_new();
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        Value *r=vm_invoke(vm,mc_args[0],&mc_obj->arr->items[j],1);
+                        if(value_truthy(r)) array_push(yes->arr,value_incref(mc_obj->arr->items[j]));
+                        else array_push(no->arr,value_incref(mc_obj->arr->items[j]));
+                        value_decref(r);
+                    }
+                    frame=FRAME;
+                    Value *parr=xs_array_new();
+                    array_push(parr->arr,yes); array_push(parr->arr,no);
+                    mc_result=parr;
+                } else if (strcmp(mc_name,"group_by")==0&&mc_argc>=1) {
+                    Value *m=xs_map_new();
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        Value *k=vm_invoke(vm,mc_args[0],&mc_obj->arr->items[j],1);
+                        if(!k) k=value_incref(XS_NULL_VAL);
+                        char *ks=value_str(k); value_decref(k);
+                        Value *bucket=map_get(m->map,ks);
+                        if(!bucket){bucket=xs_array_new();map_set(m->map,ks,bucket);value_decref(bucket);bucket=map_get(m->map,ks);}
+                        array_push(bucket->arr,value_incref(mc_obj->arr->items[j]));
+                        free(ks);
+                    }
+                    frame=FRAME;
+                    mc_result=m;
+                } else if (strcmp(mc_name,"sort_by")==0&&mc_argc>=1) {
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<mc_obj->arr->len;j++) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    {
+                        int slen2=arr->arr->len;
+                        Value **skeys=(Value**)xs_malloc(sizeof(Value*)*(size_t)(slen2>0?slen2:1));
+                        for(int j=0;j<slen2;j++){skeys[j]=vm_invoke(vm,mc_args[0],&arr->arr->items[j],1);if(!skeys[j])skeys[j]=value_incref(XS_NULL_VAL);}
+                        frame=FRAME;
+                        for(int j=0;j<slen2-1;j++) for(int k=0;k<slen2-1-j;k++){
+                            if(value_cmp(skeys[k],skeys[k+1])>0){
+                                Value *tv=arr->arr->items[k]; arr->arr->items[k]=arr->arr->items[k+1]; arr->arr->items[k+1]=tv;
+                                Value *tk=skeys[k]; skeys[k]=skeys[k+1]; skeys[k+1]=tk;
+                            }
+                        }
+                        for(int j=0;j<slen2;j++) value_decref(skeys[j]);
+                        free(skeys);
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"min_by")==0&&mc_argc>=1) {
+                    if(mc_obj->arr->len==0){mc_result=value_incref(XS_NULL_VAL);}
+                    else{
+                        Value *best=mc_obj->arr->items[0];
+                        Value *bkey=vm_invoke(vm,mc_args[0],&best,1); if(!bkey) bkey=value_incref(XS_NULL_VAL);
+                        for(int j=1;j<mc_obj->arr->len;j++){
+                            Value *k=vm_invoke(vm,mc_args[0],&mc_obj->arr->items[j],1); if(!k) k=value_incref(XS_NULL_VAL);
+                            if(value_cmp(k,bkey)<0){value_decref(bkey);bkey=k;best=mc_obj->arr->items[j];}
+                            else value_decref(k);
+                        }
+                        value_decref(bkey);
+                        frame=FRAME;
+                        mc_result=value_incref(best);
+                    }
+                } else if (strcmp(mc_name,"max_by")==0&&mc_argc>=1) {
+                    if(mc_obj->arr->len==0){mc_result=value_incref(XS_NULL_VAL);}
+                    else{
+                        Value *best=mc_obj->arr->items[0];
+                        Value *bkey=vm_invoke(vm,mc_args[0],&best,1); if(!bkey) bkey=value_incref(XS_NULL_VAL);
+                        for(int j=1;j<mc_obj->arr->len;j++){
+                            Value *k=vm_invoke(vm,mc_args[0],&mc_obj->arr->items[j],1); if(!k) k=value_incref(XS_NULL_VAL);
+                            if(value_cmp(k,bkey)>0){value_decref(bkey);bkey=k;best=mc_obj->arr->items[j];}
+                            else value_decref(k);
+                        }
+                        value_decref(bkey);
+                        frame=FRAME;
+                        mc_result=value_incref(best);
+                    }
+                } else if (strcmp(mc_name,"dedup")==0) {
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        if(j==0||!value_equal(mc_obj->arr->items[j],mc_obj->arr->items[j-1]))
+                            array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"intersperse")==0&&mc_argc>=1) {
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        if(j>0) array_push(arr->arr,value_incref(mc_args[0]));
+                        array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"window")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int64_t n2=mc_args[0]->i; Value *arr=xs_array_new();
+                    if(n2>0){
+                        for(int j=0;j<=mc_obj->arr->len-(int)n2;j++){
+                            Value *win=xs_array_new();
+                            for(int64_t k=0;k<n2;k++) array_push(win->arr,value_incref(mc_obj->arr->items[j+k]));
+                            array_push(arr->arr,win);
+                        }
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"chunk")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int64_t n2=mc_args[0]->i; if(n2<1) n2=1;
+                    Value *arr=xs_array_new();
+                    for(int j=0;j<mc_obj->arr->len;){
+                        Value *ch=xs_array_new();
+                        for(int64_t k=0;k<n2&&j<mc_obj->arr->len;k++,j++) array_push(ch->arr,value_incref(mc_obj->arr->items[j]));
+                        array_push(arr->arr,ch);
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"rotate")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int alen=mc_obj->arr->len;
+                    Value *arr=xs_array_new();
+                    if(alen>0){
+                        int64_t n2=mc_args[0]->i%alen;
+                        if(n2<0) n2+=alen;
+                        for(int j=(int)n2;j<alen;j++) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                        for(int j=0;j<(int)n2;j++) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"sample")==0) {
+                    int64_t n2=(mc_argc>=1&&mc_args[0]->tag==XS_INT)?mc_args[0]->i:1;
+                    if(n2<0) n2=0;
+                    if(n2>mc_obj->arr->len) n2=mc_obj->arr->len;
+                    Value *arr=xs_array_new();
+                    for(int64_t j=0;j<n2;j++) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"product")==0) {
+                    int64_t pi=1; double pf=1.0; int is_float=0;
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        if(mc_obj->arr->items[j]->tag==XS_INT) pi*=mc_obj->arr->items[j]->i;
+                        else if(mc_obj->arr->items[j]->tag==XS_FLOAT){pf*=mc_obj->arr->items[j]->f;is_float=1;}
+                    }
+                    mc_result=is_float?xs_float(pf*(double)pi):xs_int(pi);
+                } else if (strcmp(mc_name,"frequencies")==0) {
+                    Value *m=xs_map_new();
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        char *ks=value_str(mc_obj->arr->items[j]);
+                        Value *cur=map_get(m->map,ks);
+                        int64_t cnt=cur&&cur->tag==XS_INT?cur->i:0;
+                        Value *nv=xs_int(cnt+1); map_set(m->map,ks,nv); value_decref(nv);
+                        free(ks);
+                    }
+                    mc_result=m;
+                } else if (strcmp(mc_name,"reversed")==0) {
+                    Value *arr=xs_array_new();
+                    for(int j=mc_obj->arr->len-1;j>=0;j--) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"scan")==0&&mc_argc>=2) {
+                    /* scan(init, fn) — init first, fn second, matching interpreter */
+                    Value *acc=value_incref(mc_args[0]);
+                    Value *arr=xs_array_new();
+                    array_push(arr->arr,value_incref(acc));
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        Value *pair[2]={acc,mc_obj->arr->items[j]};
+                        Value *r=vm_invoke(vm,mc_args[1],pair,2);
+                        value_decref(acc); acc=r?r:value_incref(XS_NULL_VAL);
+                        array_push(arr->arr,value_incref(acc));
+                    }
+                    value_decref(acc);
+                    frame=FRAME;
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"prepend")==0&&mc_argc>=1) {
+                    array_push(mc_obj->arr,value_incref(XS_NULL_VAL));
+                    for(int k=mc_obj->arr->len-1;k>0;k--) mc_obj->arr->items[k]=mc_obj->arr->items[k-1];
+                    mc_obj->arr->items[0]=value_incref(mc_args[0]);
+                    mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"clear")==0) {
+                    for(int j=0;j<mc_obj->arr->len;j++) value_decref(mc_obj->arr->items[j]);
+                    mc_obj->arr->len=0;
+                    mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"push_back")==0||strcmp(mc_name,"add")==0) {
+                    for(int j=0;j<mc_argc;j++) array_push(mc_obj->arr,value_incref(mc_args[j]));
+                    mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"push_front")==0) {
+                    for(int j=0;j<mc_argc;j++){
+                        array_push(mc_obj->arr,value_incref(XS_NULL_VAL));
+                        for(int k=mc_obj->arr->len-1;k>0;k--) mc_obj->arr->items[k]=mc_obj->arr->items[k-1];
+                        mc_obj->arr->items[0]=value_incref(mc_args[j]);
+                    }
+                    mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"pop_back")==0) {
+                    if(mc_obj->arr->len>0){
+                        mc_result=value_incref(mc_obj->arr->items[mc_obj->arr->len-1]);
+                        value_decref(mc_obj->arr->items[--mc_obj->arr->len]);
+                    } else mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"pop_front")==0) {
+                    if(mc_obj->arr->len>0){
+                        mc_result=value_incref(mc_obj->arr->items[0]);
+                        value_decref(mc_obj->arr->items[0]);
+                        for(int j=1;j<mc_obj->arr->len;j++) mc_obj->arr->items[j-1]=mc_obj->arr->items[j];
+                        mc_obj->arr->len--;
+                    } else mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"extend")==0&&mc_argc>=1&&(mc_args[0]->tag==XS_ARRAY||mc_args[0]->tag==XS_TUPLE)) {
+                    for(int j=0;j<mc_args[0]->arr->len;j++) array_push(mc_obj->arr,value_incref(mc_args[0]->arr->items[j]));
+                    mc_result=value_incref(XS_NULL_VAL);
+                } else if (strcmp(mc_name,"shuffle")==0) {
+                    int n2=mc_obj->arr->len;
+                    for(int j=n2-1;j>0;j--){
+                        int k=rand()%(j+1);
+                        Value *tmp=mc_obj->arr->items[j]; mc_obj->arr->items[j]=mc_obj->arr->items[k]; mc_obj->arr->items[k]=tmp;
+                    }
+                    mc_result=value_incref(mc_obj);
+                } else if (strcmp(mc_name,"skip")==0&&mc_argc>=1&&mc_args[0]->tag==XS_INT) {
+                    int64_t n2=mc_args[0]->i; if(n2<0) n2=0;
+                    if(n2>mc_obj->arr->len) n2=mc_obj->arr->len;
+                    Value *arr=xs_array_new();
+                    for(int64_t j=n2;j<mc_obj->arr->len;j++) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"to_array")==0) {
+                    mc_result=value_incref(mc_obj);
+                } else if (strcmp(mc_name,"total")==0) {
+                    int64_t si=0; double sf=0; int is_float=0;
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        if(mc_obj->arr->items[j]->tag==XS_INT) si+=mc_obj->arr->items[j]->i;
+                        else if(mc_obj->arr->items[j]->tag==XS_FLOAT){sf+=mc_obj->arr->items[j]->f;is_float=1;}
+                    }
+                    mc_result=is_float?xs_float(sf+(double)si):xs_int(si);
+                } else if (strcmp(mc_name,"sum_by")==0&&mc_argc>=1) {
+                    int64_t si=0; double sf=0; int is_float=0;
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        Value *r=vm_invoke(vm,mc_args[0],&mc_obj->arr->items[j],1);
+                        if(r&&r->tag==XS_INT) si+=r->i;
+                        else if(r&&r->tag==XS_FLOAT){sf+=r->f;is_float=1;}
+                        value_decref(r);
+                    }
+                    frame=FRAME;
+                    mc_result=is_float?xs_float(sf+(double)si):xs_int(si);
+                } else if (strcmp(mc_name,"from_chars")==0) {
+                    /* join array of chars into a string */
+                    size_t cap=256; char *buf=xs_malloc(cap); size_t wpos=0;
+                    for(int j=0;j<mc_obj->arr->len;j++){
+                        if(mc_obj->arr->items[j]->tag==XS_STR){
+                            size_t cl=strlen(mc_obj->arr->items[j]->s);
+                            while(wpos+cl+1>cap){cap*=2;buf=xs_realloc(buf,cap);}
+                            memcpy(buf+wpos,mc_obj->arr->items[j]->s,cl); wpos+=cl;
+                        }
+                    }
+                    buf[wpos]='\0'; mc_result=xs_str(buf); free(buf);
+                } else if (strcmp(mc_name,"is_a")==0&&mc_argc>=1&&mc_args[0]->tag==XS_STR) {
+                    mc_result=xs_bool(strcmp(mc_args[0]->s,"array")==0||strcmp(mc_args[0]->s,"Array")==0||strcmp(mc_args[0]->s,"List")==0);
                 } else mc_result=value_incref(XS_NULL_VAL);
             }
-            else mc_result=value_incref(XS_NULL_VAL);
+            else if (mc_obj->tag==XS_INT||mc_obj->tag==XS_FLOAT) {
+                double num_f=(mc_obj->tag==XS_FLOAT)?mc_obj->f:(double)mc_obj->i;
+                int64_t num_i=(mc_obj->tag==XS_INT)?mc_obj->i:(int64_t)mc_obj->f;
+                if (strcmp(mc_name,"is_even")==0)
+                    mc_result=mc_obj->tag==XS_INT?xs_bool(mc_obj->i%2==0):value_incref(XS_FALSE_VAL);
+                else if (strcmp(mc_name,"is_odd")==0)
+                    mc_result=mc_obj->tag==XS_INT?xs_bool(mc_obj->i%2!=0):value_incref(XS_FALSE_VAL);
+                else if (strcmp(mc_name,"is_nan")==0)
+                    mc_result=mc_obj->tag==XS_FLOAT?xs_bool(isnan(mc_obj->f)):value_incref(XS_FALSE_VAL);
+                else if (strcmp(mc_name,"is_inf")==0)
+                    mc_result=mc_obj->tag==XS_FLOAT?xs_bool(isinf(mc_obj->f)):value_incref(XS_FALSE_VAL);
+                else if (strcmp(mc_name,"abs")==0) {
+                    if(mc_obj->tag==XS_INT) mc_result=xs_int(mc_obj->i<0?-mc_obj->i:mc_obj->i);
+                    else mc_result=xs_float(fabs(mc_obj->f));
+                } else if (strcmp(mc_name,"sign")==0) {
+                    if(mc_obj->tag==XS_INT) mc_result=xs_int(mc_obj->i>0?1:(mc_obj->i<0?-1:0));
+                    else mc_result=xs_int(mc_obj->f>0.0?1:(mc_obj->f<0.0?-1:0));
+                } else if (strcmp(mc_name,"clamp")==0&&mc_argc>=2) {
+                    double lo=(mc_args[0]->tag==XS_FLOAT)?mc_args[0]->f:(double)mc_args[0]->i;
+                    double hi=(mc_args[1]->tag==XS_FLOAT)?mc_args[1]->f:(double)mc_args[1]->i;
+                    if(mc_obj->tag==XS_INT){
+                        int64_t loi=(int64_t)lo,hii=(int64_t)hi;
+                        int64_t v=mc_obj->i<loi?loi:(mc_obj->i>hii?hii:mc_obj->i);
+                        mc_result=xs_int(v);
+                    } else {
+                        double v=num_f<lo?lo:(num_f>hi?hi:num_f);
+                        mc_result=xs_float(v);
+                    }
+                } else if (strcmp(mc_name,"to_str")==0||strcmp(mc_name,"to_string")==0) {
+                    char buf[64];
+                    if(mc_obj->tag==XS_INT) snprintf(buf,sizeof(buf),"%lld",(long long)mc_obj->i);
+                    else snprintf(buf,sizeof(buf),"%g",mc_obj->f);
+                    mc_result=xs_str(buf);
+                } else if (strcmp(mc_name,"to_char")==0) {
+                    char buf[2]={(char)(num_i&0xFF),0};
+                    mc_result=xs_str(buf);
+                } else if (strcmp(mc_name,"digits")==0) {
+                    int64_t n2=mc_obj->tag==XS_INT?mc_obj->i:(int64_t)mc_obj->f;
+                    if(n2<0) n2=-n2;
+                    Value *arr=xs_array_new();
+                    if(n2==0){ array_push(arr->arr,xs_int(0)); }
+                    else {
+                        char tmp[32]; int tlen=snprintf(tmp,sizeof(tmp),"%lld",(long long)n2);
+                        for(int j=0;j<tlen;j++) array_push(arr->arr,xs_int(tmp[j]-'0'));
+                    }
+                    mc_result=arr;
+                } else if (strcmp(mc_name,"to_hex")==0) {
+                    char buf[32]; snprintf(buf,sizeof(buf),"%llx",(long long)num_i);
+                    mc_result=xs_str(buf);
+                } else if (strcmp(mc_name,"to_oct")==0) {
+                    char buf[32]; snprintf(buf,sizeof(buf),"%llo",(long long)num_i);
+                    mc_result=xs_str(buf);
+                } else if (strcmp(mc_name,"to_bin")==0) {
+                    uint64_t v2=(uint64_t)num_i;
+                    if(v2==0){mc_result=xs_str("0");}
+                    else{
+                        char buf[65]; int pos=64; buf[pos]='\0';
+                        while(v2>0){buf[--pos]=(char)('0'+(v2&1));v2>>=1;}
+                        mc_result=xs_str(buf+pos);
+                    }
+                } else if (strcmp(mc_name,"is_a")==0&&mc_argc>=1&&mc_args[0]->tag==XS_STR) {
+                    int match=(mc_obj->tag==XS_INT&&(strcmp(mc_args[0]->s,"int")==0||strcmp(mc_args[0]->s,"Int")==0))||
+                              (mc_obj->tag==XS_FLOAT&&(strcmp(mc_args[0]->s,"float")==0||strcmp(mc_args[0]->s,"Float")==0));
+                    mc_result=xs_bool(match);
+                } else mc_result=value_incref(XS_NULL_VAL);
+                (void)num_f; (void)num_i;
+            }
+            else {
+                /* generic methods for any remaining types */
+                if (strcmp(mc_name,"is_a")==0&&mc_argc>=1&&mc_args[0]->tag==XS_STR) {
+                    const char *tn = mc_args[0]->s;
+                    int match = 0;
+                    if (mc_obj->tag==XS_STR && (strcmp(tn,"str")==0||strcmp(tn,"String")==0)) match=1;
+                    else if (mc_obj->tag==XS_INT && (strcmp(tn,"int")==0||strcmp(tn,"Int")==0)) match=1;
+                    else if (mc_obj->tag==XS_FLOAT && (strcmp(tn,"float")==0||strcmp(tn,"Float")==0)) match=1;
+                    else if ((mc_obj->tag==XS_ARRAY||mc_obj->tag==XS_TUPLE) && (strcmp(tn,"array")==0||strcmp(tn,"Array")==0||strcmp(tn,"List")==0)) match=1;
+                    else if (mc_obj->tag==XS_BOOL && (strcmp(tn,"bool")==0||strcmp(tn,"Bool")==0)) match=1;
+                    mc_result = xs_bool(match);
+                } else {
+                /* check plugin methods */
+                Value *pmethods = map_get(vm->globals, "__plugin_methods");
+                if (pmethods && pmethods->tag == XS_MAP) {
+                    const char *type_name = NULL;
+                    if (mc_obj->tag == XS_STR) type_name = "str";
+                    else if (mc_obj->tag == XS_INT) type_name = "int";
+                    else if (mc_obj->tag == XS_FLOAT) type_name = "float";
+                    else if (mc_obj->tag == XS_ARRAY) type_name = "array";
+                    else if (mc_obj->tag == XS_BOOL) type_name = "bool";
+                    if (type_name) {
+                        Value *tm = map_get(pmethods->map, type_name);
+                        if (tm && tm->tag == XS_MAP) {
+                            Value *pfn = map_get(tm->map, mc_name);
+                            if (pfn && (pfn->tag == XS_CLOSURE || pfn->tag == XS_NATIVE)) {
+                                /* call plugin method with self as first arg */
+                                Value *pargs[17];
+                                pargs[0] = mc_obj;
+                                int total = 1 + mc_argc;
+                                if (total > 17) total = 17;
+                                for (int pj = 0; pj < mc_argc && pj < 16; pj++) pargs[pj+1] = mc_args[pj];
+                                mc_result = vm_invoke(vm, pfn, pargs, total);
+                                frame = FRAME;
+                                if (!mc_result) mc_result = value_incref(XS_NULL_VAL);
+                            } else mc_result = value_incref(XS_NULL_VAL);
+                        } else mc_result = value_incref(XS_NULL_VAL);
+                    } else mc_result = value_incref(XS_NULL_VAL);
+                } else mc_result = value_incref(XS_NULL_VAL);
+                } /* end is_a else */
+            }
 
+            /* check plugin methods if result is null */
+            if (!mc_called && mc_result && mc_result->tag == XS_NULL) {
+                Value *pmethods = map_get(vm->globals, "__plugin_methods");
+                if (pmethods && pmethods->tag == XS_MAP) {
+                    const char *ptype = NULL;
+                    if (mc_obj->tag == XS_STR) ptype = "str";
+                    else if (mc_obj->tag == XS_INT) ptype = "int";
+                    else if (mc_obj->tag == XS_FLOAT) ptype = "float";
+                    else if (mc_obj->tag == XS_ARRAY) ptype = "array";
+                    else if (mc_obj->tag == XS_BOOL) ptype = "bool";
+                    if (ptype) {
+                        Value *tm = map_get(pmethods->map, ptype);
+                        if (tm && tm->tag == XS_MAP) {
+                            Value *pfn = map_get(tm->map, mc_name);
+                            if (pfn && (pfn->tag == XS_CLOSURE || pfn->tag == XS_NATIVE)) {
+                                Value *pargs[17];
+                                pargs[0] = mc_obj;
+                                int ptotal = 1 + mc_argc;
+                                if (ptotal > 17) ptotal = 17;
+                                for (int pj = 0; pj < mc_argc && pj < 16; pj++) pargs[pj+1] = mc_args[pj];
+                                value_decref(mc_result);
+                                mc_result = vm_invoke(vm, pfn, pargs, ptotal);
+                                frame = FRAME;
+                                if (!mc_result) mc_result = value_incref(XS_NULL_VAL);
+                            }
+                        }
+                    }
+                }
+            }
             if (!mc_called) {
                 for(int j=0;j<mc_argc;j++) value_decref(POP());
                 value_decref(POP()); /* obj */
@@ -2117,49 +3403,60 @@ static int vm_dispatch(VM *vm, int stop_frame) {
         case OP_EFFECT_CALL: {
             int argc_eff = (int)INSTR_A(instr);
             const char *eff_name = PROTO->chunk.consts[INSTR_Bx(instr)]->s;
+            (void)eff_name;
 
             Value *eff_args[16];
             for (int i = argc_eff - 1; i >= 0; i--) eff_args[i] = POP();
 
-            Value *eff = xs_map_new();
-            { Value *en = xs_str(eff_name); map_set(eff->map, "_effect", en); value_decref(en); }
-            Value *args_arr = xs_array_new();
-            for (int i = 0; i < argc_eff; i++) {
-                array_push(args_arr->arr, eff_args[i]);
-                value_decref(eff_args[i]);
-            }
-            map_set(eff->map, "_args", args_arr);
-            value_decref(args_arr);
+            /* save full continuation (frames + stack pointer) */
+            vm->eff_cont.frame_count = vm->frame_count;
+            memcpy(vm->eff_cont.frames, vm->frames,
+                   sizeof(CallFrame) * (size_t)vm->frame_count);
+            vm->eff_cont.sp_offset = vm->sp;
+            vm->eff_cont.valid = 1;
 
+            Value *eff_val = (argc_eff > 0) ? eff_args[0] : value_incref(XS_NULL_VAL);
+            for (int i = 1; i < argc_eff; i++) value_decref(eff_args[i]);
+
+            /* find handler (scan try stack) */
             int eff_handled = 0;
-            while (vm->frame_count > 0) {
-                CallFrame *cf = &vm->frames[vm->frame_count - 1];
+            for (int fi = vm->frame_count - 1; fi >= 0; fi--) {
+                CallFrame *cf = &vm->frames[fi];
                 if (cf->try_depth > 0) {
                     TryEntry *te = &cf->try_stack[--cf->try_depth];
-                    while (vm->sp > te->stack_top) value_decref(POP());
-                    PUSH(eff);
+                    /* don't unwind stack — keep it intact for resume */
+                    /* just jump to handler within the handler frame */
+                    vm->sp = te->stack_top;
+                    PUSH(eff_val);
+                    vm->frame_count = fi + 1;
                     frame = cf;
                     frame->ip = te->catch_ip;
                     eff_handled = 1;
                     break;
                 }
-                upvalue_close_all(&vm->open_upvalues, cf->base);
-                while (vm->sp > cf->base) value_decref(POP());
-                value_decref(cf->closure_val);
-                vm->frame_count--;
             }
             if (!eff_handled) {
-                char *s = value_str(eff);
-                fprintf(stderr, "unhandled effect: %s\n", s);
-                free(s);
-                value_decref(eff);
+                fprintf(stderr, "unhandled effect\n");
+                value_decref(eff_val);
                 return 1;
             }
             break;
         }
         case OP_EFFECT_RESUME: {
             Value *resume_val = POP();
-            PUSH(resume_val);
+            if (vm->eff_cont.valid) {
+                /* restore continuation: all frames and stack pointer */
+                memcpy(vm->frames, vm->eff_cont.frames,
+                       sizeof(CallFrame) * (size_t)vm->eff_cont.frame_count);
+                vm->frame_count = vm->eff_cont.frame_count;
+                vm->sp = vm->eff_cont.sp_offset;
+                frame = FRAME;
+                vm->eff_cont.valid = 0;
+                /* push resume value as result of the perform expression */
+                PUSH(resume_val);
+            } else {
+                PUSH(resume_val);
+            }
             break;
         }
 
@@ -2274,14 +3571,47 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             Value *fn = POP();
             Value *task = xs_map_new();
             if (fn->tag == XS_NATIVE || fn->tag == XS_CLOSURE) {
-                if (vm->n_tasks < VM_MAX_TASKS) {
-                    int tid = vm->n_tasks++;
-                    vm->tasks[tid].fn     = value_incref(fn);
-                    vm->tasks[tid].result = NULL;
-                    vm->tasks[tid].done   = 0;
-                    { Value *sv = xs_str("pending"); map_set(task->map, "_status", sv); value_decref(sv); }
-                    { Value *iv = xs_int(tid); map_set(task->map, "_task_id", iv); value_decref(iv); }
-                    map_set(task->map, "_fn", fn);
+                /* immediately execute spawn blocks */
+                if (fn->tag == XS_CLOSURE) {
+                    int cl_arity = fn->cl->proto->arity;
+                    if (cl_arity < 0) cl_arity = -(cl_arity + 1);
+                    if (cl_arity == 0) {
+                        Value *result = vm_invoke(vm, fn, NULL, 0);
+                        frame = FRAME;
+                        /* check if result is an actor — unwrap as actor instance */
+                        if (result && result->tag == XS_MAP && map_get(result->map, "__actor_name")) {
+                            Value *actor_inst = xs_map_new();
+                            Value *state = map_get(result->map, "__state");
+                            if (state && state->tag == XS_MAP)
+                                for (int aj = 0; aj < state->map->cap; aj++)
+                                    if (state->map->keys[aj])
+                                        map_set(actor_inst->map, state->map->keys[aj],
+                                                value_incref(state->map->vals[aj]));
+                            Value *methods = map_get(result->map, "__methods");
+                            if (methods && methods->tag == XS_MAP)
+                                map_set(actor_inst->map, "__methods", value_incref(methods));
+                            Value *aname = map_get(result->map, "__actor_name");
+                            if (aname) map_set(actor_inst->map, "__type", value_incref(aname));
+                            value_decref(result);
+                            value_decref(task);
+                            value_decref(fn);
+                            PUSH(actor_inst);
+                            break;
+                        }
+                        { Value *sv = xs_str("done"); map_set(task->map, "_status", sv); value_decref(sv); }
+                        map_set(task->map, "_result", result ? result : value_incref(XS_NULL_VAL));
+                        if (result) value_decref(result);
+                    } else {
+                        { Value *sv = xs_str("done"); map_set(task->map, "_status", sv); value_decref(sv); }
+                        map_set(task->map, "_result", value_incref(XS_NULL_VAL));
+                    }
+                } else if (fn->tag == XS_NATIVE) {
+                    Value *result = fn->native(NULL, NULL, 0);
+                    { Value *sv = xs_str("done"); map_set(task->map, "_status", sv); value_decref(sv); }
+                    map_set(task->map, "_result", result ? result : value_incref(XS_NULL_VAL));
+                    if (result) value_decref(result);
+                }
+                if (1) { /* immediate execution done above, skip old deferred path */
                 } else {
                     if (fn->tag == XS_NATIVE) {
                         Value *result = fn->native(NULL, NULL, 0);
@@ -2310,6 +3640,26 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                         }
                     }
                 }
+            } else if (fn->tag == XS_MAP && map_get(fn->map, "__actor_name")) {
+                /* spawn an actor: create instance with state + methods merged */
+                value_decref(task);
+                Value *actor_inst = xs_map_new();
+                Value *state = map_get(fn->map, "__state");
+                if (state && state->tag == XS_MAP) {
+                    for (int j = 0; j < state->map->cap; j++)
+                        if (state->map->keys[j])
+                            map_set(actor_inst->map, state->map->keys[j],
+                                    value_incref(state->map->vals[j]));
+                }
+                Value *methods = map_get(fn->map, "__methods");
+                if (methods && methods->tag == XS_MAP) {
+                    map_set(actor_inst->map, "__methods", value_incref(methods));
+                }
+                Value *aname = map_get(fn->map, "__actor_name");
+                if (aname) map_set(actor_inst->map, "__type", value_incref(aname));
+                value_decref(fn);
+                PUSH(actor_inst);
+                break;
             } else {
                 { Value *sv = xs_str("done"); map_set(task->map, "_status", sv); value_decref(sv); }
                 map_set(task->map, "_result", fn);
@@ -2394,28 +3744,14 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             if (actor_val->tag == XS_MAP) {
                 Value *methods = map_get(actor_val->map, "__methods");
                 if (methods && methods->tag == XS_MAP) {
-                    Value *handle = map_get(methods->map, "handle");
-                    if (handle && handle->tag == XS_CLOSURE) {
-                        value_incref(handle);
-                        PUSH(handle);
-                        PUSH(value_incref(msg));
-                        value_incref(handle);
-                        Value *callee_h = vm->sp[-2];
-                        if (callee_h->tag == XS_CLOSURE) {
-                            Value *sv = callee_h; value_incref(sv);
-                            for (int j = -2; j < -1; j++) vm->sp[j] = vm->sp[j+1];
-                            vm->sp--; value_decref(sv);
-                            if (call_frame_push(vm, sv, 1) == 0) {
-                                value_decref(sv);
-                                frame = FRAME;
-                                value_decref(msg);
-                                value_decref(actor_val);
-                                value_decref(result);
-                                break;
-                            }
-                            value_decref(sv);
-                        }
-                        value_decref(handle);
+                    Value *handle_fn = map_get(methods->map, "handle");
+                    if (handle_fn && handle_fn->tag == XS_CLOSURE) {
+                        /* call handle(self, msg) via vm_invoke */
+                        Value *args2[2] = { actor_val, msg };
+                        value_decref(result);
+                        result = vm_invoke(vm, handle_fn, args2, 2);
+                        frame = FRAME;
+                        if (!result) result = value_incref(XS_NULL_VAL);
                     }
                 }
             } else if (actor_val->tag == XS_ACTOR && actor_val->actor) {
