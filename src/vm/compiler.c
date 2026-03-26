@@ -23,6 +23,9 @@ typedef struct CompilerScope {
     UVDesc                uv_descs[MAX_UPVALUES];
     int                   n_upvalues;
     struct CompilerScope *enclosing;
+    /* actor method state write-back */
+    char                **actor_state_names;
+    int                   actor_nstate;
 } CompilerScope;
 
 #define MAX_LOOP_DEPTH 64
@@ -711,20 +714,23 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
     }
 
     case NODE_RETURN: {
-        if (n->ret.value && n->ret.value->tag == NODE_CALL) {
-            Node *call = n->ret.value;
-            compile_node(c, call->call.callee, 1);
-            int argc = call->call.args.len;
-            for (int i = 0; i < argc; i++)
-                compile_node(c, call->call.args.items[i], 1);
-            emit(c, MAKE_B(OP_TAIL_CALL, 0, 0, (uint8_t)(unsigned)argc));
-        } else {
-            if (n->ret.value)
-                compile_node(c, n->ret.value, 1);
-            else
-                emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
-            emit(c, MAKE_A(OP_RETURN, 0, 0));
+        if (n->ret.value)
+            compile_node(c, n->ret.value, 1);
+        else
+            emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
+        /* actor method: write back state fields before returning */
+        if (c->current->actor_state_names && c->current->actor_nstate > 0) {
+            for (int si = 0; si < c->current->actor_nstate; si++) {
+                int slot = local_resolve(c->current, c->current->actor_state_names[si]);
+                if (slot >= 0) {
+                    emit_a(c, OP_LOAD_LOCAL, 0); /* self */
+                    emit_a(c, OP_LOAD_LOCAL, slot);
+                    int fi = emit_global_name(c, c->current->actor_state_names[si]);
+                    emit_a(c, OP_STORE_FIELD, fi);
+                }
+            }
         }
+        emit(c, MAKE_A(OP_RETURN, 0, 0));
         return;
     }
 
@@ -1106,6 +1112,8 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
             Node *pat = arm->pattern;
 
             int j_next = -1;
+            int tuple_jumps[16];
+            int n_tuple_jumps = 0;
 
             if (!pat || pat->tag == NODE_PAT_WILD ||
                 (pat->tag == NODE_PAT_IDENT && !arm->guard)) {
@@ -1208,7 +1216,8 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
                         default: emit(c, MAKE_A(OP_PUSH_NULL, 0, 0)); break;
                         }
                         emit(c, MAKE_A(OP_EQ, 0, 0));
-                        j_next = emit_jump(c, OP_JUMP_IF_FALSE);
+                        if (n_tuple_jumps < 16)
+                            tuple_jumps[n_tuple_jumps++] = emit_jump(c, OP_JUMP_IF_FALSE);
                     } else if (sub_pat->tag == NODE_PAT_IDENT) {
                         int slot = local_add(c->current, sub_pat->pat_ident.name);
                         emit_a(c, OP_STORE_LOCAL, slot);
@@ -1389,6 +1398,11 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
             arm_jumps[n_arm_jumps++] = emit_jump(c, OP_JUMP);
             if (j_next >= 0)  patch_jump(c, j_next);
             if (j_guard >= 0) patch_jump(c, j_guard);
+            /* patch all tuple pattern element jumps */
+            if (pat && pat->tag == NODE_PAT_TUPLE) {
+                for (int tj = 0; tj < n_tuple_jumps; tj++)
+                    patch_jump(c, tuple_jumps[tj]);
+            }
         }
 
         for (int i = 0; i < n_arm_jumps; i++)
@@ -1967,8 +1981,13 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
                     emit_a(c, OP_LOAD_FIELD, fi);
                     emit_a(c, OP_STORE_LOCAL, slot);
                 }
+                /* save state field info for write-back before returns */
+                c->current->actor_state_names = state_names;
+                c->current->actor_nstate = nstate;
                 compile_node(c, m->fn_decl.body, 1);
-                /* write back state fields to self */
+                c->current->actor_state_names = NULL;
+                c->current->actor_nstate = 0;
+                /* write back state fields to self (for fall-through) */
                 for (int si = 0; si < nstate; si++) {
                     int slot = local_resolve(c->current, state_names[si]);
                     if (slot >= 0) {
