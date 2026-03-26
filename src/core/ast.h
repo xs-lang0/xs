@@ -376,6 +376,8 @@ struct Node {
         struct {
             char        *name;
             NodePairList fields;
+            TypeExpr   **field_types;  /* parallel to fields, NULL entries for untyped */
+            int          n_field_types;
             char       **type_params;
             int          n_type_params;
             char       **derives;

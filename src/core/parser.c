@@ -2787,6 +2787,8 @@ static Node *parse_struct_decl(Parser *p) {
 
     pp_expect(p, TK_LBRACE, "expected '{'");
     NodePairList fields = nodepairlist_new();
+    TypeExpr **field_types = NULL;
+    int n_field_types = 0;
     while (!pp_check2(p, TK_RBRACE, TK_EOF)) {
         skip_semis(p);
         /* skip modifiers */
@@ -2796,10 +2798,13 @@ static Node *parse_struct_decl(Parser *p) {
             break;
         pp_advance(p);
         char *fn_name = xs_strdup(fn_tok->sval ? fn_tok->sval : token_kind_name(fn_tok->kind));
-        if (pp_match(p, TK_COLON)) { TypeExpr *te = parse_type_expr(p); typeexpr_free(te); }
+        TypeExpr *ft = NULL;
+        if (pp_match(p, TK_COLON)) { ft = parse_type_expr(p); }
         Node *def = NULL;
         if (pp_match(p, TK_ASSIGN)) def = parse_expr(p, 0);
         nodepairlist_push(&fields, fn_name, def);
+        field_types = xs_realloc(field_types, sizeof(TypeExpr*) * (n_field_types + 1));
+        field_types[n_field_types++] = ft;
         free(fn_name);
         pp_match(p, TK_COMMA); pp_match(p, TK_SEMICOLON);
     }
@@ -2821,9 +2826,11 @@ static Node *parse_struct_decl(Parser *p) {
     }
 
     Node *n = node_new(NODE_STRUCT_DECL, span);
-    n->struct_decl.name      = name;
-    n->struct_decl.fields    = fields;
-    n->struct_decl.derives   = derives;
+    n->struct_decl.name        = name;
+    n->struct_decl.fields      = fields;
+    n->struct_decl.field_types = field_types;
+    n->struct_decl.n_field_types = n_field_types;
+    n->struct_decl.derives     = derives;
     n->struct_decl.n_derives = n_derives;
     return n;
 }
