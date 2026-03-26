@@ -34,7 +34,7 @@ println("channel FIFO: works")
 
 -- bounded channels have a max capacity
 let bounded = channel(2)
-bounded.send("a")
+bounded.send("a") 
 bounded.send("b")
 assert(bounded.is_full(), "should be full at capacity 2")
 println("bounded channel: full at {bounded.len()}")

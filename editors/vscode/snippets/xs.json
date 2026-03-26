@@ -1,0 +1,132 @@
+{
+  "Function": {
+    "prefix": "fn",
+    "body": ["fn ${1:name}(${2:params}) {", "\t$0", "}"],
+    "description": "Function declaration"
+  },
+  "Function with return type": {
+    "prefix": "fnt",
+    "body": ["fn ${1:name}(${2:params}) -> ${3:type} {", "\t$0", "}"],
+    "description": "Function with return type"
+  },
+  "Let binding": {
+    "prefix": "let",
+    "body": "let ${1:name} = ${0:value}",
+    "description": "Immutable binding"
+  },
+  "Var binding": {
+    "prefix": "var",
+    "body": "var ${1:name} = ${0:value}",
+    "description": "Mutable binding"
+  },
+  "If": {
+    "prefix": "if",
+    "body": ["if ${1:condition} {", "\t$0", "}"],
+    "description": "If statement"
+  },
+  "If-Else": {
+    "prefix": "ife",
+    "body": ["if ${1:condition} {", "\t$2", "} else {", "\t$0", "}"],
+    "description": "If-else statement"
+  },
+  "For loop": {
+    "prefix": "for",
+    "body": ["for ${1:item} in ${2:iterable} {", "\t$0", "}"],
+    "description": "For-in loop"
+  },
+  "For range": {
+    "prefix": "forr",
+    "body": ["for ${1:i} in ${2:0}..${3:10} {", "\t$0", "}"],
+    "description": "For loop with range"
+  },
+  "While loop": {
+    "prefix": "while",
+    "body": ["while ${1:condition} {", "\t$0", "}"],
+    "description": "While loop"
+  },
+  "Match": {
+    "prefix": "match",
+    "body": ["match ${1:expr} {", "\t${2:pattern} => ${3:value}", "\t_ => ${0:default}", "}"],
+    "description": "Match expression"
+  },
+  "Struct": {
+    "prefix": "struct",
+    "body": ["struct ${1:Name} {", "\t${0:fields}", "}"],
+    "description": "Struct declaration"
+  },
+  "Impl": {
+    "prefix": "impl",
+    "body": ["impl ${1:Type} {", "\tfn ${2:method}(self${3}) {", "\t\t$0", "\t}", "}"],
+    "description": "Impl block"
+  },
+  "Trait": {
+    "prefix": "trait",
+    "body": ["trait ${1:Name} {", "\tfn ${2:method}(self)${0}", "}"],
+    "description": "Trait declaration"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": ["enum ${1:Name} {", "\t${0:Variant}", "}"],
+    "description": "Enum declaration"
+  },
+  "Class": {
+    "prefix": "class",
+    "body": ["class ${1:Name} {", "\tfn init(self${2}) {", "\t\t$0", "\t}", "}"],
+    "description": "Class declaration"
+  },
+  "Try-Catch": {
+    "prefix": "try",
+    "body": ["try {", "\t$1", "} catch ${2:e} {", "\t$0", "}"],
+    "description": "Try-catch block"
+  },
+  "Import": {
+    "prefix": "import",
+    "body": "import ${0:module}",
+    "description": "Import module"
+  },
+  "Print": {
+    "prefix": "pr",
+    "body": "println(\"${0:message}\")",
+    "description": "Print line"
+  },
+  "Print interpolation": {
+    "prefix": "pri",
+    "body": "println(\"${1:text} {${0:expr}}\")",
+    "description": "Print with interpolation"
+  },
+  "Assert": {
+    "prefix": "assert",
+    "body": "assert_eq(${1:actual}, ${0:expected})",
+    "description": "Assert equals"
+  },
+  "Async function": {
+    "prefix": "async",
+    "body": ["async fn ${1:name}(${2:params}) {", "\t$0", "}"],
+    "description": "Async function"
+  },
+  "Actor": {
+    "prefix": "actor",
+    "body": ["actor ${1:Name} {", "\tvar ${2:state} = ${3:0}", "", "\tfn ${4:method}(${5}) {", "\t\t$0", "\t}", "}"],
+    "description": "Actor declaration"
+  },
+  "Effect": {
+    "prefix": "effect",
+    "body": ["effect ${1:Name} {", "\t${0:op}(${2:params})", "}"],
+    "description": "Effect declaration"
+  },
+  "Plugin": {
+    "prefix": "plugin",
+    "body": ["-- plugin: ${1:name}", "let meta = #{", "\t\"name\": \"${1}\",", "\t\"version\": \"0.1.0\"", "}", "", "fn on_load(api) {", "\t$0", "}"],
+    "description": "Plugin boilerplate"
+  },
+  "List comprehension": {
+    "prefix": "comp",
+    "body": "[${1:expr} for ${2:x} in ${0:iter}]",
+    "description": "List comprehension"
+  },
+  "Map literal": {
+    "prefix": "map",
+    "body": "#{\"${1:key}\": ${0:value}}",
+    "description": "Map literal"
+  }
+}

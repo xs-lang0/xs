@@ -412,7 +412,8 @@ static void usage(void) {
         "  xs publish                        Publish package\n"
         "  xs search <query>                 Search package registry\n"
         "  xs check <file.xs>                Type-check a file\n"
-        "  xs build <file.xs>                Compile to bytecode\n"
+        "  xs build <file.xs> [-o out.xsc]    Compile to bytecode (.xsc)\n"
+        "  xs run <file.xsc>                 Run compiled bytecode\n"
         "  xs lsp                            Start LSP server\n"
         "  xs dap                            Start DAP debug server\n"
         "\n"
@@ -924,17 +925,53 @@ int main(int argc, char **argv) {
             if (sub_argc < 1) { fprintf(stderr, "xs build: missing file\n"); return 1; }
 #ifdef XSC_ENABLE_VM
             {
-                Node *prog = parse_file(sub_arg(0), NULL);
+                const char *src = sub_arg(0);
+                const char *out = NULL;
+                for (int k = 1; k < sub_argc; k++)
+                    if (strcmp(sub_arg(k), "-o") == 0 && k + 1 < sub_argc) out = sub_arg(++k);
+                char out_buf[4096];
+                if (!out) {
+                    snprintf(out_buf, sizeof out_buf, "%s", src);
+                    char *dot = strrchr(out_buf, '.');
+                    if (dot) strcpy(dot, ".xsc");
+                    else strcat(out_buf, ".xsc");
+                    out = out_buf;
+                }
+                Node *prog = parse_file(src, NULL);
                 if (!prog) return 1;
                 XSProto *proto = compile_program(prog);
-                proto_dump(proto);
-                proto_free(proto);
-                node_free(prog);
+                if (proto_write_file(proto, out) != 0) {
+                    fprintf(stderr, "xs build: failed to write %s\n", out);
+                    proto_free(proto); node_free(prog);
+                    return 1;
+                }
+                fprintf(stderr, "compiled %s -> %s\n", src, out);
+                proto_free(proto); node_free(prog);
                 cache_free(g_sema_cache);
                 return 0;
             }
 #else
             fprintf(stderr, "xs build: VM not available (rebuild with XSC_ENABLE_VM=1)\n");
+            return 1;
+#endif
+
+        } else if (strcmp(sub, "run") == 0) {
+            if (sub_argc < 1) { fprintf(stderr, "xs run: missing .xsc file\n"); return 1; }
+#ifdef XSC_ENABLE_VM
+            {
+                XSProto *proto = proto_read_file(sub_arg(0));
+                if (!proto) {
+                    fprintf(stderr, "xs run: failed to load %s\n", sub_arg(0));
+                    return 1;
+                }
+                VM *vm = vm_new();
+                vm_run(vm, proto);
+                vm_free(vm);
+                proto_free(proto);
+                return 0;
+            }
+#else
+            fprintf(stderr, "xs run: VM not available (rebuild with XSC_ENABLE_VM=1)\n");
             return 1;
 #endif
 

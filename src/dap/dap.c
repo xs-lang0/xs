@@ -80,6 +80,7 @@ typedef struct {
     /* Statement execution index for stepping */
     int              stmt_index;
     int              stop_requested;
+    int              stop_on_entry;
 } DapState;
 
 
@@ -133,6 +134,17 @@ static int dap_json_get_int(const char *json, const char *key) {
 }
 
 
+
+static int dap_json_get_bool(const char *json, const char *key) {
+    if (!json || !key) return 0;
+    char pattern[256];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return 0;
+    p += strlen(pattern);
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == ':') p++;
+    return (strncmp(p, "true", 4) == 0) ? 1 : 0;
+}
 
 static void json_escape_into(char *dst, size_t dstsz, const char *src) {
     size_t j = 0;
@@ -413,14 +425,16 @@ static const char *run_program_debug(DapState *st, int from_stmt) {
         if (st->interp->cf.signal == CF_ERROR || st->interp->cf.signal == CF_PANIC) {
             /* Report the error as an exception event */
             Value *err = st->interp->cf.value;
-            if (err && err->tag == XS_STR) {
+            {
                 char body[DAP_BUF_MEDIUM];
                 char escaped[DAP_BUF_SMALL];
-                json_escape_into(escaped, sizeof(escaped), err->s);
+                const char *emsg = (err && err->tag == XS_STR) ? err->s : "runtime error";
+                json_escape_into(escaped, sizeof(escaped), emsg);
                 snprintf(body, sizeof(body),
                     "{\"reason\":\"exception\",\"description\":\"%s\","
+                    "\"text\":\"%s\","
                     "\"threadId\":1,\"allThreadsStopped\":true}",
-                    escaped);
+                    escaped, escaped);
                 dap_send_event(st, "stopped", body);
             }
             if (st->interp->cf.value) {
@@ -606,6 +620,7 @@ static void dap_handle_launch(DapState *st, int req_seq, const char *msg) {
     st->stmt_index = 0;
     st->step_mode = STEP_NONE;
     st->n_frames = 0;
+    st->stop_on_entry = dap_json_get_bool(msg, "stopOnEntry");
 
     if (load_program(st) != 0) {
         dap_send_error_response(st, req_seq, "launch",
@@ -647,6 +662,16 @@ static void dap_handle_configuration_done(DapState *st, int req_seq) {
     st->running = 1;
     st->stop_requested = 0;
     dap_send_response(st, req_seq, "configurationDone", "{}");
+
+    if (st->stop_on_entry) {
+        /* Stop immediately on first line */
+        st->step_mode = STEP_NEXT;
+        st->step_depth = 0;
+        dap_send_event(st, "stopped",
+            "{\"reason\":\"entry\",\"threadId\":1,\"allThreadsStopped\":true}");
+        st->running = 0;
+        return;
+    }
 
     /* Execute the program with debug support */
     st->step_mode = STEP_CONTINUE;
@@ -905,8 +930,19 @@ static void dap_handle_evaluate(DapState *st, int req_seq, const char *msg) {
         return;
     }
 
-    /* Evaluate */
-    interp_run(st->interp, prog);
+    /* Evaluate — use interp_eval for expressions, interp_exec for statements */
+    Value *result = NULL;
+    if (prog->tag == NODE_PROGRAM && prog->program.stmts.len == 1) {
+        Node *stmt = prog->program.stmts.items[0];
+        if (stmt->tag == NODE_EXPR_STMT && stmt->expr_stmt.expr) {
+            result = interp_eval(st->interp, stmt->expr_stmt.expr);
+            if (result) value_incref(result);
+        } else {
+            interp_exec(st->interp, stmt);
+        }
+    } else {
+        interp_run(st->interp, prog);
+    }
     node_free(prog);
 
     if (st->interp->cf.signal == CF_ERROR || st->interp->cf.signal == CF_PANIC) {
@@ -926,7 +962,7 @@ static void dap_handle_evaluate(DapState *st, int req_seq, const char *msg) {
         st->interp->cf.signal = 0;
         dap_send_error_response(st, req_seq, "evaluate", err_msg);
     } else {
-        Value *result = st->interp->cf.value;
+        if (!result) result = st->interp->cf.value;
         char *repr = result ? value_repr(result) : NULL;
         char escaped[DAP_BUF_SMALL];
         json_escape_into(escaped, sizeof(escaped), repr ? repr : "null");
@@ -954,6 +990,7 @@ static void dap_handle_evaluate(DapState *st, int req_seq, const char *msg) {
             escaped, type_str);
         dap_send_response(st, req_seq, "evaluate", body);
 
+        if (result && result != st->interp->cf.value) value_decref(result);
         if (st->interp->cf.value) {
             value_decref(st->interp->cf.value);
             st->interp->cf.value = NULL;

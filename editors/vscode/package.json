@@ -1,22 +1,28 @@
 {
   "name": "xs-lang",
   "displayName": "XS Language",
-  "description": "Language support for XS",
+  "description": "Full language support for XS — syntax highlighting, LSP, debugger, and tooling",
   "publisher": "xs-lang0",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "engines": {
     "vscode": "^1.75.0"
   },
-  "categories": ["Programming Languages"],
-  "activationEvents": ["onLanguage:xs"],
+  "categories": ["Programming Languages", "Debuggers", "Formatters", "Linters", "Snippets"],
+  "keywords": ["xs", "programming language", "gradual typing", "transpiler"],
+  "activationEvents": ["onLanguage:xs", "onDebugResolve:xs"],
   "main": "./extension.js",
+  "icon": "icon.png",
   "contributes": {
     "languages": [
       {
         "id": "xs",
         "aliases": ["XS", "xs"],
         "extensions": [".xs"],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "icon.png",
+          "dark": "icon.png"
+        }
       }
     ],
     "grammars": [
@@ -26,13 +32,194 @@
         "path": "./syntaxes/xs.tmLanguage.json"
       }
     ],
+    "breakpoints": [{ "language": "xs" }],
+    "debuggers": [
+      {
+        "type": "xs",
+        "label": "XS Debug",
+        "languages": ["xs"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the XS file to debug",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "description": "Command line arguments passed to the program",
+                "items": { "type": "string" },
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the program",
+                "default": "${workspaceFolder}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Pause on the first line",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "xs",
+            "request": "launch",
+            "name": "Debug XS",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "XS: Debug Current File",
+            "description": "Debug the current XS file",
+            "body": {
+              "type": "xs",
+              "request": "launch",
+              "name": "Debug XS",
+              "program": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "xs.runFile",
+        "title": "Run Current File",
+        "category": "XS",
+        "icon": "$(play)"
+      },
+      {
+        "command": "xs.runFileVM",
+        "title": "Run Current File (VM)",
+        "category": "XS"
+      },
+      {
+        "command": "xs.buildFile",
+        "title": "Compile to Bytecode",
+        "category": "XS"
+      },
+      {
+        "command": "xs.checkFile",
+        "title": "Type Check Current File",
+        "category": "XS"
+      },
+      {
+        "command": "xs.formatFile",
+        "title": "Format Current File",
+        "category": "XS"
+      },
+      {
+        "command": "xs.restartServer",
+        "title": "Restart Language Server",
+        "category": "XS"
+      },
+      {
+        "command": "xs.openRepl",
+        "title": "Open REPL",
+        "category": "XS"
+      },
+      {
+        "command": "xs.showOutput",
+        "title": "Show Output",
+        "category": "XS"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "xs.runFile",
+          "when": "resourceLangId == xs",
+          "group": "navigation@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "xs.runFile",
+          "when": "resourceLangId == xs",
+          "group": "xs@1"
+        },
+        {
+          "command": "xs.checkFile",
+          "when": "resourceLangId == xs",
+          "group": "xs@2"
+        }
+      ],
+      "commandPalette": [
+        { "command": "xs.runFile", "when": "resourceLangId == xs" },
+        { "command": "xs.runFileVM", "when": "resourceLangId == xs" },
+        { "command": "xs.buildFile", "when": "resourceLangId == xs" },
+        { "command": "xs.checkFile", "when": "resourceLangId == xs" },
+        { "command": "xs.formatFile", "when": "resourceLangId == xs" },
+        { "command": "xs.restartServer" },
+        { "command": "xs.openRepl" }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "xs.runFile",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "resourceLangId == xs"
+      },
+      {
+        "command": "xs.checkFile",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t",
+        "when": "resourceLangId == xs"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "xs",
+        "path": "./snippets/xs.json"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "xs",
+        "required": ["task"],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "The XS task to run"
+          },
+          "file": {
+            "type": "string",
+            "description": "The file to run"
+          }
+        }
+      }
+    ],
     "configuration": {
       "title": "XS",
       "properties": {
         "xs.path": {
           "type": "string",
           "default": "xs",
-          "description": "Path to the XS binary"
+          "description": "Path to the XS binary",
+          "scope": "machine-overridable"
+        },
+        "xs.check.onSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run type checking on save"
+        },
+        "xs.format.onSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Format file on save"
+        },
+        "xs.codeLens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Run/Debug code lenses"
         }
       }
     }

@@ -9,9 +9,9 @@
     ["(", ")"]
   ],
   "autoClosingPairs": [
-    { "open": "{", "close": "}" },
-    { "open": "[", "close": "]" },
-    { "open": "(", "close": ")" },
+    { "open": "{", "close": "}", "notIn": ["string", "comment"] },
+    { "open": "[", "close": "]", "notIn": ["string", "comment"] },
+    { "open": "(", "close": ")", "notIn": ["string", "comment"] },
     { "open": "\"", "close": "\"", "notIn": ["string"] },
     { "open": "'", "close": "'", "notIn": ["string"] }
   ],
@@ -22,14 +22,37 @@
     { "open": "\"", "close": "\"" },
     { "open": "'", "close": "'" }
   ],
+  "colorizedBracketPairs": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
+  "autoCloseBefore": ";:.,=}])> \n\t",
+  "wordPattern": "[a-zA-Z_][a-zA-Z0-9_]*",
   "indentationRules": {
-    "increaseIndentPattern": "\\{\\s*$",
+    "increaseIndentPattern": "^\\s*(fn|if|else|elif|while|for|loop|match|try|catch|finally|struct|enum|class|trait|impl|actor|module|nursery|handle|async)\\b.*\\{\\s*$|\\{\\s*$",
     "decreaseIndentPattern": "^\\s*\\}"
   },
+  "onEnterRules": [
+    {
+      "beforeText": "\\{\\s*$",
+      "afterText": "^\\s*\\}",
+      "action": { "indent": "indentOutdent", "appendText": "" }
+    },
+    {
+      "beforeText": "\\{\\s*$",
+      "action": { "indent": "indent" }
+    },
+    {
+      "beforeText": "^\\s*--.*$",
+      "action": { "indent": "none", "appendText": "-- " }
+    }
+  ],
   "folding": {
+    "offSide": false,
     "markers": {
-      "start": "^\\s*--\\s*region\\b",
-      "end": "^\\s*--\\s*endregion\\b"
+      "start": "^\\s*--\\s*region\\b|\\{\\s*$",
+      "end": "^\\s*--\\s*endregion\\b|^\\s*\\}"
     }
   }
 }

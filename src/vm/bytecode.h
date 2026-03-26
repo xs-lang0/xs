@@ -146,4 +146,8 @@ int      chunk_write(XSChunk *c, Instruction i);
 int      chunk_add_const(XSChunk *c, Value *v);
 void     proto_dump(XSProto *p);
 
+/* bytecode serialization (.xsc format) */
+int      proto_write_file(XSProto *p, const char *path);
+XSProto *proto_read_file(const char *path);
+
 #endif /* BYTECODE_H */
