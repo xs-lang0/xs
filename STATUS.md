@@ -1,6 +1,6 @@
 # XS Status
 
-What works, what's partial, and what's planned. Updated for v0.1.8.
+What works, what's partial, and what's planned. Updated for v0.3.1.
 
 ## Tree-Walk Interpreter
 
@@ -34,26 +34,39 @@ All 13 test suites pass on Linux, macOS, and Windows.
 
 ## Bytecode VM
 
-Faster for compute-heavy code. Handles a subset of the language.
+Use `--vm` flag. Full feature parity with the interpreter.
 
 | Feature | Status |
 |---------|--------|
 | Arithmetic, variables, functions | works |
 | Closures and upvalues | works |
-| Control flow (if, while, for, loops) | works |
+| Control flow (if, while, for, loop, match) | works |
+| Labeled break/continue | works |
 | Arrays, maps, tuples, ranges | works |
 | String interpolation | works |
-| Pattern matching (basic) | works |
-| Structs | partial — init works, method dispatch incomplete |
-| Classes | partial — basic instantiation, some methods |
-| Concurrency (spawn, channels, actors) | not yet |
-| Algebraic effects | not yet |
-| Default parameters | not yet |
-| String/array methods (.reverse, .split, etc.) | partial |
-| Modules and imports | partial |
-| Plugins | not yet |
+| Pattern matching (literals, guards, tuples, enums, structs) | works |
+| Functions with default params, variadic | works |
+| Structs with impl methods, spread | works |
+| Classes with inheritance and super | works |
+| Traits | works |
+| Enums with data and matching | works |
+| Concurrency (spawn, channels, actors, async/await, nursery) | works |
+| Algebraic effects (perform/handle/resume) | works |
+| Error handling (try/catch/finally, throw, defer) | works |
+| Modules and imports | works |
+| List/map comprehensions | works |
+| Pipe operator | works |
+| Plugin system (use plugin, global.set, add_method) | works |
+| All string methods (80+) | works |
+| All array methods (50+) | works |
+| All map methods (20+) | works |
+| Number methods (is_even, digits, to_hex, etc.) | works |
+| Result/Option methods (unwrap, is_ok, etc.) | works |
+| Optional chaining (?.) | works |
+| Range indexing (arr[1..3]) | works |
+| All builtins matching interpreter | works |
 
-Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
+All 13 test suites pass. Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
 
 ## JIT Compiler
 
@@ -134,8 +147,9 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 
 ## Known Limitations
 
-- VM doesn't cover the full language yet — use the interpreter (default) for full support
 - C transpiler closures break when the same variable name is captured in multiple functions in one file
 - JIT is x86-64 only and very early
 - WASM transpiler only handles basic programs
 - Package registry is not live — `xs install` works with local paths
+- VM effects use snapshot/restore (single-shot only, no nested effects)
+- VM actors use flattened state (not full closure capture like interpreter)
