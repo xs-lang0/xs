@@ -23,12 +23,16 @@ Arguments after the filename are available in the script via the `argv` global
 array. `argv` does **not** include the interpreter path or the script filename —
 only the arguments that follow.
 
-### `xs run <file.xs> [args...]`
+### `xs run <file.xs|file.xsc> [args...]`
 
-Explicit alias for running a script. Identical to `xs <file>`.
+Run a source file or compiled bytecode:
+
+- `xs run <file.xs>` — same as `xs <file.xs>`, runs through the interpreter
+- `xs run <file.xsc>` — run a compiled bytecode file produced by `xs build`
 
 ```bash
 xs run hello.xs
+xs run app.xsc
 ```
 
 ### `xs -e <code>` / `xs --eval <code>`
@@ -327,13 +331,15 @@ xs transpile --target wasi server.xs
 
 The WASM backend is the least mature of the three -- it handles basic arithmetic and function calls but doesn't cover the full language yet.
 
-### `xs build <file.xs>`
+### `xs build <file.xs> [-o out.xsc]`
 
-Compile to bytecode (requires VM backend). This is a compilation step without
-execution.
+Compile a source file to bytecode without executing it. Writes a `.xsc` file —
+defaults to the same name with the `.xsc` extension, or a custom path via `-o`.
 
 ```bash
-xs build app.xs
+xs build app.xs                    # produces app.xsc
+xs build app.xs -o dist/app.xsc   # write to a specific path
+xs run app.xsc                     # run the compiled output
 ```
 
 ---
@@ -358,6 +364,12 @@ Start the DAP server directly (for editor integration).
 ```bash
 xs dap
 ```
+
+Supports: breakpoints (including conditional breakpoints), step in / next / step
+out, variable inspection, evaluate expressions, call stack. Supports
+`stopOnEntry` in the launch configuration to pause at the first line
+automatically. The VS Code extension wires this up automatically — no manual
+setup needed.
 
 ### `xs --record <file.xst> <file.xs>`
 
@@ -505,20 +517,30 @@ xs pkg install foo      # install a package
 
 ## IDE Integration
 
-### `xs lsp`
+### `xs lsp [-s <lsp.xs>]`
 
 Start the Language Server Protocol server on stdin/stdout.
 
 ```bash
 xs lsp
+xs lsp -s /path/to/lsp.xs   # use a custom LSP implementation
 ```
+
+The `-s`/`--source` flag lets you point at a specific `lsp.xs` script. The VS
+Code extension bundles its own `lsp.xs` and passes it via `-s` automatically.
 
 **Supported features:**
 
-- Real-time diagnostics (parse errors, semantic errors)
-- Hover (identifier info)
-- Completion (keywords + builtins)
-- Document sync (didOpen, didChange)
+- Diagnostics (parse errors, type errors, semantic errors)
+- Hover (identifier info, inferred types)
+- Completion — keywords, builtins, and dot completion for types and modules
+- Signature help
+- Go to definition
+- Find references
+- Document symbols
+- Formatting
+- Rename
+- Code actions
 
 Configure in your editor by pointing the LSP client to `xs lsp`.
 

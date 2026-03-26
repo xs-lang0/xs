@@ -1,0 +1,141 @@
+# XS Status
+
+What works, what's partial, and what's planned. Updated for v0.1.8.
+
+## Tree-Walk Interpreter
+
+The default backend. Handles the full language.
+
+| Feature | Status |
+|---------|--------|
+| Variables (let, var, const) | works |
+| All data types (int, float, str, bool, null, array, map, tuple, range) | works |
+| Arithmetic, bitwise, logical operators | works |
+| String interpolation, escapes, methods | works |
+| Control flow (if/elif/else, for, while, loop, match, break, continue) | works |
+| Pattern matching with destructuring, guards, nested patterns | works |
+| Functions, closures, default params, variadic, arrow lambdas | works |
+| Generators (fn*/yield) | works |
+| Structs, impl, traits | works |
+| Enums with associated data | works |
+| Classes with inheritance | works |
+| Algebraic effects (effect/perform/handle/resume) | works |
+| Concurrency (spawn, async/await, channels, actors, nurseries) | works |
+| Error handling (try/catch/finally, throw, defer) | works |
+| Modules and imports | works |
+| List/map comprehensions | works |
+| Pipe operator | works |
+| Gradual typing (--check, --strict) | works |
+| Plugin system | works |
+| Standard library (14 modules) | works |
+| HTTPS via embedded BearSSL | works |
+
+All 13 test suites pass on Linux, macOS, and Windows.
+
+## Bytecode VM
+
+Faster for compute-heavy code. Handles a subset of the language.
+
+| Feature | Status |
+|---------|--------|
+| Arithmetic, variables, functions | works |
+| Closures and upvalues | works |
+| Control flow (if, while, for, loops) | works |
+| Arrays, maps, tuples, ranges | works |
+| String interpolation | works |
+| Pattern matching (basic) | works |
+| Structs | partial — init works, method dispatch incomplete |
+| Classes | partial — basic instantiation, some methods |
+| Concurrency (spawn, channels, actors) | not yet |
+| Algebraic effects | not yet |
+| Default parameters | not yet |
+| String/array methods (.reverse, .split, etc.) | partial |
+| Modules and imports | partial |
+| Plugins | not yet |
+
+Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
+
+## JIT Compiler
+
+x86-64 only. Early stage, handles basic arithmetic and function calls.
+
+| Feature | Status |
+|---------|--------|
+| Integer arithmetic | works |
+| Function calls | works |
+| Loops | works |
+| Everything else | falls back to VM |
+
+## C Transpiler
+
+`xs --emit c file.xs` generates standalone C that compiles with gcc/clang.
+
+| Feature | Status |
+|---------|--------|
+| Variables, arithmetic, control flow | works |
+| Functions, default params, expression bodies | works |
+| Strings, interpolation, string methods | works |
+| Arrays, maps, array methods (map/filter/reduce) | works |
+| Structs with impl methods | works |
+| Enums with constructors and matching | works |
+| Pattern matching with guards | works |
+| Channels, actors, spawn, nursery | works |
+| Async/await (sequential) | works |
+| Closures capturing mutable state | partial — works for single-scope files |
+| Generators | not yet |
+| Algebraic effects | not yet |
+| Plugins | not supported (requires runtime) |
+
+## JavaScript Transpiler
+
+`xs --emit js file.xs` generates Node.js-compatible JavaScript.
+
+| Feature | Status |
+|---------|--------|
+| Variables, functions, control flow | works |
+| Closures, arrow lambdas | works |
+| Arrays, maps | works |
+| Concurrency | partial |
+| Everything else | rough |
+
+## WebAssembly Transpiler
+
+`xs --emit wasm file.xs` — early stage.
+
+| Feature | Status |
+|---------|--------|
+| Basic arithmetic, function calls | works |
+| Everything else | not yet |
+
+## Tooling
+
+| Tool | Status |
+|------|--------|
+| REPL with syntax highlighting | works |
+| LSP server (hover, completion, diagnostics, definition, references, rename, formatting, signature help) | works |
+| DAP debugger (breakpoints, stepping, variable inspection, evaluate) | works |
+| VSCode extension | works — available on marketplace |
+| Formatter (`xs fmt`) | works |
+| Linter (`xs lint`) | works |
+| Test runner (`xs test`) | works |
+| Benchmarks (`xs bench`) | works |
+| Profiler (`xs profile`) | works |
+| Coverage (`xs coverage`) | works |
+| Doc generator (`xs doc`) | works |
+| Package manager (`xs install/remove/update`) | basic — registry not live |
+
+## Platform Support
+
+| Platform | Status |
+|----------|--------|
+| Linux (x86-64) | fully tested |
+| macOS (x86-64, ARM) | works, CI tested |
+| Windows (MinGW) | works, CI tested, static linked |
+
+## Known Limitations
+
+- VM doesn't cover the full language yet — use the interpreter (default) for full support
+- C transpiler closures break when the same variable name is captured in multiple functions in one file
+- JIT is x86-64 only and very early
+- WASM transpiler only handles basic programs
+- Package registry is not live — `xs install` works with local paths

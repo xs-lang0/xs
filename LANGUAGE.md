@@ -1966,26 +1966,30 @@ println(int(-3.9))               -- -3
 xs script.xs                     # tree-walker interpreter (default)
 xs --vm script.xs                # bytecode VM (faster)
 xs --jit script.xs               # JIT compilation
-xs --backend vm script.xs        # same as --vm
+xs build script.xs               # compile to bytecode (.xsc)
+xs run script.xsc                # run compiled bytecode
 ```
 
 Both backends produce identical results for correct programs. The VM is faster for compute-heavy code.
+
+The `build` command compiles to a `.xsc` file that can be distributed and run without the source. Use `-o` to specify the output path.
 
 ---
 
 ## Other CLI Commands
 
 ```bash
-xs run <file.xs>                 # run a script
+xs run <file.xs|file.xsc>        # run source or compiled bytecode
 xs repl                          # interactive REPL
 xs test [pattern]                # run tests
 xs check <file.xs>               # type-check only
+xs build <file.xs> [-o out.xsc]  # compile to bytecode
 xs lint [file|dir] [--fix]       # lint source files
 xs fmt [file|dir] [--check]      # format source
 xs doc [dir]                     # generate documentation
 xs transpile --target <js|c|wasm32|wasi> <file.xs>
 xs new <name>                    # scaffold project
-xs lsp                           # LSP server
+xs lsp [-s <lsp.xs>]             # LSP server
 xs dap                           # DAP debug server
 ```
 

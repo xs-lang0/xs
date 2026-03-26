@@ -150,6 +150,7 @@ xs.toml         project config
 - [LANGUAGE.md](LANGUAGE.md) -- full language reference (~2000 lines, covers everything)
 - [COMMANDS.md](COMMANDS.md) -- every CLI command, flag, and subcommand
 - [PLUGINS.md](PLUGINS.md) -- plugin system guide with working examples
+- [STATUS.md](STATUS.md) -- what works, what's partial, what's planned
 - [CONTRIBUTING.md](CONTRIBUTING.md) -- how to contribute
 
 ## License
