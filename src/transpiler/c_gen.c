@@ -151,6 +151,23 @@ static int lookup_fn_param_count(const char *name) {
 /* track if we're inside an impl/actor method (self is a pointer) */
 static int in_method_body = 0;
 
+/* track which lambda we're currently emitting (for capture access) */
+static LambdaInfo *current_lambda = NULL;
+
+/* track boxed variables in the current enclosing scope */
+#define MAX_BOXED 32
+static const char *boxed_vars[MAX_BOXED];
+static int n_boxed = 0;
+
+static int is_boxed_var(const char *name) {
+    for (int i = 0; i < n_boxed; i++)
+        if (strcmp(boxed_vars[i], name) == 0) return 1;
+    return 0;
+}
+static void add_boxed_var(const char *name) {
+    if (n_boxed < MAX_BOXED) boxed_vars[n_boxed++] = name;
+}
+
 /* actor field rewriting — when emitting actor method bodies, identifiers
    that match state fields get rewritten to self->field */
 static const char **actor_fields = NULL;
@@ -162,17 +179,46 @@ static int is_actor_field(const char *name) {
     return 0;
 }
 
-/* free variable collector for lambda capture analysis */
+/* free variable collector for lambda capture analysis.
+   Collects identifiers used in the body that are NOT declared locally within it. */
+static void collect_local_decls(Node *n, const char **out, int *nout, int max) {
+    if (!n || *nout >= max) return;
+    switch (n->tag) {
+    case NODE_LET: case NODE_VAR:
+        if (n->let.name && *nout < max) out[(*nout)++] = n->let.name;
+        break;
+    case NODE_CONST:
+        if (n->const_.name && *nout < max) out[(*nout)++] = n->const_.name;
+        break;
+    case NODE_FOR:
+        /* for loop pattern declares a variable */
+        if (n->for_loop.pattern && n->for_loop.pattern->tag == NODE_PAT_IDENT)
+            if (*nout < max) out[(*nout)++] = n->for_loop.pattern->pat_ident.name;
+        collect_local_decls(n->for_loop.body, out, nout, max);
+        break;
+    case NODE_BLOCK:
+        for (int i = 0; i < n->block.stmts.len; i++)
+            collect_local_decls(n->block.stmts.items[i], out, nout, max);
+        break;
+    case NODE_EXPR_STMT:
+        collect_local_decls(n->expr_stmt.expr, out, nout, max);
+        break;
+    case NODE_IF:
+        collect_local_decls(n->if_expr.then, out, nout, max);
+        collect_local_decls(n->if_expr.else_branch, out, nout, max);
+        break;
+    default: break;
+    }
+}
+
 static void collect_idents(Node *n, const char **out, int *nout, int max) {
     if (!n || *nout >= max) return;
     if (n->tag == NODE_IDENT) {
-        /* check if already in list */
         for (int i = 0; i < *nout; i++)
             if (strcmp(out[i], n->ident.name) == 0) return;
         out[(*nout)++] = n->ident.name;
         return;
     }
-    /* recurse into children */
     switch (n->tag) {
     case NODE_BINOP: collect_idents(n->binop.left, out, nout, max);
                      collect_idents(n->binop.right, out, nout, max); break;
@@ -203,34 +249,44 @@ static void scan_lambdas(Node *n) {
     if (!n) return;
     if (n->tag == NODE_LAMBDA) {
         int lid = register_lambda(n);
-        /* find captures: idents in body that aren't params */
+        /* find captures: idents used in body minus params and local declarations */
         const char *all_idents[64];
         int n_all = 0;
         collect_idents(n->lambda.body, all_idents, &n_all, 64);
-        /* remove param names and builtins */
+
+        /* collect locally declared names inside the lambda body */
+        const char *local_decls[64];
+        int n_locals = 0;
+        collect_local_decls(n->lambda.body, local_decls, &n_locals, 64);
+
+        static const char *skip_names[] = {
+            "println","print","str","len","type","assert","assert_eq",
+            "int","float","true","false","null","sqrt","abs","not",
+            "channel","range","map","filter","reduce","sort","Err","Ok",
+            "assert_eq","panic","input","spawn","await",NULL
+        };
+
         LambdaInfo *li = NULL;
         for (int i = 0; i < n_lambdas; i++)
             if (lambdas[i].id == lid) { li = &lambdas[i]; break; }
         if (li) {
             li->n_captures = 0;
             for (int i = 0; i < n_all && li->n_captures < 16; i++) {
-                int is_param = 0;
-                for (int p = 0; p < n->lambda.params.len; p++) {
+                const char *name = all_idents[i];
+                /* skip params */
+                int skip = 0;
+                for (int p = 0; p < n->lambda.params.len && !skip; p++)
                     if (n->lambda.params.items[p].name &&
-                        strcmp(n->lambda.params.items[p].name, all_idents[i]) == 0)
-                        is_param = 1;
-                }
+                        strcmp(n->lambda.params.items[p].name, name) == 0) skip = 1;
+                /* skip local declarations */
+                for (int d = 0; d < n_locals && !skip; d++)
+                    if (strcmp(local_decls[d], name) == 0) skip = 1;
                 /* skip known builtins/globals */
-                if (is_param) continue;
-                if (strcmp(all_idents[i], "println") == 0 || strcmp(all_idents[i], "print") == 0 ||
-                    strcmp(all_idents[i], "str") == 0 || strcmp(all_idents[i], "len") == 0 ||
-                    strcmp(all_idents[i], "type") == 0 || strcmp(all_idents[i], "assert") == 0 ||
-                    strcmp(all_idents[i], "assert_eq") == 0 || strcmp(all_idents[i], "int") == 0 ||
-                    strcmp(all_idents[i], "float") == 0 || strcmp(all_idents[i], "true") == 0 ||
-                    strcmp(all_idents[i], "false") == 0 || strcmp(all_idents[i], "null") == 0 ||
-                    strcmp(all_idents[i], "sqrt") == 0 || strcmp(all_idents[i], "abs") == 0 ||
-                    strcmp(all_idents[i], "not") == 0) continue;
-                li->captures[li->n_captures++] = all_idents[i];
+                for (int k = 0; skip_names[k] && !skip; k++)
+                    if (strcmp(skip_names[k], name) == 0) skip = 1;
+                /* skip known functions */
+                if (!skip && lookup_fn_param_count(name) >= 0) skip = 1;
+                if (!skip) li->captures[li->n_captures++] = name;
             }
         }
         /* scan body too for nested lambdas */
@@ -480,7 +536,20 @@ static void emit_expr(SB *s, Node *n, int depth) {
     case NODE_IDENT:
         if (n_actor_fields > 0 && is_actor_field(n->ident.name))
             sb_printf(s, "self->%s", n->ident.name);
-        else
+        else if (current_lambda) {
+            /* inside a lambda: check if capture */
+            int cap_idx = -1;
+            for (int ci = 0; ci < current_lambda->n_captures; ci++)
+                if (strcmp(current_lambda->captures[ci], n->ident.name) == 0)
+                    { cap_idx = ci; break; }
+            if (cap_idx >= 0)
+                sb_printf(s, "(*((xs_val**)__env)[%d])", cap_idx);
+            else
+                emit_safe_name(s, n->ident.name);
+        } else if (is_boxed_var(n->ident.name)) {
+            /* in enclosing scope: access through box */
+            sb_printf(s, "(*__box_%s)", n->ident.name);
+        } else
             emit_safe_name(s, n->ident.name);
         break;
     case NODE_BINOP: {
@@ -996,11 +1065,21 @@ static void emit_expr(SB *s, Node *n, int depth) {
         }
         break;
     case NODE_ASSIGN:
-        emit_expr(s, n->assign.target, depth);
-        sb_addc(s, ' ');
-        sb_add(s, n->assign.op);
-        sb_addc(s, ' ');
-        emit_expr(s, n->assign.value, depth);
+        if (n->assign.target && n->assign.target->tag == NODE_INDEX) {
+            sb_add(s, "xs_map_put(&");
+            emit_expr(s, n->assign.target->index.obj, depth);
+            sb_add(s, ", ");
+            emit_expr(s, n->assign.target->index.index, depth);
+            sb_add(s, ", ");
+            emit_expr(s, n->assign.value, depth);
+            sb_addc(s, ')');
+        } else {
+            emit_expr(s, n->assign.target, depth);
+            sb_addc(s, ' ');
+            sb_add(s, n->assign.op);
+            sb_addc(s, ' ');
+            emit_expr(s, n->assign.value, depth);
+        }
         break;
     case NODE_RANGE:
         sb_add(s, "xs_range(");
@@ -1131,7 +1210,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
         } else {
             sb_indent(s, inner_depth);
         }
-        sb_printf(s, "xs_arr_push(&__lc_%d, ", lc_id);
+        sb_printf(s, "xs_arr_push(__lc_%d, ", lc_id);
         emit_expr(s, n->list_comp.element, depth);
         sb_add(s, ");\n");
         /* Close nested loops in reverse */
@@ -1663,6 +1742,7 @@ static void emit_stmt(SB *s, Node *n, int depth) {
                     if (strcmp(lambdas[li].captures[ci], n->let.name) == 0)
                         { is_captured = 1; break; }
             if (is_captured) {
+                /* heap-allocate so closure can outlive this scope */
                 sb_indent(s, depth);
                 sb_printf(s, "xs_val *__box_%s = (xs_val*)malloc(sizeof(xs_val));\n", n->let.name);
                 sb_indent(s, depth);
@@ -1670,8 +1750,7 @@ static void emit_stmt(SB *s, Node *n, int depth) {
                 if (n->let.value) emit_expr(s, n->let.value, depth);
                 else sb_add(s, "XS_NULL");
                 sb_add(s, ";\n");
-                sb_indent(s, depth);
-                sb_printf(s, "#define %s (*__box_%s)\n", n->let.name, n->let.name);
+                add_boxed_var(n->let.name);
                 break;
             }
         }
@@ -1719,9 +1798,7 @@ static void emit_stmt(SB *s, Node *n, int depth) {
             if (n->let.value) emit_expr(s, n->let.value, depth);
             else sb_add(s, "XS_NULL");
             sb_add(s, ";\n");
-            /* create a reference macro */
-            sb_indent(s, depth);
-            sb_printf(s, "#define %s (*__box_%s)\n", n->let.name, n->let.name);
+            add_boxed_var(n->let.name);
         } else {
             sb_indent(s, depth);
             sb_add(s, "xs_val ");
@@ -1823,8 +1900,7 @@ static void emit_stmt(SB *s, Node *n, int depth) {
                     sb_printf(s, "xs_val *__box_%s = (xs_val*)malloc(sizeof(xs_val));\n", pname);
                     sb_indent(s, depth + 1);
                     sb_printf(s, "*__box_%s = %s;\n", pname, pname);
-                    sb_indent(s, depth + 1);
-                    sb_printf(s, "#define %s (*__box_%s)\n", pname, pname);
+                    add_boxed_var(pname);
                 }
             }
             /* push call stack frame */
@@ -1892,22 +1968,9 @@ static void emit_stmt(SB *s, Node *n, int depth) {
                     sb_indent(s, depth + 1);
                     sb_add(s, "return XS_NULL;\n");
                 }
-                /* undef any boxed captures (params + local vars) */
+                /* clear boxed vars for this function scope */
                 {
-                    /* collect all names that might have been #defined in this function */
-                    const char *seen[32]; int nseen = 0;
-                    for (int li = 0; li < n_lambdas; li++)
-                        for (int ci = 0; ci < lambdas[li].n_captures; ci++) {
-                            const char *cname = lambdas[li].captures[ci];
-                            int dup = 0;
-                            for (int k = 0; k < nseen; k++)
-                                if (strcmp(seen[k], cname) == 0) { dup = 1; break; }
-                            if (!dup && nseen < 32) {
-                                seen[nseen++] = cname;
-                                sb_indent(s, depth + 1);
-                                sb_printf(s, "#undef %s\n", cname);
-                            }
-                        }
+                    n_boxed = 0;
                 }
             } else if (n->fn_decl.body) {
                 sb_indent(s, depth + 1);
@@ -2458,7 +2521,16 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         sb_indent(s, depth);
         /* field assignment on non-self objects → xs_map_put
            (actor self uses ->, impl self uses xs_index so also needs map_put) */
-        if (n->assign.target && n->assign.target->tag == NODE_FIELD &&
+        if (n->assign.target && n->assign.target->tag == NODE_INDEX) {
+            /* index assignment: obj[key] = val → xs_map_put */
+            sb_add(s, "xs_map_put(&");
+            emit_expr(s, n->assign.target->index.obj, depth);
+            sb_add(s, ", ");
+            emit_expr(s, n->assign.target->index.index, depth);
+            sb_add(s, ", ");
+            emit_expr(s, n->assign.value, depth);
+            sb_add(s, ");\n");
+        } else if (n->assign.target && n->assign.target->tag == NODE_FIELD &&
             !(n_actor_fields > 0 && in_method_body &&
               n->assign.target->field.obj &&
               n->assign.target->field.obj->tag == NODE_IDENT &&
@@ -3208,28 +3280,14 @@ char *transpile_c(Node *program, const char *filename) {
         Node *ln = lambdas[li].node;
         if (!ln || ln->tag != NODE_LAMBDA) continue;
         sb_printf(&s, "static xs_val __xs_lambda_%d(void *__env, xs_val *__args, int __argc) {\n", lambdas[li].id);
-        /* unpack captures from __env */
-        if (lambdas[li].n_captures > 0) {
-            sb_printf(&s, "    xs_val **__captures = (xs_val **)__env;\n");
-            for (int ci = 0; ci < lambdas[li].n_captures; ci++) {
-                /* create local reference that reads/writes through the pointer */
-                /* using a macro-like approach: #define name (*__captures[i]) */
-            }
-        }
         /* bind params from __args */
         for (int p = 0; p < ln->lambda.params.len; p++) {
             const char *pname = ln->lambda.params.items[p].name;
-            /* skip if this param name shadows a capture */
-            int is_capture = 0;
-            for (int ci = 0; ci < lambdas[li].n_captures; ci++)
-                if (strcmp(lambdas[li].captures[ci], pname ? pname : "") == 0) is_capture = 1;
-            if (!is_capture)
-                sb_printf(&s, "    xs_val %s = __argc > %d ? __args[%d] : (xs_val){.tag=4};\n",
-                          pname ? pname : "_", p, p);
+            sb_printf(&s, "    xs_val %s = __argc > %d ? __args[%d] : (xs_val){.tag=4};\n",
+                      pname ? pname : "_", p, p);
         }
-        /* emit capture defines — active for entire function body */
-        for (int ci = 0; ci < lambdas[li].n_captures; ci++)
-            sb_printf(&s, "    #define %s (*__captures[%d])\n", lambdas[li].captures[ci], ci);
+        /* set current_lambda so NODE_IDENT emits capture access */
+        current_lambda = &lambdas[li];
         if (ln->lambda.body && ln->lambda.body->tag == NODE_BLOCK) {
             for (int si = 0; si < ln->lambda.body->block.stmts.len; si++)
                 emit_stmt(&s, ln->lambda.body->block.stmts.items[si], 1);
@@ -3247,8 +3305,7 @@ char *transpile_c(Node *program, const char *filename) {
         } else {
             sb_add(&s, "    return (xs_val){.tag=4};\n");
         }
-        for (int ci = 0; ci < lambdas[li].n_captures; ci++)
-            sb_printf(&s, "    #undef %s\n", lambdas[li].captures[ci]);
+        current_lambda = NULL;
         sb_add(&s, "}\n\n");
     }
 
