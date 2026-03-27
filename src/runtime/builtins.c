@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "core/xs_compat.h"
 #include "runtime/interp.h"
+#include "core/xs_bigint.h"
 #include "tls/xs_tls.h"
 #include <strings.h>
 #ifdef __MINGW32__
@@ -195,6 +196,7 @@ static Value *builtin_type(Interp *i, Value **args, int argc) {
     case XS_NULL:   return xs_str("null");
     case XS_BOOL:   return xs_str("bool");
     case XS_INT:    return xs_str("int");
+    case XS_BIGINT: return xs_str("int");
     case XS_FLOAT:  return xs_str("float");
     case XS_STR:    return xs_str("str");
     case XS_CHAR:   return xs_str("char");
@@ -209,6 +211,7 @@ static Value *builtin_type(Interp *i, Value **args, int argc) {
     case XS_INST:       return xs_str(args[0]->inst->class_->name ? args[0]->inst->class_->name : "object");
     case XS_RANGE:  return xs_str("range");
     case XS_SIGNAL: return xs_str("signal");
+    case XS_ACTOR:  return xs_str("actor");
     case XS_MODULE: return xs_str("module");
     default:        return xs_str("unknown");
     }
@@ -226,6 +229,7 @@ static Value *builtin_type_of(Interp *i, Value **args, int argc) {
     case XS_NULL:   return xs_str("Null");
     case XS_BOOL:   return xs_str("Bool");
     case XS_INT:    return xs_str("Int");
+    case XS_BIGINT: return xs_str("Int");
     case XS_FLOAT:  return xs_str("Float");
     case XS_STR:    return xs_str("Str");
     case XS_CHAR:   return xs_str("Char");
@@ -241,6 +245,7 @@ static Value *builtin_type_of(Interp *i, Value **args, int argc) {
     case XS_INST:       return xs_str(args[0]->inst->class_->name ? args[0]->inst->class_->name : "Object");
     case XS_RANGE:  return xs_str("Range");
     case XS_SIGNAL: return xs_str("Signal");
+    case XS_ACTOR:  return xs_str("Actor");
     default:        return xs_str("Unknown");
     }
 }
@@ -254,7 +259,7 @@ static inline Value *tag_check2(Value **args, int argc, ValueTag t1, ValueTag t2
 }
 
 static Value *builtin_is_null(Interp *i, Value **a, int n)  { (void)i; return n < 1 ? xs_bool(1) : tag_check(a,n,XS_NULL); }
-static Value *builtin_is_int(Interp *i, Value **a, int n)   { (void)i; return tag_check(a, n, XS_INT); }
+static Value *builtin_is_int(Interp *i, Value **a, int n)   { (void)i; return xs_bool(n >= 1 && (a[0]->tag == XS_INT || a[0]->tag == XS_BIGINT)); }
 static Value *builtin_is_float(Interp *i, Value **a, int n) { (void)i; return tag_check(a, n, XS_FLOAT); }
 static Value *builtin_is_str(Interp *i, Value **a, int n)   { (void)i; return tag_check(a, n, XS_STR); }
 static Value *builtin_is_bool(Interp *i, Value **a, int n)  { (void)i; return tag_check(a, n, XS_BOOL); }
@@ -267,6 +272,10 @@ static Value *builtin_int(Interp *i, Value **args, int argc) {
     if (argc<1) return xs_int(0);
     Value *v=args[0];
     if (v->tag==XS_INT) return value_incref(v);
+    if (v->tag==XS_BIGINT) {
+        if (bigint_fits_i64(v->bigint)) return xs_int(bigint_to_i64(v->bigint));
+        return value_incref(v);
+    }
     if (v->tag==XS_FLOAT) return xs_int((int64_t)v->f);
     if (v->tag==XS_STR) return xs_int(atoll(v->s));
     if (v->tag==XS_BOOL) return xs_int(v->i);
@@ -279,6 +288,7 @@ static Value *builtin_float(Interp *i, Value **args, int argc) {
     Value *v=args[0];
     if (v->tag==XS_FLOAT) return value_incref(v);
     if (v->tag==XS_INT) return xs_float((double)v->i);
+    if (v->tag==XS_BIGINT) return xs_float(bigint_to_double(v->bigint));
     if (v->tag==XS_STR) return xs_float(atof(v->s));
     return xs_float(0.0);
 }

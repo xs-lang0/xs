@@ -118,7 +118,7 @@ static Value *vm_type(Interp *interp, Value **args, int argc) {
     (void)interp;
     if (argc < 1) return xs_str("null");
     static const char *names[] = {
-        "null","bool","int","bigint","float","str","char",
+        "null","bool","int","int","float","str","char",
         "array","map","tuple","fn","native",
         "struct","enum","class","inst","range","signal","actor","module",
         "closure"
@@ -1118,6 +1118,16 @@ static Value *vm_invoke(VM *vm, Value *fn, Value **args, int argc) {
     return POP();
 }
 
+static Value *vm_try_struct_op(VM *vm, Value *a, const char *op, Value *b) {
+    if (a->tag != XS_STRUCT_VAL || !a->st || !a->st->type_name) return NULL;
+    /* look up the operator method from globals: stored by impl under the op name */
+    Value *fn = map_get(vm->globals, op);
+    if (!fn || (fn->tag != XS_CLOSURE && fn->tag != XS_FUNC && fn->tag != XS_NATIVE))
+        return NULL;
+    Value *args[2] = { a, b };
+    return vm_invoke(vm, fn, args, 2);
+}
+
 static Value *vm_try_dunder(VM *vm, Value *obj, const char *dunder, Value *other) {
     if (obj->tag != XS_MAP) return NULL;
     Value *fn = map_get(obj->map, dunder);
@@ -1223,6 +1233,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                 free(as); free(bs);
                 r = xs_str(buf); free(buf);
             } else if (a->tag == XS_MAP && (r = vm_try_dunder(vm, a, "__add__", b)) != NULL) {
+            } else if (a->tag == XS_STRUCT_VAL && (r = vm_try_struct_op(vm, a, "+", b)) != NULL) {
             } else {
                 double av = a->tag==XS_INT?(double)a->i:(a->tag==XS_BIGINT?bigint_to_double(a->bigint):a->f);
                 double bv = b->tag==XS_INT?(double)b->i:(b->tag==XS_BIGINT?bigint_to_double(b->bigint):b->f);
@@ -1238,6 +1249,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                 r = xs_numeric_sub(a, b);
             } else if (a->tag == XS_MAP && (r = vm_try_dunder(vm, a, "__sub__", b)) != NULL) {
                 /* dunder */
+            } else if (a->tag == XS_STRUCT_VAL && (r = vm_try_struct_op(vm, a, "-", b)) != NULL) {
             } else {
                 double av = a->tag==XS_INT?(double)a->i:(a->tag==XS_BIGINT?bigint_to_double(a->bigint):a->f);
                 double bv = b->tag==XS_INT?(double)b->i:(b->tag==XS_BIGINT?bigint_to_double(b->bigint):b->f);
@@ -1253,6 +1265,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                 r = xs_numeric_mul(a, b);
             } else if (a->tag == XS_MAP && (r = vm_try_dunder(vm, a, "__mul__", b)) != NULL) {
                 /* dunder */
+            } else if (a->tag == XS_STRUCT_VAL && (r = vm_try_struct_op(vm, a, "*", b)) != NULL) {
             } else if (a->tag==XS_STR && b->tag==XS_INT) {
                 int64_t count = b->i;
                 if (count <= 0) { r = xs_str(""); }
@@ -1805,6 +1818,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             value_decref(iter); PUSH(r); break;
         }
         case OP_ITER_GET: {
+            int want_pairs = INSTR_A(instr);
             Value *idx = POP(), *iter = POP(); Value *r;
             int64_t i = idx->tag==XS_INT ? idx->i : (int64_t)idx->f;
             if (iter->tag==XS_ARRAY||iter->tag==XS_TUPLE) {
@@ -1829,7 +1843,16 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                 for (int j = 0; j < iter->map->cap; j++) {
                     if (iter->map->keys[j]) {
                         if (ki == i) {
-                            r = xs_str(iter->map->keys[j]);
+                            if (want_pairs) {
+                                r = xs_tuple_new();
+                                Value *ks = xs_str(iter->map->keys[j]);
+                                Value *val = iter->map->vals[j];
+                                array_push(r->arr, ks);
+                                array_push(r->arr, val ? val : XS_NULL_VAL);
+                                value_decref(ks);
+                            } else {
+                                r = xs_str(iter->map->keys[j]);
+                            }
                             break;
                         }
                         ki++;

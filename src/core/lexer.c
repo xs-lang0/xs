@@ -780,6 +780,15 @@ static void lex_next(Lexer *l) {
         return;
     }
 
+    if (ch=='\'' && lpeek(l,1)!='\\' && lpeek(l,2)=='\'') {
+        ladvance(l);
+        char c = ladvance(l);
+        ladvance(l); /* closing ' */
+        char *s = xs_malloc(2); s[0]=c; s[1]='\0';
+        Token t; t.kind=TK_CHAR; t.sval=s;
+        t.span=make_span(l,sl,sc,sp);
+        ta_push(&l->tokens, t); return;
+    }
     if (ch=='"' || ch=='\'') {
         ladvance(l);
         int interp=0;
@@ -793,15 +802,6 @@ static void lex_next(Lexer *l) {
         ladvance(l);
         char *s = lex_raw_string(l);
         Token t; t.kind=TK_RAW_STRING; t.sval=s;
-        t.span=make_span(l,sl,sc,sp);
-        ta_push(&l->tokens, t); return;
-    }
-    if (ch=='\'' && lpeek(l,1)!='\\' && lpeek(l,2)=='\'') {
-        ladvance(l);
-        char c = ladvance(l);
-        ladvance(l); /* closing ' */
-        char *s = xs_malloc(2); s[0]=c; s[1]='\0';
-        Token t; t.kind=TK_CHAR; t.sval=s;
         t.span=make_span(l,sl,sc,sp);
         ta_push(&l->tokens, t); return;
     }
