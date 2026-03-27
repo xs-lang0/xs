@@ -1,6 +1,6 @@
 # XS Status
 
-What works, what's partial, and what's planned. Updated for v0.1.9.
+What works, what's partial, and what's planned. Updated for v0.2.0.
 
 ## Tree-Walk Interpreter
 

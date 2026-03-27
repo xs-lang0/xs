@@ -309,6 +309,39 @@ XsType *tc_synth(Node *n, SymTab *st, SemaCtx *ctx) {
     }
 }
 
+/* check if a type name is a known builtin or user-defined type */
+static int is_known_type_name(const char *name, SymTab *st) {
+    if (!name) return 0;
+    /* builtins recognized by ty_from_name */
+    if (ty_from_name(name)) return 1;
+    /* common aliases not in ty_from_name */
+    if (strcmp(name, "int") == 0 || strcmp(name, "float") == 0 ||
+        strcmp(name, "string") == 0 || strcmp(name, "byte") == 0 ||
+        strcmp(name, "any") == 0 || strcmp(name, "void") == 0) return 1;
+    /* container types */
+    if (strcmp(name, "array") == 0 || strcmp(name, "map") == 0 ||
+        strcmp(name, "tuple") == 0 || strcmp(name, "option") == 0 ||
+        strcmp(name, "result") == 0 || strcmp(name, "fn") == 0) return 1;
+    /* user-defined: struct, enum, trait, class */
+    if (st) {
+        Symbol *sym = sym_lookup(st, name);
+        if (sym && (sym->kind == SYM_STRUCT || sym->kind == SYM_ENUM ||
+                    sym->kind == SYM_TRAIT || sym->kind == SYM_GENERIC)) return 1;
+    }
+    return 0;
+}
+
+static void check_type_ann_exists(TypeExpr *te, SymTab *st, SemaCtx *ctx) {
+    if (!te || te->kind != TEXPR_NAMED || !te->name) return;
+    if (!is_known_type_name(te->name, st)) {
+        Diagnostic *diag = diag_new(DIAG_ERROR, DIAG_PHASE_SEMANTIC, "T0011",
+            "unknown type '%s'", te->name);
+        diag_annotate(diag, te->span, 1, "unknown type '%s'", te->name);
+        diag_hint(diag, "check spelling or define a struct/enum named '%s'", te->name);
+        diag_emit(ctx->diag, diag);
+    }
+}
+
 static int is_int_kind(TyKind k) {
     return k == TY_I8 || k == TY_I16 || k == TY_I32 || k == TY_I64 ||
            k == TY_U8 || k == TY_U16 || k == TY_U32 || k == TY_U64;
@@ -391,6 +424,12 @@ static void tc_walk(Node *n, SymTab *st, SemaCtx *ctx) {
     switch (n->tag) {
 
     case NODE_FN_DECL: {
+        if (n->fn_decl.ret_type)
+            check_type_ann_exists(n->fn_decl.ret_type, st, ctx);
+        for (int i = 0; i < n->fn_decl.params.len; i++) {
+            Param *pm = &n->fn_decl.params.items[i];
+            if (pm->type_ann) check_type_ann_exists(pm->type_ann, st, ctx);
+        }
         XsType *ret = n->fn_decl.ret_type
                     ? texpr_to_xstype(n->fn_decl.ret_type)
                     : ty_unknown();
@@ -417,18 +456,24 @@ static void tc_walk(Node *n, SymTab *st, SemaCtx *ctx) {
 
     case NODE_LET: case NODE_VAR: {
         if (n->let.value) tc_walk(n->let.value, st, ctx);
-        if (n->let.type_ann && n->let.value) {
-            XsType *ann = texpr_to_xstype(n->let.type_ann);
-            if (ann->kind != TY_UNKNOWN) {
-                tc_check(n->let.value, ann, st, ctx);
-                int stored = 0;
-                if (n->let.name) {
-                    Symbol *sym = sym_lookup(st, n->let.name);
-                    if (sym) { sym->type = ann; stored = 1; }
+        if (n->let.type_ann) {
+            check_type_ann_exists(n->let.type_ann, st, ctx);
+            if (n->let.value) {
+                int known = !n->let.type_ann->name ||
+                            n->let.type_ann->kind != TEXPR_NAMED ||
+                            is_known_type_name(n->let.type_ann->name, st);
+                XsType *ann = texpr_to_xstype(n->let.type_ann);
+                if (ann->kind != TY_UNKNOWN && known) {
+                    tc_check(n->let.value, ann, st, ctx);
+                    int stored = 0;
+                    if (n->let.name) {
+                        Symbol *sym = sym_lookup(st, n->let.name);
+                        if (sym) { sym->type = ann; stored = 1; }
+                    }
+                    if (!stored) ty_free(ann);
+                } else {
+                    ty_free(ann);
                 }
-                if (!stored) ty_free(ann);
-            } else {
-                ty_free(ann);
             }
         }
         break;
@@ -436,18 +481,24 @@ static void tc_walk(Node *n, SymTab *st, SemaCtx *ctx) {
 
     case NODE_CONST: {
         if (n->const_.value) tc_walk(n->const_.value, st, ctx);
-        if (n->const_.type_ann && n->const_.value) {
-            XsType *ann = texpr_to_xstype(n->const_.type_ann);
-            if (ann->kind != TY_UNKNOWN) {
-                tc_check(n->const_.value, ann, st, ctx);
-                int stored = 0;
-                if (n->const_.name) {
-                    Symbol *sym = sym_lookup(st, n->const_.name);
-                    if (sym) { sym->type = ann; stored = 1; }
+        if (n->const_.type_ann) {
+            check_type_ann_exists(n->const_.type_ann, st, ctx);
+            if (n->const_.value) {
+                int known = !n->const_.type_ann->name ||
+                            n->const_.type_ann->kind != TEXPR_NAMED ||
+                            is_known_type_name(n->const_.type_ann->name, st);
+                XsType *ann = texpr_to_xstype(n->const_.type_ann);
+                if (ann->kind != TY_UNKNOWN && known) {
+                    tc_check(n->const_.value, ann, st, ctx);
+                    int stored = 0;
+                    if (n->const_.name) {
+                        Symbol *sym = sym_lookup(st, n->const_.name);
+                        if (sym) { sym->type = ann; stored = 1; }
+                    }
+                    if (!stored) ty_free(ann);
+                } else {
+                    ty_free(ann);
                 }
-                if (!stored) ty_free(ann);
-            } else {
-                ty_free(ann);
             }
         }
         break;
@@ -480,7 +531,33 @@ static void tc_walk(Node *n, SymTab *st, SemaCtx *ctx) {
         break;
 
     case NODE_EXPR_STMT: tc_walk(n->expr_stmt.expr, st, ctx); break;
-    case NODE_CALL:      tc_walk(n->call.callee, st, ctx); tc_walk_list(&n->call.args, st, ctx); break;
+    case NODE_CALL: {
+        tc_walk(n->call.callee, st, ctx);
+        tc_walk_list(&n->call.args, st, ctx);
+        /* check argument types against parameter annotations */
+        if (n->call.callee && n->call.callee->tag == NODE_IDENT) {
+            Symbol *fn_sym = sym_lookup(st, n->call.callee->ident.name);
+            if (fn_sym && fn_sym->decl && fn_sym->decl->tag == NODE_FN_DECL) {
+                ParamList *params = &fn_sym->decl->fn_decl.params;
+                int nargs = n->call.args.len;
+                int nparams = params->len;
+                int limit = nargs < nparams ? nargs : nparams;
+                for (int i = 0; i < limit; i++) {
+                    Param *pm = &params->items[i];
+                    if (!pm->type_ann) continue;
+                    if (pm->type_ann->kind == TEXPR_NAMED && pm->type_ann->name &&
+                        !is_known_type_name(pm->type_ann->name, st)) continue;
+                    XsType *expected = texpr_to_xstype(pm->type_ann);
+                    if (expected->kind != TY_UNKNOWN) {
+                        Node *arg = n->call.args.items[i];
+                        if (arg) tc_check(arg, expected, st, ctx);
+                    }
+                    if (!expected->is_singleton) ty_free(expected);
+                }
+            }
+        }
+        break;
+    }
     case NODE_METHOD_CALL: tc_walk(n->method_call.obj, st, ctx); tc_walk_list(&n->method_call.args, st, ctx); break;
     case NODE_ASSIGN:    tc_walk(n->assign.target, st, ctx); tc_walk(n->assign.value, st, ctx); break;
     case NODE_BINOP:     tc_walk(n->binop.left, st, ctx); tc_walk(n->binop.right, st, ctx); break;
@@ -539,21 +616,30 @@ static void tc_walk(Node *n, SymTab *st, SemaCtx *ctx) {
         if (n->struct_init.path) {
             Symbol *st_sym = sym_lookup(st, n->struct_init.path);
             if (st_sym && st_sym->decl && st_sym->decl->tag == NODE_STRUCT_DECL) {
-                NodePairList *decl_fields = &st_sym->decl->struct_decl.fields;
+                Node *sd = st_sym->decl;
+                NodePairList *decl_fields = &sd->struct_decl.fields;
+                TypeExpr **field_types = sd->struct_decl.field_types;
+                int n_ft = sd->struct_decl.n_field_types;
                 for (int i = 0; i < n->struct_init.fields.len; i++) {
                     const char *fname = n->struct_init.fields.items[i].key;
                     Node *fval = n->struct_init.fields.items[i].val;
                     if (!fname || !fval) continue;
                     for (int j = 0; j < decl_fields->len; j++) {
-                        if (decl_fields->items[j].key &&
-                            strcmp(decl_fields->items[j].key, fname) == 0) {
-                            if (decl_fields->items[j].val) {
-                                XsType *field_ty = tc_synth(decl_fields->items[j].val, st, ctx);
-                                if (field_ty && field_ty->kind != TY_UNKNOWN)
-                                    tc_check(fval, field_ty, st, ctx);
-                            }
-                            break;
+                        if (!decl_fields->items[j].key ||
+                            strcmp(decl_fields->items[j].key, fname) != 0) continue;
+                        /* check against field type annotation first */
+                        if (field_types && j < n_ft && field_types[j]) {
+                            XsType *ft = texpr_to_xstype(field_types[j]);
+                            if (ft->kind != TY_UNKNOWN)
+                                tc_check(fval, ft, st, ctx);
+                            if (!ft->is_singleton) ty_free(ft);
+                        } else if (decl_fields->items[j].val) {
+                            /* fall back to inferring from default value */
+                            XsType *field_ty = tc_synth(decl_fields->items[j].val, st, ctx);
+                            if (field_ty && field_ty->kind != TY_UNKNOWN)
+                                tc_check(fval, field_ty, st, ctx);
                         }
+                        break;
                     }
                 }
             }

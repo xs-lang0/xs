@@ -305,8 +305,8 @@ Dump intermediate representations or transpile to other languages.
 
 ```bash
 xs --emit ast script.xs       # print AST tree
-xs --emit bytecode script.xs  # print bytecode IR
-xs --emit ir script.xs        # alias for bytecode
+xs --emit bytecode script.xs  # print VM bytecode
+xs --emit ir script.xs        # print SSA IR (three-address form)
 xs --emit js script.xs        # transpile to JavaScript
 xs --emit c script.xs         # transpile to C
 xs --emit wasm script.xs      # transpile to WebAssembly
@@ -585,7 +585,7 @@ These flags work with any subcommand or when running scripts directly.
 | `--vm` | Use bytecode VM backend. |
 | `--jit` | Use JIT compilation backend. |
 | `--backend <name>` | Select backend: `interp`, `vm`, or `jit`. |
-| `--emit <target>` | Dump IR: `ast`, `bytecode`/`ir`, `js`, `c`, `wasm`. |
+| `--emit <target>` | Dump IR or transpile: `ast`, `bytecode`, `ir`, `js`, `c`, `wasm`. |
 | `-e` / `--eval <code>` | Evaluate inline code. |
 | `--explain <code>` | Explain an error code. |
 | `--record <file>` | Record execution trace to `.xst` file. |
