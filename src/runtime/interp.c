@@ -7,6 +7,11 @@
 #include "core/parser.h"
 #include "core/xs_bigint.h"
 #include "core/xs_utils.h"
+#ifdef __MINGW32__
+#  include "core/xs_regex.h"
+#else
+#  include <regex.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -889,10 +894,18 @@ static int match_pattern(Interp *i, Node *pat, Value *val, Env *env) {
         const char *prefix = pat->pat_str_concat.prefix;
         size_t plen = strlen(prefix);
         if (strncmp(val->s, prefix, plen) != 0) return 0;
-        /* Bind the rest of the string to the sub-pattern */
         Value *rest_val = xs_str(val->s + plen);
         int ok = match_pattern(i, pat->pat_str_concat.rest, rest_val, env);
         value_decref(rest_val);
+        return ok;
+    }
+    case NODE_PAT_REGEX: {
+        if (val->tag != XS_STR || !pat->pat_regex.pattern) return 0;
+        regex_t re;
+        int rc = regcomp(&re, pat->pat_regex.pattern, REG_EXTENDED | REG_NOSUB);
+        if (rc != 0) return 0;
+        int ok = (regexec(&re, val->s, 0, NULL, 0) == 0);
+        regfree(&re);
         return ok;
     }
     default: return 1;
@@ -3766,6 +3779,16 @@ static Value *eval_binop(Interp *i, Node *n) {
             result = xs_int(0);
         }
         goto done;
+    }
+
+    /* struct/class operator overloading — check before numeric paths */
+    if (left->tag == XS_STRUCT_VAL || left->tag == XS_ENUM_VAL) {
+        Value *op_fn = env_get(i->env, op);
+        if (op_fn && (op_fn->tag == XS_FUNC || op_fn->tag == XS_NATIVE)) {
+            Value *call_args[2] = { left, right };
+            result = call_value(i, op_fn, call_args, 2, op);
+            goto done;
+        }
     }
 
     if (left->tag == XS_INT && right->tag == XS_INT) {

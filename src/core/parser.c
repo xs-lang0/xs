@@ -2048,6 +2048,12 @@ static Node *parse_pattern(Parser *p) {
         n->pat_lit.fval = tok->fval; n->pat_lit.tag = 1;
         return n;
     }
+    if (tok->kind == TK_RAW_STRING) {
+        pp_advance(p);
+        Node *n = node_new(NODE_PAT_REGEX, span);
+        n->pat_regex.pattern = xs_strdup(tok->sval ? tok->sval : "");
+        return n;
+    }
     if (tok->kind == TK_STRING) {
         pp_advance(p);
         /* Check for string concat pattern: "prefix" ++ rest */
@@ -2496,9 +2502,9 @@ static Node *parse_fn_decl(Parser *p, int is_pub, int is_async, int is_pure) {
     Token *kw = pp_expect(p, TK_FN, "expected 'fn'");
     Span span = kw->span;
 
-    /* fn* generator marker */
+    /* fn* generator marker — but fn *(params) is operator overload, not a generator */
     int is_generator = 0;
-    if (pp_check(p, TK_STAR)) {
+    if (pp_check(p, TK_STAR) && pp_peek(p, 1)->kind != TK_LPAREN) {
         is_generator = 1;
         pp_advance(p);
     }

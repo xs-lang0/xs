@@ -112,6 +112,7 @@ typedef enum {
     NODE_PAT_EXPR,
     NODE_PAT_CAPTURE,       /* x @ pattern */
     NODE_PAT_STRING_CONCAT, /* "prefix" ++ rest */
+    NODE_PAT_REGEX,         /* r"\d+" regex match */
 
     // effects
     NODE_EFFECT_DECL,
@@ -521,6 +522,10 @@ struct Node {
             char *prefix;
             Node *rest;
         } pat_str_concat;
+
+        struct {
+            char *pattern;  /* regex pattern string */
+        } pat_regex;
 
         struct { NodeList stmts; } program;
     };

@@ -437,6 +437,9 @@ void node_free(Node *n) {
         free(n->pat_str_concat.prefix);
         node_free(n->pat_str_concat.rest);
         break;
+    case NODE_PAT_REGEX:
+        free(n->pat_regex.pattern);
+        break;
     case NODE_PROGRAM:
         nodelist_free(&n->program.stmts);
         break;

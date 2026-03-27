@@ -226,6 +226,11 @@ static void fmt_pattern(SB *s, Node *n, int depth) {
         sb_add(s, "\" ++ ");
         fmt_pattern(s, n->pat_str_concat.rest, 0);
         break;
+    case NODE_PAT_REGEX:
+        sb_add(s, "r\"");
+        sb_add(s, n->pat_regex.pattern);
+        sb_add(s, "\"");
+        break;
     default:
         fmt_expr(s, n, 0);
         break;

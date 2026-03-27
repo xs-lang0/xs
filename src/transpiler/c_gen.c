@@ -1483,6 +1483,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
     case NODE_PAT_EXPR:
     case NODE_PAT_CAPTURE:
     case NODE_PAT_STRING_CONCAT:
+    case NODE_PAT_REGEX:
         sb_add(s, "/* pattern */ XS_NULL");
         break;
     /* declaration nodes as expressions emit their identifier */

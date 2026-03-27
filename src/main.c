@@ -328,6 +328,8 @@ static void cov_register_node(XSCoverage *cov, Node *n) {
     case NODE_PAT_STRING_CONCAT:
         cov_register_node(cov, n->pat_str_concat.rest);
         break;
+    case NODE_PAT_REGEX:
+        break;
     case NODE_PROGRAM:
         cov_register_nodelist(cov, &n->program.stmts);
         break;
@@ -602,6 +604,7 @@ static void ast_dump(Node *n, int depth) {
         case NODE_PAT_EXPR: fprintf(stdout, "PAT_EXPR\n"); break;
         case NODE_PAT_CAPTURE: fprintf(stdout, "PAT_CAPTURE name=%s\n", n->pat_capture.name); break;
         case NODE_PAT_STRING_CONCAT: fprintf(stdout, "PAT_STRING_CONCAT prefix=\"%s\"\n", n->pat_str_concat.prefix); break;
+        case NODE_PAT_REGEX: fprintf(stdout, "PAT_REGEX pattern=\"%s\"\n", n->pat_regex.pattern); break;
         default: fprintf(stdout, "NODE_%d\n", n->tag); break;
     }
 }

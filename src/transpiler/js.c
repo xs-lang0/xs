@@ -708,6 +708,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
         if (n->pat_capture.name) sb_add(s, n->pat_capture.name);
         break;
     case NODE_PAT_STRING_CONCAT:
+    case NODE_PAT_REGEX:
         sb_add(s, "undefined");
         break;
     case NODE_PROGRAM:

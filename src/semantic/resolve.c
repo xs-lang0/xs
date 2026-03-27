@@ -111,6 +111,8 @@ static void define_pattern_bindings(Node *pat, SymTab *st) {
     case NODE_PAT_STRING_CONCAT:
         define_pattern_bindings(pat->pat_str_concat.rest, st);
         break;
+    case NODE_PAT_REGEX:
+        break;
     default:
         break;
     }
