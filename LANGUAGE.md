@@ -123,14 +123,15 @@ println(type(0..5))      -- range
 2.5e-3              -- 0.0025
 ```
 
-Integers are signed 64-bit (`int64_t`). Overflow wraps silently via two's complement:
+Integers are signed 64-bit (`int64_t`). On overflow, they automatically promote to arbitrary-precision bigints:
 
 ```xs
 let max = 9223372036854775807   -- 2^63 - 1
-let wrapped = max + 1           -- -9223372036854775808
+println(max + 1)                -- 9223372036854775808 (bigint)
+println(2 ** 100)               -- 1267650600228229401496703205376
 ```
 
-Floats are IEEE 754 double-precision. There is no bigint type.
+Floats are IEEE 754 double-precision. Bigints support all arithmetic operators and mix freely with regular ints.
 
 ---
 
@@ -647,11 +648,12 @@ println(int(-3.9))               -- -3
 
 ### Integer Overflow
 
-Wraps silently via two's complement:
+Automatically promotes to arbitrary-precision bigint:
 
 ```xs
 let max = 9223372036854775807    -- 2^63 - 1
-println(max + 1)                 -- -9223372036854775808
+println(max + 1)                 -- 9223372036854775808 (bigint)
+println(2 ** 100)                -- 1267650600228229401496703205376
 ```
 
 ---
@@ -850,9 +852,16 @@ match value {
     n @ 1..=10 => "small: {n}"
     n          => "other: {n}"
 }
+
+-- string prefix patterns
+match url {
+    "https://" ++ rest => "secure: {rest}"
+    "http://" ++ rest  => "insecure: {rest}"
+    _                  => "unknown protocol"
+}
 ```
 
-The semantic analyzer checks that `match` covers all cases. A wildcard `_` or variable pattern makes a match exhaustive.
+The semantic analyzer checks that `match` covers all cases. A wildcard `_` or variable pattern makes a match exhaustive. For enum matches, the checker verifies all variants are covered.
 
 ---
 
@@ -914,6 +923,47 @@ fn main() {
 ```
 
 **Implicit return** applies to the last expression in the block. For early returns, use `return` explicitly.
+
+### Function Attributes
+
+Decorate functions with `@` or `#[...]` attributes before the `fn` keyword.
+
+```xs
+-- @pure: checked by sema — cannot call println, read_file, sleep, etc.
+@pure
+fn add(a, b) { return a + b }
+
+-- @test: marks a function as a test case (used by xs test)
+@test
+fn test_math() {
+    assert_eq(1 + 1, 2)
+}
+
+-- @deprecated: warns callers at check time
+@deprecated("use new_api() instead")
+fn old_api() { return 42 }
+
+-- #[...] attribute syntax (equivalent)
+#[test]
+fn test_strings() {
+    assert("hello".len() == 5)
+}
+
+#[deprecated("moved to v2")]
+fn legacy() { }
+
+-- pub: marks a function as public (visible to importers)
+pub fn helper() { return 42 }
+
+-- static: in impl blocks, a method that doesn't take self
+impl Point {
+    static fn origin() {
+        return Point { x: 0, y: 0 }
+    }
+}
+```
+
+`@pure` is enforced by the semantic analyzer — calling impure functions (I/O, sleep, exit) inside a `@pure` function is an error.
 
 ### Closures
 
@@ -1005,6 +1055,22 @@ struct Config {
     port: int,
     debug: bool
 }
+
+-- field defaults
+struct Options {
+    verbose = false,
+    retries: int = 3,
+    timeout: f64 = 30.0
+}
+let opts = Options {}               -- all defaults
+let opts2 = Options { verbose: true } -- override one
+
+-- derives: auto-implement traits
+struct Vec2 { x, y } derives Eq, Hash
+
+-- #[derive(...)] attribute syntax (equivalent)
+#[derive(Eq, Hash)]
+struct Vec3 { x, y, z }
 ```
 
 ### Impl Blocks
@@ -1029,6 +1095,30 @@ println(moved.x)                -- 4
 ```
 
 Methods that access instance data take `self` as the first parameter. `self` is not implicit.
+
+### Operator Overloading
+
+Define operators as methods in impl blocks by using the operator as the function name:
+
+```xs
+struct Vec2 { x, y }
+impl Vec2 {
+    fn +(self, other) {
+        return Vec2 { x: self.x + other.x, y: self.y + other.y }
+    }
+    fn *(self, scalar) {
+        return Vec2 { x: self.x * scalar, y: self.y * scalar }
+    }
+}
+
+let a = Vec2 { x: 1, y: 2 }
+let b = Vec2 { x: 3, y: 4 }
+let c = a + b
+println(c.x)                    -- 4
+println(c.y)                    -- 6
+```
+
+Overloadable operators: `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `++`, `&&`, `||`.
 
 ### Spread / Update Syntax
 
@@ -1136,6 +1226,61 @@ impl Area for Circle {
 }
 ```
 
+### Default Methods
+
+Traits can provide default implementations. Types only need to override them if they want different behavior.
+
+```xs
+trait Greet {
+    fn hello(self) -> str {
+        return "hello from {self.name}"
+    }
+    fn goodbye(self) -> str   -- no default, must implement
+}
+
+struct Person { name }
+impl Greet for Person {
+    -- hello() uses the default, only goodbye() is required
+    fn goodbye(self) -> str { return "bye from {self.name}" }
+}
+```
+
+### Super Traits
+
+A trait can require another trait as a prerequisite:
+
+```xs
+trait Display {
+    fn display(self) -> str
+}
+
+trait PrettyPrint: Display {
+    fn pretty(self) -> str
+}
+
+-- implementing PrettyPrint for a type requires Display to also be implemented
+```
+
+### Associated Types
+
+Traits can declare associated type names:
+
+```xs
+trait Iterator {
+    type Item
+    fn next(self) -> Item
+}
+```
+
+### Trait Checking
+
+The semantic analyzer enforces trait implementations:
+
+- **Missing methods** — if an impl block is missing a required method (one without a default body), that's an error.
+- **Parameter count mismatch** — if the impl's method has a different number of params than the trait declares, that's an error.
+- **Return type mismatch** — if the trait declares `-> str` and the impl returns `-> int`, that's an error.
+- **Orphan rule** — you can only implement a trait if either the trait or the type is defined in the same file. Implementing a foreign trait for a foreign type is an error.
+
 ---
 
 ## Classes
@@ -1209,75 +1354,205 @@ println(c.debug)                 -- false
 
 ## Type System
 
-XS has gradual typing. Code runs without any annotations, but you can add them for safety.
+XS has gradual typing. Code runs fine without any annotations. Add them where you want enforcement — the type checker only kicks in on annotated code and passes through everything else silently.
 
-### Adding Type Annotations
+### Type Annotations
+
+Annotations go after a colon on variables, after parameter names, after `->` for return types, and after struct field names.
 
 ```xs
--- on variables
+-- variables
 let count: int = 42
 var name: str = "XS"
+const MAX: i64 = 100
 
--- on function parameters and return type
+-- function parameters and return type
 fn add(a: int, b: int) -> int {
     return a + b
 }
 
--- on struct fields
+-- struct fields
 struct Config {
     host: str,
-    port: int
+    port: int,
+    debug: bool
+}
+
+-- const with annotation
+const PI: f64 = 3.14159
+```
+
+### Primitive Types
+
+| Annotation | Description |
+|------------|-------------|
+| `int` / `i64` | 64-bit signed integer (default integer type) |
+| `i8`, `i16`, `i32` | Smaller signed integers |
+| `u8`, `u16`, `u32`, `u64` | Unsigned integers |
+| `float` / `f64` | 64-bit float (default float type) |
+| `f32` | 32-bit float |
+| `str` / `string` | String |
+| `bool` | Boolean |
+| `char` | Character |
+| `byte` | Alias for `u8` |
+| `any` / `dyn` | Any type (disables checking) |
+| `void` / `unit` | No value |
+| `never` | Function that never returns |
+
+Integer annotations are interchangeable for checking purposes — `int`, `i32`, and `i64` all accept integer literals. Same for `float`, `f32`, `f64`.
+
+### Composite Types
+
+```xs
+-- array of ints
+let nums: [int] = [1, 2, 3]
+
+-- tuple
+let pair: (int, str) = (42, "hello")
+
+-- optional (nullable)
+let maybe: int? = null
+let found: str? = "yes"
+
+-- function type
+let transform: fn(int) -> int = fn(x) { x * 2 }
+
+-- generic types
+let items: array<int> = [1, 2, 3]
+let lookup: map<str, int> = #{"a": 1}
+
+-- nested
+let grid: [[int]] = [[1, 2], [3, 4]]
+let handlers: [fn(str) -> bool] = []
+```
+
+### What Gets Checked
+
+The type checker runs as part of semantic analysis (before execution). It catches:
+
+**Variable assignment mismatches:**
+```xs
+let x: int = "hello"
+-- error[T0001]: type mismatch: expected 'int', got 'str'
+--   hint: use int() or float() to convert a string to a number
+```
+
+**Function argument types:**
+```xs
+fn greet(name: str) { println("hi {name}") }
+greet(42)
+-- error[T0001]: type mismatch: expected 'str', got 'i64'
+--   hint: use to_str() to convert a number to a string
+```
+
+**Return type mismatches:**
+```xs
+fn double(x: int) -> int {
+    return "oops"
+-- error[T0001]: type mismatch: expected 'int', got 'str'
 }
 ```
 
-### Available Type Names
-
-```
-int     i32     i64
-float   f64
-str
-bool
-null
-array
-map
-tuple
-fn
+**Struct field types:**
+```xs
+struct Point { x: int, y: int }
+let p = Point { x: "bad", y: 0 }
+-- error[T0001]: type mismatch: expected 'int', got 'str'
 ```
 
-Optional types: `int?` (int or null)
+**Match arm consistency:**
+```xs
+let r = match x {
+    1 => "one"
+    2 => 42        -- error: match arm type mismatch
+}
+```
 
-Array types: `[int]`
+**Unknown type names:**
+```xs
+let x: Foo = 42
+-- error[T0011]: unknown type 'Foo'
+--   hint: check spelling or define a struct/enum named 'Foo'
+```
 
-Function types: `fn(int) -> int`
+**User-defined types work too** — if you define a struct or enum, it becomes a valid type name:
+```xs
+struct Point { x: int, y: int }
+let p: Point = Point { x: 1, y: 2 }  -- valid
+```
 
-### Enforcement Behavior
+### What Doesn't Get Checked
 
-Type annotations are checked by the semantic analyzer. Mismatches are caught before execution:
+Unannotated code passes through silently. The checker infers types where it can (literals, operators, function calls with known signatures) but never forces you to annotate.
 
 ```xs
-let x: int = "hello"            -- error: type mismatch: expected 'int', got 'str'
-```
-
-Return type mismatches are caught at runtime:
-
-```xs
-fn foo(x: int) -> str { return x }
-foo(42)                          -- runtime error: expected return type 'str', got 'int'
+-- no annotations, no errors, runs fine
+let x = 42
+let y = x + 1
+fn foo(a, b) { return a + b }
 ```
 
 ### Type Checking Modes
 
 ```bash
-xs script.xs            -- normal: semantic analysis runs, types checked
-xs --check script.xs    -- check-only: type check without running
-xs --strict script.xs   -- strict: require annotations everywhere
-xs --lenient script.xs  -- lenient: skip some checks
+xs script.xs            -- normal: type check annotated code, then run
+xs --check script.xs    -- check only, don't execute
+xs --strict script.xs   -- require annotations on all variables, params, and return types
+xs --lenient script.xs  -- downgrade type errors to warnings
 ```
+
+**Strict mode** enforces annotations everywhere:
+```xs
+-- with --strict, this is an error:
+let x = 42
+-- error[S0010]: missing type annotation for 'x' in strict mode
+--   hint: use 'let x: <type> = ...'
+
+-- fix:
+let x: int = 42
+```
+
+In strict mode, every `let`/`var`/`const`, every function parameter, and every function return type must have an annotation.
 
 ### Type Aliases
 
 ```xs
 type UserId = i64
+type Handler = fn(str) -> bool
+```
+
+### Generic Type Parameters
+
+Functions can declare type parameters with optional bounds:
+
+```xs
+fn identity<T>(x: T) -> T {
+    return x
+}
+
+fn first<T>(arr: [T]) -> T {
+    return arr[0]
+}
+
+-- with trait bounds
+fn display<T: Describe>(item: T) -> str {
+    return item.describe()
+}
+```
+
+Structs and enums can also have type parameters (parsed but currently erased at runtime — the syntax is accepted for forward compatibility):
+
+```xs
+struct Pair<A, B> { first: A, second: B }
+enum Option<T> { Some(T), None }
+```
+
+### Inferred Placeholder
+
+Use `_` to let the checker infer a type in a position where you'd normally write one:
+
+```xs
+let x: _ = 42    -- inferred as int
 ```
 
 ---
@@ -1379,6 +1654,48 @@ Defers run even if an exception is thrown.
 | `panic(msg)` | No | Unrecoverable: invariant violations, impossible states |
 | `todo(msg?)` | No | Placeholder for unimplemented code |
 | `unreachable()` | No | Code that should never execute |
+
+---
+
+## Unsafe Blocks
+
+`unsafe { }` marks a block as unchecked. Currently a parsing/AST annotation — the runtime doesn't restrict anything inside unsafe blocks, but it signals intent to the reader and to future tooling.
+
+```xs
+unsafe {
+    -- code that does something risky
+    let ptr = some_ffi_call()
+}
+```
+
+---
+
+## Signals (Reactive State)
+
+Signals are observable values that automatically propagate changes. `derived()` creates computed signals that update when their dependencies change.
+
+```xs
+let count = signal(0)
+println(count.get())             -- 0
+
+count.set(5)
+println(count.get())             -- 5
+
+-- derived signals auto-update
+let doubled = derived(fn() { count.get() * 2 })
+println(doubled.get())           -- 10
+
+count.set(10)
+println(doubled.get())           -- 20
+
+-- subscribe to changes
+count.subscribe(fn(val) {
+    println("count changed to {val}")
+})
+count.set(42)                    -- prints: count changed to 42
+```
+
+Signals are also available via `import reactive` as `reactive.signal()` and `reactive.derived()`.
 
 ---
 

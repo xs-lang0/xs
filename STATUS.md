@@ -145,11 +145,26 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 | macOS (x86-64, ARM) | works, CI tested |
 | Windows (MinGW) | works, CI tested, static linked |
 
+## Recent Changes (v0.2.0)
+
+- Fixed: `type()` and `is_int()` now work correctly for bigint values
+- Fixed: char literals (`'a'`) properly produce char type (was coerced to string)
+- Fixed: `int()`, `float()` conversions handle bigint input
+- Added: `for (k, v) in map` — direct key-value iteration without `.entries()`
+- Added: bigint number methods (`.abs()`, `.is_even()`, `.is_odd()`, etc.)
+- Added: VM `for (k, v) in map` tuple iteration
+- Added: VM struct operator overloading for `+`, `-`, `*`
+- Added: test_types.xs test suite (bigints, chars, type annotations, operator overloading, map iteration)
+- Test suite now at 14 test files
+
 ## Known Limitations
 
+- Struct operator overloading only works when both operands are structs (not mixed struct+int)
+- VM operator overloading on structs is partial (only works when the operator fn is in globals)
 - C transpiler closures break when the same variable name is captured in multiple functions in one file
 - JIT is x86-64 only and very early
 - WASM transpiler only handles basic programs
 - Package registry is not live — `xs install` works with local paths
 - VM effects use snapshot/restore (single-shot only, no nested effects)
 - VM actors use flattened state (not full closure capture like interpreter)
+- HM type inference engine (2500 lines) exists but is not wired into --check yet

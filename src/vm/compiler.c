@@ -976,8 +976,9 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
 
         emit_a(c, OP_LOAD_LOCAL, iter_slot);
         emit_a(c, OP_LOAD_LOCAL, idx_slot);
-        emit(c, MAKE_A(OP_ITER_GET, 0, 0));
         Node *pat = n->for_loop.pattern;
+        int want_pairs = (pat && pat->tag == NODE_PAT_TUPLE) ? 1 : 0;
+        emit(c, MAKE_A(OP_ITER_GET, want_pairs, 0));
         const char *pat_name = NULL;
         if (pat) {
             if (pat->tag == NODE_IDENT)     pat_name = pat->ident.name;

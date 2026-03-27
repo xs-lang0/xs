@@ -16,6 +16,7 @@
 #include "runtime/error.h"
 #include "semantic/sema.h"
 #include "semantic/cache.h"
+#include "types/inference.h"
 #include "repl/repl.h"
 #include "lint/lint.h"
 
@@ -1821,6 +1822,22 @@ int main(int argc, char **argv) {
                 }
             }
             diag_context_free(dctx);
+            if (do_check || strict) {
+                InferResult *ir = infer_types(prog);
+                int infer_errs = infer_error_count(ir);
+                for (int ie = 0; ie < infer_errs; ie++) {
+                    const char *msg = infer_error_at(ir, ie);
+                    if (!msg) continue;
+                    if (strstr(msg, "with unit") || strstr(msg, "with ?") ||
+                    strstr(msg, "i64 with int") || strstr(msg, "int with i64") ||
+                    strstr(msg, "f64 with float") || strstr(msg, "float with f64") ||
+                    strstr(msg, "str with string") || strstr(msg, "string with str"))
+                        continue;
+                    fprintf(stderr, "  %sinference: %s\n",
+                            strict ? "error: " : "warning: ", msg);
+                }
+                infer_result_free(ir);
+            }
             if (do_check) {
                 printf("No errors found in <eval>\n");
                 node_free(prog);
@@ -2039,6 +2056,34 @@ run_file:;
             node_free(program);
             cache_free(g_sema_cache);
             return 1;
+        }
+        /* HM type inference: runs after sema to catch additional type errors
+           in unannotated code (e.g. passing wrong types through variables) */
+        if (do_check || strict) {
+            InferResult *ir = infer_types(program);
+            int infer_errs = infer_error_count(ir);
+            int printed = 0;
+            for (int ie = 0; ie < infer_errs; ie++) {
+                const char *msg = infer_error_at(ir, ie);
+                if (!msg) continue;
+                /* skip false positives from implicit returns and int/unit mismatches */
+                if (strstr(msg, "with unit") || strstr(msg, "with ?") ||
+                    strstr(msg, "i64 with int") || strstr(msg, "int with i64") ||
+                    strstr(msg, "f64 with float") || strstr(msg, "float with f64") ||
+                    strstr(msg, "str with string") || strstr(msg, "string with str"))
+                    continue;
+                if (!printed) { fprintf(stderr, "\n"); printed = 1; }
+                fprintf(stderr, "  %sinference: %s\n",
+                        strict ? "error: " : "warning: ", msg);
+            }
+            if (printed && strict) {
+                fprintf(stderr, "\n");
+                infer_result_free(ir);
+                node_free(program);
+                cache_free(g_sema_cache);
+                return 1;
+            }
+            infer_result_free(ir);
         }
         if (do_check) {
             printf("No errors found in %s\n", filename);

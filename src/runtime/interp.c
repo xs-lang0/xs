@@ -3283,11 +3283,12 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
         }
     }
 
-    if (obj->tag == XS_INT || obj->tag == XS_FLOAT) {
-        double num_f = (obj->tag==XS_FLOAT)?obj->f:(double)obj->i;
-        int64_t num_i = (obj->tag==XS_INT)?obj->i:(int64_t)obj->f;
+    if (obj->tag == XS_INT || obj->tag == XS_FLOAT || obj->tag == XS_BIGINT) {
+        double num_f = (obj->tag==XS_FLOAT)?obj->f:(obj->tag==XS_BIGINT)?bigint_to_double(obj->bigint):(double)obj->i;
+        int64_t num_i = (obj->tag==XS_INT)?obj->i:(obj->tag==XS_BIGINT)?bigint_to_i64(obj->bigint):(int64_t)obj->f;
         if (strcmp(method, "abs") == 0) {
             if (obj->tag==XS_FLOAT) return xs_float(fabs(obj->f));
+            if (obj->tag==XS_BIGINT) return xs_bigint_val(bigint_abs(obj->bigint));
             return xs_int(num_i<0?-num_i:num_i);
         }
         if (strcmp(method, "pow") == 0) {
@@ -3345,9 +3346,17 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             return isinf(obj->f)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
         }
         if (strcmp(method, "is_even") == 0) {
+            if (obj->tag==XS_BIGINT) {
+                int even = (obj->bigint->len==0) || (obj->bigint->limbs[0]%2==0);
+                return even?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+            }
             return (num_i%2==0)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
         }
         if (strcmp(method, "is_odd") == 0) {
+            if (obj->tag==XS_BIGINT) {
+                int odd = (obj->bigint->len>0) && (obj->bigint->limbs[0]%2!=0);
+                return odd?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
+            }
             return (num_i%2!=0)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
         }
         if (strcmp(method, "sign") == 0) {
@@ -4094,9 +4103,20 @@ static void interp_for_each(Interp *i, Value *iter,
         }
     } else if (iter->tag == XS_MAP || iter->tag == XS_MODULE) {
         int nkeys = 0;
+        int want_pairs = (pat && pat->tag == NODE_PAT_TUPLE);
         char **keys = map_keys(iter->map, &nkeys);
         for (int j = 0; j < nkeys; j++) {
-            Value *v = xs_str(keys[j]);
+            Value *v;
+            if (want_pairs) {
+                v = xs_tuple_new();
+                Value *ks = xs_str(keys[j]);
+                Value *val = map_get(iter->map, keys[j]);
+                array_push(v->arr, ks);
+                array_push(v->arr, val ? val : XS_NULL_VAL);
+                value_decref(ks);
+            } else {
+                v = xs_str(keys[j]);
+            }
             push_env(i);
             bind_pattern(i, pat, v, i->env, 1);
             value_decref(v);
