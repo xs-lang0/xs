@@ -117,8 +117,8 @@ fn distance(p1: TypedPoint, p2: TypedPoint) -> f64 {
     return sqrt(dx * dx + dy * dy)
 }
 
-let a = TypedPoint { x: 0.0, y: 0.0 }
-let b = TypedPoint { x: 3.0, y: 4.0 }
+let a: TypedPoint = TypedPoint { x: 0.0, y: 0.0 }
+let b: TypedPoint = TypedPoint { x: 3.0, y: 4.0 }
 println("distance: {distance(a, b)}")
 assert_eq(distance(a, b), 5.0)
 

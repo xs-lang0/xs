@@ -27,12 +27,34 @@ for f in tests/test_*.xs; do
     fi
 done
 
+# examples (skip check_demo.xs which has intentional errors)
+ex_pass=0
+ex_fail=0
+for f in examples/*.xs; do
+    name=$(basename "$f")
+    [ "$name" = "check_demo.xs" ] && continue
+    output=$(./xs "$f" 2>&1)
+    if [ $? -ne 0 ]; then
+        ex_fail=$((ex_fail + 1))
+        fails="$fails\n  FAIL: examples/$name"
+        echo "  FAIL  examples/$name"
+        echo "$output" | grep -E "assert|error" | head -2
+    else
+        ex_pass=$((ex_pass + 1))
+    fi
+done
+if [ $ex_fail -eq 0 ]; then
+    pass=$((pass + 1))
+    echo "  ok    examples ($ex_pass files)"
+else
+    fail=$((fail + 1))
+fi
+
 # CLI flag tests
 if [ -f tests/test_cli.sh ]; then
     cli_output=$(bash tests/test_cli.sh 2>&1)
     cli_rc=$?
     cli_pass=$(echo "$cli_output" | grep -oP '\d+ passed' | grep -oP '\d+')
-    cli_fail=$(echo "$cli_output" | grep -oP '\d+ failed' | grep -oP '\d+')
     if [ "$cli_rc" -eq 0 ]; then
         pass=$((pass + 1))
         echo "  ok    test_cli (${cli_pass:-0} checks)"
