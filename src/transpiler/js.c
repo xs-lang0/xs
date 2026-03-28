@@ -71,7 +71,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
         for (int i = 0; i < parts->len; i++) {
             Node *part = parts->items[i];
             if (part->tag == NODE_LIT_STRING) {
-                /* literal segment — escape backticks */
+                /* literal segment: escape backticks */
                 if (part->lit_string.sval) {
                     for (const char *p = part->lit_string.sval; *p; p++) {
                         if (*p == '`') sb_add(s, "\\`");
@@ -932,7 +932,7 @@ static void emit_pattern_cond(SB *s, Node *pat, const char *subject, int depth) 
         sb_add(s, "true");
         break;
     case NODE_PAT_IDENT:
-        /* binds — always matches */
+        /* binds: always matches */
         sb_add(s, "true");
         break;
     case NODE_PAT_LIT:

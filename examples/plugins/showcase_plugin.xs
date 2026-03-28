@@ -16,7 +16,7 @@ var call_count = 0
 var fn_parse_count = 0
 var debug_mode = false
 
--- 3. plugin.runtime.global.set — inject framework globals
+-- 3. plugin.runtime.global.set: inject framework globals
 plugin.runtime.global.set("route", fn(method, path, handler) {
     routes.push(#{ method: method, path: path, handler: handler })
 })
@@ -36,7 +36,7 @@ plugin.runtime.global.set("log", fn(level, msg) {
 })
 plugin.runtime.global.set("set_debug", fn(on) { debug_mode = on })
 
--- 4. plugin.runtime.add_method — JSON serialization on built-in types
+-- 4. plugin.runtime.add_method: JSON serialization on built-in types
 plugin.runtime.add_method("str", "to_json", fn(self) {
     return "\"" ++ self ++ "\""
 })
@@ -58,13 +58,13 @@ plugin.runtime.add_method("array", "to_json", fn(self) {
     return "[" ++ parts.join(", ") ++ "]"
 })
 
--- 5. plugin.runtime.before_eval — debug tracing (13. hook .remove() demo)
+-- 5. plugin.runtime.before_eval: debug tracing (13. hook .remove() demo)
 let trace_hook = plugin.runtime.before_eval("call", fn(node) {
     if debug_mode { println("\e[90m  trace: call\e[0m") }
     return node
 })
 
--- 6. plugin.runtime.after_eval — count function calls for metrics
+-- 6. plugin.runtime.after_eval: count function calls for metrics
 plugin.runtime.after_eval("call", fn(node, result) {
     call_count = call_count + 1
     return result
@@ -87,7 +87,7 @@ plugin.parser.on_unknown(fn(token) {
     return null
 })
 
--- 9. plugin.parser.override — auto-register handle_* functions as routes
+-- 9. plugin.parser.override: auto-register handle_* functions as routes
 plugin.parser.override("fn", fn(previous) {
     let node = previous()
     fn_parse_count = fn_parse_count + 1
@@ -102,7 +102,7 @@ plugin.parser.override("fn", fn(previous) {
     return node
 })
 
--- 10. plugin.runtime.resolve_import — virtual `server` module
+-- 10. plugin.runtime.resolve_import: virtual `server` module
 plugin.runtime.resolve_import(fn(name, previous) {
     if name == "server" {
         return #{
@@ -132,12 +132,12 @@ plugin.runtime.resolve_import(fn(name, previous) {
     return null
 })
 
--- 11. plugin.runtime.on_error — catch unhandled errors gracefully
+-- 11. plugin.runtime.on_error: catch unhandled errors gracefully
 plugin.runtime.on_error(fn(error, previous) {
     log("error", "caught: {error}")
 })
 
--- 12. plugin.teardown — print summary on exit
+-- 12. plugin.teardown: print summary on exit
 plugin.teardown(fn() {
     println("\n--- microhttp summary ---")
     println("routes registered: {len(routes)}")

@@ -1177,7 +1177,7 @@ static int handle_command(const char *line, Interp **interp_ptr, History *hist) 
 }
 
 int repl_run(void) {
-    printf("%s%sXS %s%s — interactive REPL\n",
+    printf("%s%sXS %s%s: interactive REPL\n",
            ANSI_BOLD, g_theme->prompt, XS_REPL_VERSION, ANSI_RESET);
     printf("Type '%s:help%s' for commands, '%s:quit%s' to exit.\n\n",
            g_theme->keyword, ANSI_RESET,

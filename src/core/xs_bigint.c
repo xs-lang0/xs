@@ -567,7 +567,7 @@ XSBigInt *bigint_pow(const XSBigInt *base, int64_t exp) {
     return result;
 }
 
-/* bitwise — negative bigints just return zero for now */
+/* bitwise: negative bigints just return zero for now */
 
 XSBigInt *bigint_and(const XSBigInt *a, const XSBigInt *b) {
     if (a->sign || b->sign) return bigint_from_i64(0);

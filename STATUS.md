@@ -94,7 +94,7 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 | Pattern matching with guards | works |
 | Channels, actors, spawn, nursery | works |
 | Async/await (sequential) | works |
-| Closures capturing mutable state | partial — works for single-scope files |
+| Closures capturing mutable state | partial: works for single-scope files |
 | Generators | not yet |
 | Algebraic effects | not yet |
 | Plugins | not supported (requires runtime) |
@@ -113,7 +113,7 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 
 ## WebAssembly Transpiler
 
-`xs --emit wasm file.xs` — early stage.
+`xs --emit wasm file.xs`: early stage.
 
 | Feature | Status |
 |---------|--------|
@@ -127,7 +127,7 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 | REPL with syntax highlighting | works |
 | LSP server (hover, completion, diagnostics, definition, references, rename, formatting, signature help) | works |
 | DAP debugger (breakpoints, stepping, variable inspection, evaluate) | works |
-| VSCode extension | works — available on marketplace |
+| VSCode extension | works: available on marketplace |
 | Formatter (`xs fmt`) | works |
 | Linter (`xs lint`) | works |
 | Test runner (`xs test`) | works |
@@ -135,7 +135,7 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 | Profiler (`xs profile`) | works |
 | Coverage (`xs coverage`) | works |
 | Doc generator (`xs doc`) | works |
-| Package manager (`xs install/remove/update`) | basic — registry not live |
+| Package manager (`xs install/remove/update`) | basic: registry not live |
 
 ## Platform Support
 
@@ -150,7 +150,7 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 - Fixed: `type()` and `is_int()` now work correctly for bigint values
 - Fixed: char literals (`'a'`) properly produce char type (was coerced to string)
 - Fixed: `int()`, `float()` conversions handle bigint input
-- Added: `for (k, v) in map` — direct key-value iteration without `.entries()`
+- Added: `for (k, v) in map`: direct key-value iteration without `.entries()`
 - Added: bigint number methods (`.abs()`, `.is_even()`, `.is_odd()`, etc.)
 - Added: VM `for (k, v) in map` tuple iteration
 - Added: VM struct operator overloading for `+`, `-`, `*`
@@ -164,7 +164,7 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 - C transpiler closures break when the same variable name is captured in multiple functions in one file
 - JIT is x86-64 only and very early
 - WASM transpiler only handles basic programs
-- Package registry is not live — `xs install` works with local paths
+- Package registry is not live: `xs install` works with local paths
 - VM effects use snapshot/restore (single-shot only, no nested effects)
 - VM actors use flattened state (not full closure capture like interpreter)
 - HM type inference engine (2500 lines) exists but is not wired into --check yet

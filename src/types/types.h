@@ -1,4 +1,4 @@
-/* types.h — XS type IR */
+/* types.h: XS type IR */
 #ifndef TYPES_H
 #define TYPES_H
 

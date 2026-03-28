@@ -601,7 +601,7 @@ static void emit_test_eax_eax(Emitter *e) {
     emit_byte(e, 0x85); emit_modrm(e, 3, RAX, RAX);
 }
 
-/* jmp rel32 — returns offset of the rel32 to patch */
+/* jmp rel32: returns offset of the rel32 to patch */
 static size_t emit_jmp_rel32(Emitter *e) {
     emit_byte(e, 0xE9);
     size_t patch = e->pos;
@@ -644,7 +644,7 @@ static void patch_rel32(Emitter *e, size_t patch_offset, size_t target_pos) {
 
 /* Push rax onto XS stack: mov [r12], rax; add r12, 8 */
 static void emit_xs_push_rax(Emitter *e) {
-    /* mov [r12], rax — REX.WB=0x49, 0x89, ModRM(00,RAX,100), SIB(0x24) */
+    /* mov [r12], rax: REX.WB=0x49, 0x89, ModRM(00,RAX,100), SIB(0x24) */
     emit_byte(e, 0x49); emit_byte(e, 0x89);
     emit_modrm(e, 0, RAX, RSP);
     emit_byte(e, 0x24);
@@ -654,7 +654,7 @@ static void emit_xs_push_rax(Emitter *e) {
 /* Pop XS stack into rax: sub r12,8; mov rax,[r12] */
 static void emit_xs_pop_rax(Emitter *e) {
     emit_sub_reg_imm8(e, 12, 8);
-    /* mov rax, [r12] — REX.WB=0x49, 0x8B, ModRM(00,RAX,100), SIB(0x24) */
+    /* mov rax, [r12]: REX.WB=0x49, 0x8B, ModRM(00,RAX,100), SIB(0x24) */
     emit_byte(e, 0x49); emit_byte(e, 0x8B);
     emit_modrm(e, 0, RAX, RSP);
     emit_byte(e, 0x24);
@@ -672,7 +672,7 @@ static void emit_xs_pop_gpr(Emitter *e, int reg) {
 
 /* Peek top of stack into rax: mov rax, [r12 - 8] */
 static void emit_xs_peek_rax(Emitter *e) {
-    /* mov rax, [r12 - 8] — disp8=-8 */
+    /* mov rax, [r12 - 8]: disp8=-8 */
     emit_byte(e, 0x49); emit_byte(e, 0x8B);
     emit_modrm(e, 1, RAX, RSP); /* mod=01 disp8 */
     emit_byte(e, 0x24);

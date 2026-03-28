@@ -1,4 +1,4 @@
-/* xs_regex.h — Thompson NFA regex engine (replaces POSIX regex.h on MinGW) */
+/* xs_regex.h: Thompson NFA regex engine (replaces POSIX regex.h on MinGW) */
 #ifndef XS_REGEX_H
 #define XS_REGEX_H
 

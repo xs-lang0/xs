@@ -15,7 +15,7 @@ static XsType *texpr_to_xstype(TypeExpr *te) {
                 return ty_array(elem);
             }
             if (te->name && strcmp(te->name, "map") == 0) {
-                /* map<K,V> — we only track value type for now */
+                /* map<K,V>: we only track value type for now */
                 return ty_named("map", NULL, 0);
             }
             if (te->name && strcmp(te->name, "tuple") == 0 && te->nargs > 0) {

@@ -565,7 +565,7 @@ static int is_numeric_kind(TyKind k) {
 }
 
 /*
- * unify(t1, t2, subst, errors) — unify two resolved types.
+ * unify(t1, t2, subst, errors): unify two resolved types.
  * On success, may extend subst (and set TVar links).
  * On failure, appends to errors and continues.
  * Returns 1 on success, 0 on failure.
@@ -595,11 +595,11 @@ static int unify(RType t1, RType t2, Substitution *subst, ErrorList *errors,
             return 1;
     }
 
-    /* TVar on left — bind */
+    /* TVar on left: bind */
     if (t1.is_var) {
         if (!t1.var) return 0;
         if (occurs_in(t1.var, t2)) {
-            /* Recursive type — bind anyway (XS supports nominal recursion) */
+            /* Recursive type: bind anyway (XS supports nominal recursion) */
         }
         subst_set(subst, t1.var->id, t2);
         if (t2.is_var) {
@@ -612,7 +612,7 @@ static int unify(RType t1, RType t2, Substitution *subst, ErrorList *errors,
         return 1;
     }
 
-    /* TVar on right — bind */
+    /* TVar on right: bind */
     if (t2.is_var) {
         if (!t2.var) return 0;
         if (occurs_in(t2.var, t1)) {
@@ -985,7 +985,7 @@ static RType resolve_type_ann(TypeExpr *ann) {
         if (!ann->name) return rt_var(cgen_fresh());
         XsType *t = ty_from_name(ann->name);
         if (t) return rt_type(t);
-        /* Not a builtin — could be a user-defined type */
+        /* Not a builtin: could be a user-defined type */
         if (ann->nargs > 0) {
             XsType **args = xs_malloc(sizeof(XsType*) * ann->nargs);
             for (int i = 0; i < ann->nargs; i++)
@@ -1117,7 +1117,7 @@ static void bind_pattern_mono(CGen *cg, Node *pat, RType t) {
             bind_pattern_mono(cg, pat->pat_capture.pattern, t);
         break;
     default:
-        break; /* PAT_LIT, PAT_RANGE, PAT_SLICE — no bindings */
+        break; /* PAT_LIT, PAT_RANGE, PAT_SLICE: no bindings */
     }
 }
 
@@ -1283,7 +1283,7 @@ static RType infer_method_call(CGen *cg, Node *expr) {
             return rt_type(ty_unit());
         }
         if (strcmp(method, "pop") == 0) {
-            /* pop returns Option<elem> — approximate as elem */
+            /* pop returns Option<elem>: approximate as elem */
             free(arg_ts);
             return elem ? rt_type(elem) : rt_var(cgen_fresh());
         }
@@ -1372,7 +1372,7 @@ static RType infer_field(CGen *cg, Node *expr) {
                             fr.type->kind != TY_UNKNOWN)
                             return fr;
                     }
-                    /* Field found but no inferrable type — return fresh var
+                    /* Field found but no inferrable type: return fresh var
                        (still better than not finding the field at all) */
                     return rt_var(cgen_fresh());
                 }
@@ -1658,7 +1658,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         if (poly) {
             result = instantiate(poly);
         } else {
-            /* Unknown name — fresh TVar */
+            /* Unknown name: fresh TVar */
             result = rt_var(cgen_fresh());
         }
         break;
@@ -1697,7 +1697,7 @@ static RType cgen_infer_expr(CGen *cg, Node *expr) {
         result = infer_index(cg, expr);
         break;
     case NODE_SCOPE:
-        /* A::B::C — return named type for first part */
+        /* A::B::C: return named type for first part */
         if (expr->scope.nparts > 0) {
             result = rt_type(ty_named(expr->scope.parts[0], NULL, 0));
         } else {

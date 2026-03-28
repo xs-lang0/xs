@@ -20,15 +20,15 @@ xs server.xs --port 8080
 ```
 
 Arguments after the filename are available in the script via the `argv` global
-array. `argv` does **not** include the interpreter path or the script filename —
+array. `argv` does **not** include the interpreter path or the script filename:
 only the arguments that follow.
 
 ### `xs run <file.xs|file.xsc> [args...]`
 
 Run a source file or compiled bytecode:
 
-- `xs run <file.xs>` — same as `xs <file.xs>`, runs through the interpreter
-- `xs run <file.xsc>` — run a compiled bytecode file produced by `xs build`
+- `xs run <file.xs>`: same as `xs <file.xs>`, runs through the interpreter
+- `xs run <file.xsc>`: run a compiled bytecode file produced by `xs build`
 
 ```bash
 xs run hello.xs
@@ -55,7 +55,7 @@ xs --vm fib.xs
 ```
 
 The VM compiles the AST to bytecode first, then executes it. Has full feature
-parity with the interpreter — all language features, builtins, and methods work.
+parity with the interpreter: all language features, builtins, and methods work.
 Faster for compute-heavy code (loops, recursion, tight numeric work).
 
 ### `xs --backend <interp|vm|jit> <file.xs>`
@@ -68,9 +68,9 @@ xs --backend interp program.xs
 xs --backend jit program.xs
 ```
 
-- `interp` — tree-walker interpreter (default)
-- `vm` — bytecode VM
-- `jit` — JIT compilation (requires `XSC_ENABLE_JIT` build flag)
+- `interp`: tree-walker interpreter (default)
+- `vm`: bytecode VM
+- `jit`: JIT compilation (requires `XSC_ENABLE_JIT` build flag)
 
 ---
 
@@ -113,7 +113,7 @@ xs repl
 **Features:**
 
 - Syntax highlighting with configurable color themes
-- Multi-line input — lines ending with `{`, `(`, `[`, or `\` automatically
+- Multi-line input: lines ending with `{`, `(`, `[`, or `\` automatically
   continue on the next line
 - Arrow key history navigation
 - Error recovery (errors don't kill the session)
@@ -189,7 +189,7 @@ xs fmt main.xs --check    # check without modifying (exit code 1 if changes need
 **Style rules:** 4-space indent, canonical spacing around operators, consistent
 brace placement.
 
-The `--check` flag is useful in CI pipelines — it reports whether formatting
+The `--check` flag is useful in CI pipelines: it reports whether formatting
 changes are needed without modifying files.
 
 ### `xs doc <file.xs|dir>`
@@ -325,16 +325,16 @@ xs transpile --target wasi server.xs
 
 **Targets:**
 
-- `js` — ES2020+ JavaScript
-- `c` — C11 source with `xs_val` runtime
-- `wasm32` — WebAssembly binary (`.wasm`)
-- `wasi` — WASI-compatible WebAssembly
+- `js`: ES2020+ JavaScript
+- `c`: C11 source with `xs_val` runtime
+- `wasm32`: WebAssembly binary (`.wasm`)
+- `wasi`: WASI-compatible WebAssembly
 
 The WASM backend is the least mature of the three -- it handles basic arithmetic and function calls but doesn't cover the full language yet.
 
 ### `xs build <file.xs> [-o out.xsc]`
 
-Compile a source file to bytecode without executing it. Writes a `.xsc` file —
+Compile a source file to bytecode without executing it. Writes a `.xsc` file:
 defaults to the same name with the `.xsc` extension, or a custom path via `-o`.
 
 ```bash
@@ -369,7 +369,7 @@ xs dap
 Supports: breakpoints (including conditional breakpoints), step in / next / step
 out, variable inspection, evaluate expressions, call stack. Supports
 `stopOnEntry` in the launch configuration to pause at the first line
-automatically. The VS Code extension wires this up automatically — no manual
+automatically. The VS Code extension wires this up automatically: no manual
 setup needed.
 
 ### `xs --record <file.xst> <file.xs>`
@@ -393,11 +393,11 @@ xs replay trace.xst
 
 **Replay commands:**
 
-- `n` — step forward
-- `p` — step backward
-- `c` — continue to end
-- `g <n>` — goto event number
-- `q` — quit
+- `n`: step forward
+- `p`: step backward
+- `c`: continue to end
+- `g <n>`: goto event number
+- `q`: quit
 
 ---
 
@@ -534,7 +534,7 @@ Code extension bundles its own `lsp.xs` and passes it via `-s` automatically.
 
 - Diagnostics (parse errors, type errors, semantic errors)
 - Hover (identifier info, inferred types)
-- Completion — keywords, builtins, and dot completion for types and modules
+- Completion: keywords, builtins, and dot completion for types and modules
 - Signature help
 - Go to definition
 - Find references
@@ -598,7 +598,7 @@ These flags work with any subcommand or when running scripts directly.
 | `--sandbox` | Sandbox plugin execution. |
 
 **Flag placement:** Global flags like `--no-color`, `--vm`, and `--check` can
-appear anywhere in the argument list — before or after the filename or
+appear anywhere in the argument list: before or after the filename or
 subcommand. For example, both of these work:
 
 ```bash

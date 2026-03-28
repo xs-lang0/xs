@@ -438,7 +438,7 @@ int pkg_remove(const char *package_name) {
 int pkg_update(const char *package_name) {
     DIR *d = opendir("xs_modules");
     if (!d) {
-        printf("no xs_modules/ directory found — nothing to update\n");
+        printf("no xs_modules/ directory found: nothing to update\n");
         return 0;
     }
 
@@ -467,7 +467,7 @@ int pkg_update(const char *package_name) {
         int needs_update = 0;
 
         if (!file_exists(tomlpath)) {
-            printf("  %s: missing xs.toml — needs reinstall\n", ent->d_name);
+            printf("  %s: missing xs.toml: needs reinstall\n", ent->d_name);
             needs_update = 1;
         } else if (file_count <= 1) {
             printf("  %s@%s: incomplete package (only %d file(s)) -- needs reinstall\n",
@@ -489,7 +489,7 @@ int pkg_update(const char *package_name) {
                 }
                 updated++;
             } else {
-                printf("  %s@%s: no known source — reinstall manually\n",
+                printf("  %s@%s: no known source: reinstall manually\n",
                        ent->d_name, version);
             }
         } else {
@@ -630,7 +630,7 @@ int pkg_publish(const char *path) {
     printf("  version: %s\n", version);
     printf("  files:   %d\n", file_count);
     printf("  tarball: %s\n", tarball);
-    printf("\nNo registry configured — package created locally as '%s'\n", tarball);
+    printf("\nNo registry configured: package created locally as '%s'\n", tarball);
     printf("To publish, upload this tarball to your package registry.\n");
     return 0;
 }

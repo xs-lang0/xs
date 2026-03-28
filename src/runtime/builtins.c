@@ -691,7 +691,7 @@ static Value *builtin_clear(Interp *i, Value **args, int argc) {
     return value_incref(XS_NULL_VAL);
 }
 
-/* sorted(arr [, key_fn]) — returns a sorted copy */
+/* sorted(arr [, key_fn]): returns a sorted copy */
 static int cmp_values(const void *a, const void *b) {
     Value *va = *(Value **)a;
     Value *vb = *(Value **)b;
@@ -729,7 +729,7 @@ static Value *builtin_assert_eq(Interp *i, Value **args, int argc) {
         char *b = value_repr(args[1]);
         const char *msg = (argc >= 3 && args[2]->tag == XS_STR) ? args[2]->s : "";
         fprintf(stderr, "xs: assertion failed: assert_eq(%s, %s)%s%s\n",
-                a, b, msg[0] ? " — " : "", msg);
+                a, b, msg[0] ? ": " : "", msg);
         free(a); free(b);
         if (i) { i->cf.signal = CF_PANIC; i->cf.value = xs_str("assert_eq failed"); }
     }
@@ -772,7 +772,7 @@ static Value *builtin_clone(Interp *i, Value **args, int argc) {
 }
 
 /* Runtime for the todo() builtin -- panics with a message, like Rust's todo!() */
-/* todo() / unreachable() — à la Rust */
+/* todo() / unreachable(): à la Rust */
 static Value *builtin_todo(Interp *i, Value **args, int argc) {
     const char *msg = (argc >= 1 && args[0]->tag == XS_STR) ? args[0]->s : "not yet implemented";
     fprintf(stderr, "todo: %s\n", msg);
@@ -2944,7 +2944,7 @@ Value *make_json_module(void) {
     return xs_module(m);
 }
 
-/* io.read_json / io.write_json — defined here because they depend on json helpers */
+/* io.read_json / io.write_json: defined here because they depend on json helpers */
 Value *native_io_read_json(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1||a[0]->tag!=XS_STR) return value_incref(XS_NULL_VAL);
@@ -4153,7 +4153,7 @@ static Value *native_async_channel(Interp *ig, Value **a, int n) {
 
 static Value *native_async_select(Interp *ig, Value **a, int n) {
     (void)ig;
-    /* select(channels_or_tasks) — poll an array of channel/task-like
+    /* select(channels_or_tasks): poll an array of channel/task-like
        values and return a map { index: <idx>, value: <result> } for the
        first one that has a ready result.
        A channel is ready when its "_buf" array is non-empty.
@@ -4211,7 +4211,7 @@ static Value *native_async_all(Interp *ig, Value **a, int n) {
                 array_push(results->arr, XS_NULL_VAL);
             }
         } else {
-            /* Not a task map — include the value itself */
+            /* Not a task map: include the value itself */
             array_push(results->arr, t);
         }
     }
@@ -5198,8 +5198,8 @@ Value *make_crypto_module(void) {
 
 typedef struct {
     Interp *interp;  /* parent interp (used read-only for call_value) */
-    Value  *fn;      /* function to call — incref'd before thread start */
-    Value  *result;  /* output — set by the thread */
+    Value  *fn;      /* function to call: incref'd before thread start */
+    Value  *result;  /* output: set by the thread */
 } ThreadArg;
 
 static void *thread_entry(void *arg) {
@@ -5834,7 +5834,7 @@ static Value *db_execute(Value *db_val, const char *sql, int return_rows) {
             rest = db_skip_ws(rest);
             if (*rest == ')') break;
 
-            /* Read a value — string (quoted) or number or identifier */
+            /* Read a value: string (quoted) or number or identifier */
             char vbuf[1024];
             int vi = 0;
             if (*rest == '\'' || *rest == '"') {
@@ -5880,7 +5880,7 @@ static Value *db_execute(Value *db_val, const char *sql, int return_rows) {
     /* SELECT * FROM name [WHERE key = value] */
     if ((rest = db_match_kw(p, "SELECT")) != NULL) {
         rest = db_skip_ws(rest);
-        /* skip column list — we only support * */
+        /* skip column list: we only support * */
         if (*rest == '*') rest++;
         else {
             /* skip until FROM */
@@ -6197,7 +6197,7 @@ static Value *native_ffi_sym(Interp *ig, Value **a, int n) {
 
 static Value *native_ffi_call(Interp *ig, Value **a, int n) {
     (void)ig;
-    /* ffi.call(sym_handle, args_array) — call a foreign function.
+    /* ffi.call(sym_handle, args_array): call a foreign function.
        If the sym has a _fn field pointing to a native function wrapper, call it.
        Otherwise return an error. */
     if (n < 1 || (a[0]->tag != XS_MAP && a[0]->tag != XS_MODULE))
@@ -6248,7 +6248,7 @@ static Value *native_ffi_close(Interp *ig, Value **a, int n) {
 
 static Value *native_ffi_typeof(Interp *ig, Value **a, int n) {
     (void)ig;
-    /* ffi.typeof(sym_handle) — return the type string of a symbol */
+    /* ffi.typeof(sym_handle): return the type string of a symbol */
     if (n < 1) return xs_str("null");
     if (a[0]->tag == XS_MAP || a[0]->tag == XS_MODULE) {
         /* Check if it has a _sym field (it's a symbol handle) */

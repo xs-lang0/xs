@@ -206,7 +206,7 @@ static Value *enum_ctor_fn(Interp *interp, Value **args, int argc, int slot) {
 
 /*
  * Each enum variant needs a unique C function pointer so we can wrap it
- * as a NativeFn. We use an X-macro to stamp them out — ugly but it's the
+ * as a NativeFn. We use an X-macro to stamp them out: ugly but it's the
  * only way to get distinct function addresses without runtime codegen.
  */
 #define ENUM_SLOTS \
@@ -429,7 +429,7 @@ static int value_matches_typeexpr(Value *v, TypeExpr *te) {
         return 1;
 
     case TEXPR_ARRAY:
-        /* [T] — value must be array and all elements must match T */
+        /* [T]: value must be array and all elements must match T */
         if (v->tag != XS_ARRAY) return 0;
         if (te->inner && v->arr) {
             for (int j = 0; j < v->arr->len; j++) {
@@ -440,7 +440,7 @@ static int value_matches_typeexpr(Value *v, TypeExpr *te) {
         return 1;
 
     case TEXPR_TUPLE:
-        /* (A, B, C) — value must be tuple with matching element types */
+        /* (A, B, C): value must be tuple with matching element types */
         if (v->tag != XS_TUPLE) return 0;
         if (v->arr && te->nelems > 0) {
             if (v->arr->len != te->nelems) return 0;
@@ -452,11 +452,11 @@ static int value_matches_typeexpr(Value *v, TypeExpr *te) {
         return 1;
 
     case TEXPR_FN:
-        /* fn(A,B)->R — just check it's callable */
+        /* fn(A,B)->R: just check it's callable */
         return v->tag == XS_FUNC || v->tag == XS_NATIVE || v->tag == XS_CLOSURE;
 
     case TEXPR_OPTION:
-        /* T? — value is null or matches T */
+        /* T?: value is null or matches T */
         if (v->tag == XS_NULL) return 1;
         return value_matches_typeexpr(v, te->inner);
 
@@ -1343,7 +1343,7 @@ tail_call_entry: ;
         default: type_name = "value"; break;
     }
     xs_runtime_error(i->current_span,
-            "not a function — cannot call this",
+            "not a function: cannot call this",
             NULL,
             "value of type '%s' is not callable (got %s)",
             type_name, repr);
@@ -1685,7 +1685,7 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             while (end>=0 && isspace((unsigned char)s[end])) end--;
             return xs_str_n(s, end+1);
         }
-        /* lines — split by \n */
+        /* lines: split by \n */
         if (strcmp(method, "lines") == 0) {
             Value *arr = xs_array_new();
             const char *cur = s;
@@ -1877,7 +1877,7 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             for (int j=0;j<slen;j++) array_push(arr->arr, xs_str_n(s+j,1));
             return arr;
         }
-        /* format: "Hello {} and {}".format(a, b) — substitute {} placeholders */
+        /* format: "Hello {} and {}".format(a, b): substitute {} placeholders */
         if (strcmp(method, "format") == 0) {
             /* Build result by replacing {} with successive args */
             int cap = slen + 256;
@@ -1900,7 +1900,7 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             res[ri] = '\0';
             Value *v = xs_str(res); free(res); return v;
         }
-        /* from_chars: "".from_chars([...]) — build string from char array */
+        /* from_chars: "".from_chars([...]): build string from char array */
         if (strcmp(method, "from_chars") == 0) {
             if (argc < 1 || args[0]->tag != XS_ARRAY) return xs_str("");
             XSArray *arr2 = args[0]->arr;
@@ -1976,9 +1976,9 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             return res;
         }
         if (strcmp(method, "reduce") == 0 || strcmp(method, "fold") == 0) {
-            /* reduce(fn) — use first element as init, reduce remaining
-               reduce(fn, init) — args[0]=fn, args[1]=init
-               fold(init, fn)   — args[0]=init, args[1]=fn  */
+            /* reduce(fn): use first element as init, reduce remaining
+               reduce(fn, init): args[0]=fn, args[1]=init
+               fold(init, fn)  : args[0]=init, args[1]=fn  */
             if (argc<1) return value_incref(XS_NULL_VAL);
             Value *fn_val, *init;
             int start_idx = 0;
@@ -1988,7 +1988,7 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             } else if (argc >= 2) {
                 fn_val = args[0]; init = args[1];
             } else {
-                /* reduce(fn) — 1 arg: use first element as accumulator */
+                /* reduce(fn): 1 arg: use first element as accumulator */
                 fn_val = args[0];
                 if (arr->len == 0) return value_incref(XS_NULL_VAL);
                 init = arr->items[0];
@@ -2063,7 +2063,7 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             return eval_method(i, copy, "sort", sort_args, argc>0?1:0);
         }
         if (strcmp(method, "sort_by") == 0) {
-            /* sort_by(key_fn) — sort a copy by extracted key */
+            /* sort_by(key_fn): sort a copy by extracted key */
             if (argc < 1) return value_incref(XS_NULL_VAL);
             Value *key_fn = args[0];
             Value *copy = xs_array_new();
@@ -2798,7 +2798,7 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             }
             free(ks); return res;
         }
-        /* map(fn) — apply fn(key, val) to each entry, return new map */
+        /* map(fn): apply fn(key, val) to each entry, return new map */
         if (strcmp(method, "map") == 0) {
             if (argc<1) return value_incref(obj);
             Value *res=xs_map_new();
@@ -2819,7 +2819,7 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             }
             free(ks); return res;
         }
-        /* filter(fn) — filter entries by fn(key, val), return new map */
+        /* filter(fn): filter entries by fn(key, val), return new map */
         if (strcmp(method, "filter") == 0) {
             if (argc<1) return value_incref(obj);
             Value *res=xs_map_new();
@@ -2837,7 +2837,7 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
             }
             free(ks); return res;
         }
-        /* merge(other) — merge another map, return new map */
+        /* merge(other): merge another map, return new map */
         if (strcmp(method, "merge") == 0) {
             Value *res=xs_map_new();
             int nk=0; char **ks=map_keys(m,&nk);
@@ -2917,7 +2917,7 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
                         /* items[0] still holds old items[0] (now also at items[1]).
                            Overwrite items[0] with the new value. The dummy NULL_VAL
                            that was at items[len-1] was overwritten by items[len-2] in
-                           the shift, so we already lost that ref — decref it. */
+                           the shift, so we already lost that ref: decref it. */
                         value_decref(dummy);
                         arr->items[0] = value_incref(args[0]);
                         return value_incref(XS_NULL_VAL);
@@ -3781,7 +3781,7 @@ static Value *eval_binop(Interp *i, Node *n) {
         goto done;
     }
 
-    /* struct/class operator overloading — check before numeric paths */
+    /* struct/class operator overloading: check before numeric paths */
     if (left->tag == XS_STRUCT_VAL || left->tag == XS_ENUM_VAL) {
         Value *op_fn = env_get(i->env, op);
         if (op_fn && (op_fn->tag == XS_FUNC || op_fn->tag == XS_NATIVE)) {
@@ -4425,7 +4425,7 @@ Value *interp_eval(Interp *i, Node *n) {
     }
 
     case NODE_SCOPE: {
-        /* A::B::C — look up the chain */
+        /* A::B::C: look up the chain */
         if (n->scope.nparts == 0) return value_incref(XS_NULL_VAL);
         Value *v = env_get(i->env, n->scope.parts[0]);
         if (!v) return value_incref(XS_NULL_VAL);
@@ -4542,7 +4542,7 @@ Value *interp_eval(Interp *i, Node *n) {
                 env_define(i->env, target->ident.name, result, 1);
             } else if (r == -2) {
                 xs_runtime_error(target->span,
-                        "cannot assign — declared with 'let'",
+                        "cannot assign: declared with 'let'",
                         "use 'var' instead of 'let' to allow mutation",
                         "cannot assign to immutable variable '%s'",
                         target->ident.name);
@@ -4993,15 +4993,15 @@ do_call: ;
                 iter_obj = eval_method(i, iter, "iter", NULL, 0);
                 if (!iter_obj || iter_obj->tag == XS_NULL) {
                     if (iter_obj) value_decref(iter_obj);
-                    iter_obj = value_incref(iter); /* .iter() returned null — use iter directly */
+                    iter_obj = value_incref(iter); /* .iter() returned null: use iter directly */
                 }
             } else {
-                iter_obj = value_incref(iter); /* no .iter() — use iter directly */
+                iter_obj = value_incref(iter); /* no .iter(): use iter directly */
             }
             while (1) {
                 Value *result = eval_method(i, iter_obj, "next", NULL, 0);
                 if (!result) break;
-                /* Stop when not Some(v) — None returns XS_NULL or a non-Some enum */
+                /* Stop when not Some(v): None returns XS_NULL or a non-Some enum */
                 if (result->tag != XS_ENUM_VAL ||
                     !result->en->variant ||
                     strcmp(result->en->variant, "Some") != 0) {
@@ -5438,7 +5438,7 @@ do_call: ;
             EffectFrame *frame = xs_calloc(1, sizeof(EffectFrame));
             frame->effect_name  = xs_strdup(arm->effect_name);
             frame->op_name      = xs_strdup(arm->op_name);
-            frame->params       = arm->params; /* borrow — do not free here */
+            frame->params       = arm->params; /* borrow: do not free here */
             frame->handler_body = arm->body;
             frame->handler_env  = env_incref(i->env);
             frame->prev         = i->effect_stack;
@@ -5537,7 +5537,7 @@ do_call: ;
         if (v->tag == XS_MAP) {
             Value *tid_val = map_get(v->map, "_task_id");
             if (tid_val && tid_val->tag == XS_INT) {
-                /* Task queue entry — run all pending tasks up to this one */
+                /* Task queue entry: run all pending tasks up to this one */
                 int tid = (int)tid_val->i;
                 for (int t = 0; t <= tid && t < i->n_tasks; t++) {
                     if (i->task_queue[t].done) continue;
@@ -5608,7 +5608,7 @@ do_call: ;
                 }
                 value_decref(r);
             } else {
-                /* Already evaluated value — discard */
+                /* Already evaluated value: discard */
             }
         }
         value_decref(queue);
@@ -5665,7 +5665,7 @@ do_call: ;
     }
 
     case NODE_SEND_EXPR: {
-        /* actor ! message — synchronous dispatch */
+        /* actor ! message: synchronous dispatch */
         Value *target = EVAL(i, n->send_expr.target);
         Value *msg = EVAL(i, n->send_expr.message);
         Value *result = value_incref(XS_NULL_VAL);
@@ -7169,7 +7169,7 @@ static void build_plugin_map(Value *plugin_map) {
     map_set(plugin_map->map, "parser", parser_map);
     value_decref(parser_map);
 
-    /* plugin.hooks — callable that returns current hook state */
+    /* plugin.hooks: callable that returns current hook state */
     map_set(plugin_map->map, "hooks", xs_native(native_plugin_hooks));
 
     /* plugin.runtime */
@@ -7639,7 +7639,7 @@ void interp_exec(Interp *i, Node *stmt) {
             value_decref(dv);
         }
 
-        /* Process methods — find handle and other methods */
+        /* Process methods: find handle and other methods */
         for (int j = 0; j < stmt->actor_decl.methods.len; j++) {
             Node *m = stmt->actor_decl.methods.items[j];
             if (m->tag != NODE_FN_DECL) continue;
@@ -7844,7 +7844,7 @@ void interp_exec(Interp *i, Node *stmt) {
                     }
                 }
                 if (!found_prev) {
-                    /* the "previous" when no more hooks just returns null —
+                    /* the "previous" when no more hooks just returns null:
                        the caller can check and fall through to default */
                     prev_fn = value_incref(XS_NULL_VAL);
                 }

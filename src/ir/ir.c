@@ -1412,7 +1412,7 @@ static int lower_expr(LowerCtx *ctx, Node *node) {
             ir_link_blocks(try_end, finally_block_ir ? finally_block_ir : merge_block);
         }
 
-        /* Catch block — get the caught exception */
+        /* Catch block: get the caught exception */
         ctx->block = catch_block;
         IROperand no_args2[1]; (void)no_args2;
         int exc_reg = ir_emit_call(catch_block, ctx->func, "__get_exception", NULL, 0, IRT_ANY);
