@@ -35,9 +35,19 @@ fn describe(val) {
     }
 }
 
--- plugins can add new syntax
-use plugin "unless.xs"
-unless false { println("this runs") }
+-- function overloading
+fn area(r) = 3.14 * r * r
+fn area(w, h) = w * h
+
+-- tagged blocks: custom control structures
+tag retry(n) {
+    var attempts = 0
+    loop {
+        try { let r = yield; return r }
+        catch e { attempts += 1; if attempts >= n { throw e } }
+    }
+}
+retry(3) { http_get("https://api.example.com") }
 ```
 
 ## Install
@@ -46,7 +56,7 @@ Download a prebuilt binary from [releases](https://github.com/xs-lang0/xs/releas
 
 ```bash
 make            # produces ./xs
-make test       # 14 test suites
+make test       # 15 test suites
 make release    # optimized build (-O3, LTO, stripped)
 make install    # install to /usr/local/bin/xs
 ```
@@ -74,6 +84,9 @@ xs --strict file.xs     # require type annotations everywhere
 - Structs, traits, enums, classes with inheritance
 - Pattern matching with destructuring and guards
 - Closures, generators (`fn*`/`yield`), arrow lambdas
+- Function overloading (dispatch by argument count)
+- Tagged blocks (`tag`) for user-defined control structures
+- Inline C blocks for performance-critical code (`inline c { ... }`)
 - Algebraic effects (`effect`/`perform`/`handle`/`resume`)
 - All the concurrency: spawn, async/await, actors, channels, nurseries
 - First-class regex (`/pattern/` literals, `.test()`, `.match()`, `.replace()`)

@@ -119,6 +119,16 @@
     "body": ["-- plugin: ${1:name}", "let meta = #{", "\t\"name\": \"${1}\",", "\t\"version\": \"0.1.0\"", "}", "", "fn on_load(api) {", "\t$0", "}"],
     "description": "Plugin boilerplate"
   },
+  "Tag block": {
+    "prefix": "tag",
+    "body": ["tag ${1:name}(${2:params}) {", "\t$0", "}"],
+    "description": "Tagged block (user-defined control structure)"
+  },
+  "Inline C": {
+    "prefix": "inlinec",
+    "body": ["inline c {", "\t$0", "}"],
+    "description": "Inline C block (for transpilation)"
+  },
   "List comprehension": {
     "prefix": "comp",
     "body": "[${1:expr} for ${2:x} in ${0:iter}]",

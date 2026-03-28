@@ -1,6 +1,6 @@
 # XS Status
 
-What works, what's partial, and what's planned. Updated for v0.3.1.
+What works, what's partial, and what's planned. Updated for v0.2.2.
 
 ## Tree-Walk Interpreter
 
@@ -15,6 +15,9 @@ The default backend. Handles the full language.
 | Control flow (if/elif/else, for, while, loop, match, break, continue) | works |
 | Pattern matching with destructuring, guards, nested patterns | works |
 | Functions, closures, default params, variadic, arrow lambdas | works |
+| Function overloading (dispatch by arity) | works |
+| Tagged blocks (user-defined control structures) | works |
+| Inline C blocks (for C transpiler) | works |
 | Generators (fn*/yield) | works |
 | Structs, impl, traits | works |
 | Enums with associated data | works |
@@ -30,7 +33,7 @@ The default backend. Handles the full language.
 | Standard library (14 modules) | works |
 | HTTPS via embedded BearSSL | works |
 
-All 14 test suites pass on Linux, macOS, and Windows.
+All 15 test suites pass on Linux, macOS, and Windows.
 
 ## Bytecode VM
 
@@ -66,7 +69,7 @@ Use `--vm` flag. Full feature parity with the interpreter.
 | Range indexing (arr[1..3]) | works |
 | All builtins matching interpreter | works |
 
-All 14 test suites pass. Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
+All 15 test suites pass. Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
 
 ## JIT Compiler
 
@@ -146,19 +149,21 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 | macOS (x86-64, ARM) | works, CI tested |
 | Windows (MinGW) | works, CI tested, static linked |
 
-## Recent Changes (v0.3.1)
+## Recent Changes (v0.2.2)
 
+- Added: function overloading - multiple functions with the same name, dispatched by argument count
+- Added: tagged blocks (`tag`) - user-defined control structures with `yield` to execute caller's block
+- Added: trailing block syntax - `name(args) { block }` passes the block as a lambda argument
+- Added: `inline c { ... }` blocks for embedding raw C code (used by the C transpiler)
+- Added: `tag` and `inline` as new keywords
 - Added: regex as a first-class type (`re`) with `/pattern/` literal syntax
 - Added: regex methods: `.test()`, `.match()`, `.replace()`, `.source()`
 - Added: regex patterns in `match` expressions
-- Added: execution tracer (`xs --record trace.xst script.xs`, `xs replay trace.xst`)
-- Added: `--trace-deep` flag for JSON serialization of complex values in traces
-- Added: HM type inference wired into `--check` (catches type errors in unannotated code)
-- Added: bigint auto-promotion on overflow (`type()` returns "int", `is_int()` returns true)
-- Added: `for (k, v) in map` direct key-value iteration without `.entries()`
-- Fixed: struct operator overloading now works for all operators (was broken for `*`)
-- Fixed: flag stacking (flags work before or after filename, `--check` + `--vm` works)
-- Test suite now at 14 test files
+- Added: execution tracer, HM type inference, bigint auto-promotion
+- Updated: VSCode extension with syntax highlighting for new keywords, tag declarations, and string interpolation colors
+- Updated: LSP server with completions, hover, and document symbols for tags
+- Fixed: parser `no_arrow_lambda` flag not initialized, causing flaky test failures
+- Test suite now at 15 test files, all passing
 
 ## Known Limitations
 

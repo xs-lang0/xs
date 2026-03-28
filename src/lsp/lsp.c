@@ -43,6 +43,7 @@ static const char *xs_keywords[] = {
     "module", "class", "type", "as", "from",
     "effect", "perform", "handle", "resume",
     "spawn", "nursery", "macro",
+    "tag", "inline", "actor", "unsafe",
     NULL
 };
 
@@ -169,6 +170,10 @@ static void collect_idents(LspDocument *doc, Node *n) {
         break;
     case NODE_TRAIT_DECL:
         if (n->trait_decl.name) doc_add_ident(doc, n->trait_decl.name);
+        break;
+    case NODE_TAG_DECL:
+        if (n->tag_decl.name) doc_add_ident(doc, n->tag_decl.name);
+        if (n->tag_decl.body) collect_idents(doc, n->tag_decl.body);
         break;
     case NODE_PROGRAM:
         for (int i = 0; i < n->program.stmts.len; i++)
@@ -569,6 +574,7 @@ static const char *node_tag_name(NodeTag tag) {
     case NODE_IMPORT:      return "import";
     case NODE_MODULE_DECL: return "module";
     case NODE_IMPL_DECL:   return "impl block";
+    case NODE_TAG_DECL:    return "tag";
     case NODE_LAMBDA:      return "lambda";
     default:               return NULL;
     }
@@ -597,6 +603,9 @@ static Node *find_decl_in_ast(Node *n, const char *name) {
     case NODE_TRAIT_DECL:
         if (n->trait_decl.name && strcmp(n->trait_decl.name, name) == 0) return n;
         return NULL;
+    case NODE_TAG_DECL:
+        if (n->tag_decl.name && strcmp(n->tag_decl.name, name) == 0) return n;
+        return find_decl_in_ast(n->tag_decl.body, name);
     case NODE_MODULE_DECL:
         if (n->module_decl.name && strcmp(n->module_decl.name, name) == 0) return n;
         for (int i = 0; i < n->module_decl.body.len; i++) {
@@ -690,6 +699,18 @@ static void build_hover_text(Node *decl, const char *name, char *out, size_t out
     case NODE_TRAIT_DECL:
         snprintf(out, outsz, "trait %s { %d method(s) }", name, decl->trait_decl.n_methods);
         break;
+    case NODE_TAG_DECL: {
+        int off = 0;
+        off += snprintf(out + off, outsz - (size_t)off, "tag %s(", name);
+        for (int i = 0; i < decl->tag_decl.params.len; i++) {
+            if (i > 0) off += snprintf(out + off, outsz - (size_t)off, ", ");
+            Param *pm = &decl->tag_decl.params.items[i];
+            off += snprintf(out + off, outsz - (size_t)off, "%s",
+                            pm->name ? pm->name : "_");
+        }
+        snprintf(out + off, outsz - (size_t)off, ") { ... }");
+        break;
+    }
     case NODE_LET: case NODE_VAR:
         snprintf(out, outsz, "%s %s%s",
                  decl->let.mutable ? "var" : "let",
@@ -950,6 +971,7 @@ static void lsp_handle_completions(int id, const char *json) {
                     if (decl) {
                         switch (decl->tag) {
                         case NODE_FN_DECL: kind = 3; break;
+                        case NODE_TAG_DECL: kind = 3; break;     /* Function */
                         case NODE_STRUCT_DECL: kind = 22; break; /* Struct */
                         case NODE_ENUM_DECL: kind = 13; break;   /* Enum */
                         case NODE_TRAIT_DECL: kind = 8; break;    /* Interface */
@@ -1259,6 +1281,11 @@ static void collect_symbols_json(Node *n, char *buf, size_t bufsz, int *off, int
         /* SymbolKind: Event = 24 */
         if (n->effect_decl.name)
             emit_symbol(buf, bufsz, off, first, n->effect_decl.name, 24, n->span);
+        break;
+    case NODE_TAG_DECL:
+        /* SymbolKind: Function = 12 (tags are callable) */
+        if (n->tag_decl.name)
+            emit_symbol(buf, bufsz, off, first, n->tag_decl.name, 12, n->span);
         break;
     case NODE_TYPE_ALIAS:
         /* SymbolKind: TypeParameter = 26 */

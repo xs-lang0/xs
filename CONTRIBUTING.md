@@ -23,8 +23,8 @@ This runs everything in the `tests/` directory.
 ## Adding a test
 
 Drop a new file in `tests/` following the `test_*.xs` naming convention.
-The test runner picks them up automatically. Look at existing tests
-for the general pattern -- keep them focused on one thing.
+The test runner picks them up automatically (15 test files currently).
+Look at existing tests for the general pattern -- keep them focused on one thing.
 
 ## Code style
 

@@ -327,7 +327,7 @@ xs transpile --target wasi server.xs
 **Targets:**
 
 - `js`: ES2020+ JavaScript
-- `c`: C11 source with `xs_val` runtime
+- `c`: C11 source with `xs_val` runtime (supports `inline c { ... }` blocks)
 - `wasm32`: WebAssembly binary (`.wasm`)
 - `wasi`: WASI-compatible WebAssembly
 

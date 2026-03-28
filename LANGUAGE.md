@@ -1071,6 +1071,40 @@ println(is_even(10))             -- true
 println(is_odd(7))               -- true
 ```
 
+### Function Overloading
+
+Multiple functions with the same name are dispatched by argument count at call time.
+
+```xs
+fn greet() {
+    println("hello, world!")
+}
+
+fn greet(name) {
+    println("hello, {name}!")
+}
+
+fn greet(name, greeting) {
+    println("{greeting}, {name}!")
+}
+
+greet()                          -- hello, world!
+greet("Alice")                   -- hello, Alice!
+greet("Bob", "hey")             -- hey, Bob!
+```
+
+Overloading works with default parameters and variadic functions. When multiple overloads could match, the first one with an exact arity match wins. If no overload matches the argument count, it's a runtime error.
+
+```xs
+fn calc(x) = x * 2
+fn calc(x, y) = x + y
+fn calc(x, y, z) = x + y + z
+
+println(calc(5))                 -- 10
+println(calc(3, 4))              -- 7
+println(calc(1, 2, 3))           -- 6
+```
+
 ---
 
 ## Generators
@@ -1092,6 +1126,87 @@ for x in count_up(5) {
 ```
 
 Generators pause at each `yield` and resume when the next value is requested. They work with `for..in` loops.
+
+---
+
+## Tagged Blocks
+
+Tags are user-defined control structures. Define a tag with `tag name(params) { body }`, then call it with a trailing block: `name(args) { block }`. Inside the tag body, `yield` executes the caller's block and returns its result.
+
+```xs
+-- define a tag that runs a block twice
+tag twice() {
+    yield;
+    yield;
+}
+
+twice() {
+    println("hello!")             -- prints twice
+}
+```
+
+Tags are useful for wrapping common patterns like retry logic, timing, error suppression, and resource management.
+
+```xs
+-- retry a block up to n times
+tag retry(n) {
+    var attempts = 0
+    loop {
+        try {
+            let result = yield;
+            return result
+        } catch e {
+            attempts = attempts + 1
+            if attempts >= n {
+                throw "failed after {n} attempts: {e}"
+            }
+        }
+    }
+}
+
+retry(3) {
+    let resp = http.get("https://flaky-api.com")
+    resp["body"]
+}
+```
+
+```xs
+-- measure how long a block takes
+tag timed() {
+    import time
+    let start = time.clock()
+    let result = yield;
+    println("took {time.clock() - start}s")
+    return result
+}
+
+timed() {
+    heavy_computation()
+}
+```
+
+```xs
+-- provide a fallback if block returns null
+tag with_default(fallback) {
+    let val = yield;
+    if val == null { return fallback }
+    return val
+}
+
+let config = with_default(#{}) {
+    load_config("app.toml")
+}
+```
+
+Trailing blocks work at both statement level and inside `let`/`var` assignments:
+
+```xs
+let result = suppress() {
+    might_throw()
+}
+```
+
+Tags desugar to regular functions with an implicit `__block` parameter. The trailing block `{ ... }` is passed as a zero-argument lambda. `yield` inside the tag body calls that lambda.
 
 ---
 
@@ -1724,6 +1839,28 @@ unsafe {
     let ptr = some_ffi_call()
 }
 ```
+
+---
+
+## Inline C
+
+`inline c { ... }` embeds raw C code inside an XS function. The C code is passed through verbatim to the C transpiler. In the interpreter and VM, inline C blocks are skipped with a warning.
+
+```xs
+fn fast_hash(data) {
+    inline c {
+        uint64_t h = 0x525201;
+        const char *s = xs_to_cstr(args[0]);
+        while (*s) h = h * 31 + *s++;
+        xs_return_int(h);
+    }
+    return 0  -- fallback for interpreter mode
+}
+```
+
+Use `xs transpile --target c` to compile code that uses inline C. The raw C code has access to the enclosing function's arguments via an `args[]` array and can return values using helper macros.
+
+This is useful for performance-critical inner loops, FFI glue, or leveraging C libraries directly without writing a full native plugin.
 
 ---
 
