@@ -175,6 +175,9 @@ void node_free(Node *n) {
     case NODE_LIT_INT: case NODE_LIT_FLOAT: case NODE_LIT_BOOL:
     case NODE_LIT_NULL: case NODE_LIT_CHAR:
         break;
+    case NODE_LIT_REGEX:
+        free(n->lit_regex.pattern);
+        break;
     case NODE_LIT_BIGINT:
         free(n->lit_bigint.bigint_str);
         break;

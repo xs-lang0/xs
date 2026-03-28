@@ -1,6 +1,6 @@
 # XS Status
 
-What works, what's partial, and what's planned. Updated for v0.2.0.
+What works, what's partial, and what's planned. Updated for v0.3.1.
 
 ## Tree-Walk Interpreter
 
@@ -9,7 +9,7 @@ The default backend. Handles the full language.
 | Feature | Status |
 |---------|--------|
 | Variables (let, var, const) | works |
-| All data types (int, float, str, bool, null, array, map, tuple, range) | works |
+| All data types (int, float, str, bool, null, array, map, tuple, range, re) | works |
 | Arithmetic, bitwise, logical operators | works |
 | String interpolation, escapes, methods | works |
 | Control flow (if/elif/else, for, while, loop, match, break, continue) | works |
@@ -30,7 +30,7 @@ The default backend. Handles the full language.
 | Standard library (14 modules) | works |
 | HTTPS via embedded BearSSL | works |
 
-All 13 test suites pass on Linux, macOS, and Windows.
+All 14 test suites pass on Linux, macOS, and Windows.
 
 ## Bytecode VM
 
@@ -66,7 +66,7 @@ Use `--vm` flag. Full feature parity with the interpreter.
 | Range indexing (arr[1..3]) | works |
 | All builtins matching interpreter | works |
 
-All 13 test suites pass. Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
+All 14 test suites pass. Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
 
 ## JIT Compiler
 
@@ -132,6 +132,7 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 | Linter (`xs lint`) | works |
 | Test runner (`xs test`) | works |
 | Benchmarks (`xs bench`) | works |
+| Execution tracer (`xs --record`, `xs replay`) | works |
 | Profiler (`xs profile`) | works |
 | Coverage (`xs coverage`) | works |
 | Doc generator (`xs doc`) | works |
@@ -145,26 +146,27 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 | macOS (x86-64, ARM) | works, CI tested |
 | Windows (MinGW) | works, CI tested, static linked |
 
-## Recent Changes (v0.2.0)
+## Recent Changes (v0.3.1)
 
-- Fixed: `type()` and `is_int()` now work correctly for bigint values
-- Fixed: char literals (`'a'`) properly produce char type (was coerced to string)
-- Fixed: `int()`, `float()` conversions handle bigint input
-- Added: `for (k, v) in map`: direct key-value iteration without `.entries()`
-- Added: bigint number methods (`.abs()`, `.is_even()`, `.is_odd()`, etc.)
-- Added: VM `for (k, v) in map` tuple iteration
-- Added: VM struct operator overloading for `+`, `-`, `*`
-- Added: test_types.xs test suite (bigints, chars, type annotations, operator overloading, map iteration)
+- Added: regex as a first-class type (`re`) with `/pattern/` literal syntax
+- Added: regex methods: `.test()`, `.match()`, `.replace()`, `.source()`
+- Added: regex patterns in `match` expressions
+- Added: execution tracer (`xs --record trace.xst script.xs`, `xs replay trace.xst`)
+- Added: `--trace-deep` flag for JSON serialization of complex values in traces
+- Added: HM type inference wired into `--check` (catches type errors in unannotated code)
+- Added: bigint auto-promotion on overflow (`type()` returns "int", `is_int()` returns true)
+- Added: `for (k, v) in map` direct key-value iteration without `.entries()`
+- Fixed: struct operator overloading now works for all operators (was broken for `*`)
+- Fixed: flag stacking (flags work before or after filename, `--check` + `--vm` works)
 - Test suite now at 14 test files
 
 ## Known Limitations
 
 - Struct operator overloading only works when both operands are structs (not mixed struct+int)
-- VM operator overloading on structs is partial (only works when the operator fn is in globals)
 - C transpiler closures break when the same variable name is captured in multiple functions in one file
 - JIT is x86-64 only and very early
 - WASM transpiler only handles basic programs
 - Package registry is not live: `xs install` works with local paths
 - VM effects use snapshot/restore (single-shot only, no nested effects)
 - VM actors use flattened state (not full closure capture like interpreter)
-- HM type inference engine (2500 lines) exists but is not wired into --check yet
+- Regex uses POSIX extended syntax only (no `\d`, `\w` shorthand - use `[0-9]`, `[a-zA-Z_]`)

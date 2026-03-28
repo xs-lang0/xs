@@ -870,10 +870,44 @@ static void lex_next(Lexer *l) {
         }
         if (nx=='=') TOK2(TK_STAR_ASSIGN);
         TOK1(TK_STAR);
-    case '/':
+    case '/': {
         if (nx=='=') TOK2(TK_SLASH_ASSIGN);
         if (nx=='/') TOK2(TK_FLOORDIV);
+        /* regex literal: /pattern/ - only if prev token can't precede division */
+        {
+            int prev_is_value = 0;
+            if (l->tokens.len > 0) {
+                TokenKind pk = l->tokens.items[l->tokens.len-1].kind;
+                prev_is_value = (pk == TK_INT || pk == TK_FLOAT ||
+                                 pk == TK_IDENT || pk == TK_RPAREN || pk == TK_RBRACKET ||
+                                 pk == TK_BOOL || pk == TK_CHAR);
+            }
+            if (!prev_is_value && nx != '\0' && nx != ' ' && nx != '\n') {
+                /* lex regex body (opening / already consumed by ladvance above) */
+                StrBuf rsb; sb_init(&rsb);
+                while (l->pos < l->source_len) {
+                    char rc = l->source[l->pos];
+                    if (rc == '/' && (rsb.len == 0 || rsb.buf[rsb.len-1] != '\\')) break;
+                    if (rc == '\\' && l->pos+1 < l->source_len) {
+                        sb_push(&rsb, rc);
+                        ladvance(l);
+                        sb_push(&rsb, l->source[l->pos]);
+                        ladvance(l);
+                        continue;
+                    }
+                    sb_push(&rsb, rc);
+                    ladvance(l);
+                }
+                if (l->pos < l->source_len) ladvance(l); /* consume closing / */
+                t.kind = TK_REGEX;
+                t.sval = sb_finish(&rsb);
+                t.span = make_span(l, sl, sc, sp);
+                ta_push(&l->tokens, t);
+                return;
+            }
+        }
         TOK1(TK_SLASH);
+    }
     case '%':
         if (nx=='=') TOK2(TK_PERCENT_ASSIGN);
         TOK1(TK_PERCENT);
@@ -1054,6 +1088,7 @@ const char *token_kind_name(TokenKind k) {
     case TK_SPAWN: return "spawn"; case TK_NURSERY: return "nursery";
     case TK_ACTOR: return "actor";
     case TK_HASH_BRACKET: return "#[";
+    case TK_REGEX: return "REGEX";
     case TK_UNSAFE: return "unsafe";
     case TK_USE: return "use";
     default: return "?";

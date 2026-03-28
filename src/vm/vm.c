@@ -120,7 +120,7 @@ static Value *vm_type(Interp *interp, Value **args, int argc) {
     static const char *names[] = {
         "null","bool","int","int","float","str","char",
         "array","map","tuple","fn","native",
-        "struct","enum","class","inst","range","signal","actor","module",
+        "struct","enum","class","inst","range","signal","actor","re","module",
         "closure"
     };
     int tag = (int)args[0]->tag;

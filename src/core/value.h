@@ -18,6 +18,7 @@ Value *xs_native(NativeFn fn);
 Value *xs_range(int64_t start, int64_t end, int inclusive);
 Value *xs_range_step(int64_t start, int64_t end, int inclusive, int64_t step);
 Value *xs_module(XSMap *m);
+Value *xs_regex(const char *pattern);
 Value *xs_bigint_val(XSBigInt *b);
 
 extern Value *XS_NULL_VAL;

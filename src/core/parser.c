@@ -543,6 +543,12 @@ static Node *parse_primary(Parser *p) {
         n->lit_string.parts = nodelist_new();
         return n;
     }
+    case TK_REGEX: {
+        pp_advance(p);
+        Node *n = node_new(NODE_LIT_REGEX, span);
+        n->lit_regex.pattern = xs_strdup(tok->sval ? tok->sval : "");
+        return n;
+    }
     case TK_CHAR: {
         pp_advance(p);
         Node *n = node_new(NODE_LIT_CHAR, span);
@@ -2048,7 +2054,7 @@ static Node *parse_pattern(Parser *p) {
         n->pat_lit.fval = tok->fval; n->pat_lit.tag = 1;
         return n;
     }
-    if (tok->kind == TK_RAW_STRING) {
+    if (tok->kind == TK_RAW_STRING || tok->kind == TK_REGEX) {
         pp_advance(p);
         Node *n = node_new(NODE_PAT_REGEX, span);
         n->pat_regex.pattern = xs_strdup(tok->sval ? tok->sval : "");

@@ -46,7 +46,7 @@ Download a prebuilt binary from [releases](https://github.com/xs-lang0/xs/releas
 
 ```bash
 make            # produces ./xs
-make test       # 13 test suites
+make test       # 14 test suites
 make release    # optimized build (-O3, LTO, stripped)
 make install    # install to /usr/local/bin/xs
 ```
@@ -76,6 +76,7 @@ xs --strict file.xs     # require type annotations everywhere
 - Closures, generators (`fn*`/`yield`), arrow lambdas
 - Algebraic effects (`effect`/`perform`/`handle`/`resume`)
 - All the concurrency: spawn, async/await, actors, channels, nurseries
+- First-class regex (`/pattern/` literals, `.test()`, `.match()`, `.replace()`)
 - List/map comprehensions, spread, pipe operator
 - try/catch/finally, defer, throw
 
@@ -136,7 +137,7 @@ let nums: [int] = [1, 2, "oops"]  -- runtime error: expected '[int]', got '[mixe
 ```
 src/            compiler and runtime (C)
 src/tls/        embedded BearSSL for HTTPS
-tests/          13 test suites
+tests/          14 test suites
 examples/       working examples and plugins
 Makefile        build system
 LANGUAGE.md     complete language reference

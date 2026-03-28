@@ -146,5 +146,25 @@ assert_eq(d.b, 2)
 let d2 = Defaults { b: 99 }
 assert_eq(d2.b, 99)
 
+-- regex type
+let pat = /[0-9]+/
+assert_eq(type(pat), "re")
+assert(pat.test("abc 42 def"), "regex test")
+assert_eq(pat.match("abc 42 def"), "42")
+assert_eq(pat.replace("abc 42 def", "XX"), "abc XX def")
+assert_eq(pat.source(), "[0-9]+")
+
+-- regex in match
+fn classify_re(s) {
+    return match s {
+        /^[0-9]+$/ => "number"
+        /^[a-zA-Z_]+$/ => "word"
+        _ => "other"
+    }
+}
+assert_eq(classify_re("42"), "number")
+assert_eq(classify_re("hello"), "word")
+assert_eq(classify_re("???"), "other")
+
 -- type aliases (just parsing, no enforcement yet)
 type UserId = i64

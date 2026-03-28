@@ -93,6 +93,7 @@ Array destructuring requires an exact length match.
 | Tuple | parentheses | `(1, "a", true)` |
 | Map | hash-braces | `#{"key": "value"}` |
 | Range | dots | `0..10`, `1..=5` |
+| Regex | forward slashes | `/[0-9]+/` |
 | Function | `fn` keyword | `fn(x) { x + 1 }` |
 
 ```xs
@@ -105,6 +106,7 @@ println(type([]))        -- array
 println(type(#{}))       -- map
 println(type((1, 2)))    -- tuple
 println(type(0..5))      -- range
+println(type(/abc/))     -- re
 ```
 
 ---
@@ -226,7 +228,7 @@ A reset sequence is appended automatically.
 | Bright FG | `bright_black`, `bright_red`, `bright_green`, `bright_yellow`, `bright_blue`, `bright_magenta`, `bright_cyan`, `bright_white` |
 | Background | `bg_black`, `bg_red`, `bg_green`, `bg_yellow`, `bg_blue`, `bg_magenta`, `bg_cyan`, `bg_white` |
 | Bright BG | `bg_bright_black`, `bg_bright_red`, etc. |
-| 256-color | `fg256,N`, `bg256,N` (N = 0–255) |
+| 256-color | `fg256,N`, `bg256,N` (N = 0-255) |
 | Truecolor | `rgb,R,G,B`, `bgrgb,R,G,B` |
 
 Color strings support interpolation in the text part: `c"bold;x = {x}"`.
@@ -444,6 +446,48 @@ println(3 in 1..5)               -- true
 ```
 
 `0..10` does **not** include 10. Use `0..=10` for inclusive.
+
+---
+
+## Regex
+
+Regex is a first-class type (`re`) with literal syntax using forward slashes.
+
+```xs
+let pat = /[0-9]+/
+println(type(pat))               -- re
+
+-- with type annotation
+let digits: re = /[0-9]+/
+```
+
+Uses POSIX extended regex syntax. Use character classes like `[0-9]`, `[a-z]`, `[[:digit:]]` instead of shorthand like `\d`.
+
+### Regex Methods
+
+```xs
+let pat = /[0-9]+/
+
+pat.test("abc123")               -- true (matches anywhere in string)
+pat.match("abc123")              -- "123" (first match, or null)
+pat.replace("abc123def", "NUM")  -- "abcNUMdef"
+pat.source()                     -- "[0-9]+"
+```
+
+### Regex in Pattern Matching
+
+Regex literals work as match patterns, testing the value against the pattern:
+
+```xs
+fn classify(s) {
+    match s {
+        /^[0-9]+$/ => "number"
+        /^[a-z]+$/ => "lowercase"
+        /^[A-Z]+$/ => "uppercase"
+        _ => "mixed"
+    }
+}
+```
 
 ---
 
@@ -719,7 +763,12 @@ for k in m {
     println("{k}: {m[k]}")
 }
 
--- over map entries with destructuring
+-- over map key-value pairs (direct destructuring)
+for (k, v) in m {
+    println("{k} = {v}")
+}
+
+-- .entries() also works
 for (k, v) in m.entries() {
     println("{k} = {v}")
 }
@@ -851,6 +900,13 @@ match arr {
 match value {
     n @ 1..=10 => "small: {n}"
     n          => "other: {n}"
+}
+
+-- regex patterns
+match input {
+    /^[0-9]+$/ => "number"
+    /^[a-z]+$/ => "word"
+    _          => "other"
 }
 
 -- string prefix patterns
@@ -1395,6 +1451,7 @@ const PI: f64 = 3.14159
 | `bool` | Boolean |
 | `char` | Character |
 | `byte` | Alias for `u8` |
+| `re` | Regex |
 | `any` / `dyn` | Any type (disables checking) |
 | `void` / `unit` | No value |
 | `never` | Function that never returns |
@@ -2450,7 +2507,7 @@ println(re.test("^\\d+$", "123"))              -- true
 ```xs
 import random
 println(random.int(1, 10))       -- random int between 1 and 10
-println(random.float())          -- random float 0.0–1.0
+println(random.float())          -- random float 0.0-1.0
 println(random.bool())           -- random boolean
 println(random.choice(["a", "b", "c"]))  -- random element
 ```
@@ -2805,6 +2862,7 @@ xs transpile --target <js|c|wasm32|wasi> <file.xs>
 xs new <name>                    -- scaffold a new project
 xs lsp [-s <lsp.xs>]             -- start LSP server
 xs dap                           -- start DAP debug server
+xs replay <trace.xst>            -- replay a recorded execution trace
 ```
 
 **Flags:**
@@ -2822,6 +2880,7 @@ xs dap                           -- start DAP debug server
 | `-e <code>` | Evaluate code inline |
 | `--emit <bytecode\|ast\|ir\|js\|c\|wasm>` | Print intermediate form |
 | `--record <file.xst>` | Record execution trace |
+| `--trace-deep` | Serialize complex values as JSON in traces |
 | `--plugin <path>` | Load a plugin |
 | `--sandbox` | Run in sandboxed mode |
 

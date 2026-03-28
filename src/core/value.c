@@ -125,6 +125,12 @@ Value *xs_module(XSMap *m) {
     return v;
 }
 
+Value *xs_regex(const char *pattern) {
+    Value *v = val_alloc(XS_REGEX);
+    v->s = xs_strdup(pattern ? pattern : "");
+    return v;
+}
+
 // refcount
 Value *value_incref(Value *v) {
     if (v) v->refcount++;
@@ -136,6 +142,7 @@ static void free_value(Value *v) {
     switch (v->tag) {
         case XS_STR:
         case XS_CHAR:
+        case XS_REGEX:
             free(v->s);
             break;
         case XS_ARRAY:
@@ -310,6 +317,15 @@ char *value_repr(Value *v) {
         }
         case XS_STR:   return xs_strdup(v->s ? v->s : "");
         case XS_CHAR:  return xs_strdup(v->s ? v->s : "");
+        case XS_REGEX: {
+            size_t plen = v->s ? strlen(v->s) : 0;
+            char *buf = xs_malloc(plen + 3);
+            buf[0] = '/';
+            if (v->s) memcpy(buf + 1, v->s, plen);
+            buf[plen + 1] = '/';
+            buf[plen + 2] = '\0';
+            return buf;
+        }
         case XS_ARRAY:
         case XS_TUPLE: {
             size_t sz = 64;

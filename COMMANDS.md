@@ -134,7 +134,8 @@ echo $?  # 0 = no errors
 ```
 
 This catches type mismatches, undefined variables, non-exhaustive matches, and
-other semantic issues that can't be detected by parsing alone.
+other semantic issues that can't be detected by parsing alone. Hindley-Milner
+type inference is wired in, so it can catch type errors even in unannotated code.
 
 ### `xs --lenient <file.xs>`
 
@@ -380,8 +381,9 @@ Record an execution trace for time-travel debugging.
 xs --record trace.xst program.xs
 ```
 
-Records every function call, variable store, and I/O operation to a `.xst`
-trace file.
+Records every function call, return, variable store, and I/O operation to a `.xst`
+trace file. Use `--trace-deep` to serialize complex values (arrays, maps, structs)
+as JSON in the trace output.
 
 ### `xs replay <trace.xst>` / `xs --replay <trace.xst>`
 
@@ -594,16 +596,18 @@ These flags work with any subcommand or when running scripts directly.
 | `--profile` | Enable sampling profiler. |
 | `--coverage` | Enable line/branch coverage tracking. |
 | `--trace-sample <rate>` | Set profiler sampling rate (0.0-1.0). |
+| `--trace-deep` | Serialize complex values as JSON in execution traces. |
 | `--plugin <path>` | Load native plugin before execution. |
 | `--sandbox` | Sandbox plugin execution. |
 
 **Flag placement:** Global flags like `--no-color`, `--vm`, and `--check` can
 appear anywhere in the argument list: before or after the filename or
-subcommand. For example, both of these work:
+subcommand. Flags can be stacked freely. For example, all of these work:
 
 ```bash
 xs --no-color --check mylib.xs
 xs mylib.xs --no-color --check
+xs --check --vm mylib.xs         -- type-check then run on the VM
 ```
 
 **Per-subcommand help:** Every subcommand supports `--help`:

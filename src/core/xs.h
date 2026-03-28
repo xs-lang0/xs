@@ -53,6 +53,7 @@ typedef enum {
     XS_RANGE,
     XS_SIGNAL,
     XS_ACTOR,
+    XS_REGEX,
     XS_MODULE,
 #ifdef XSC_ENABLE_VM
     XS_CLOSURE,
