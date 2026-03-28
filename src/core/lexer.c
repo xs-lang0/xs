@@ -69,6 +69,8 @@ static const KWEntry KEYWORDS[] = {
     {"perform",  TK_PERFORM},
     {"handle",   TK_HANDLE},
     {"resume",   TK_RESUME},
+    {"inline",   TK_INLINE},
+    {"tag",      TK_TAG},
     {NULL,       TK_UNKNOWN},
 };
 
@@ -1091,6 +1093,8 @@ const char *token_kind_name(TokenKind k) {
     case TK_REGEX: return "REGEX";
     case TK_UNSAFE: return "unsafe";
     case TK_USE: return "use";
+    case TK_INLINE: return "inline";
+    case TK_TAG: return "tag";
     default: return "?";
     }
 }

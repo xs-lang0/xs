@@ -31,6 +31,7 @@ typedef enum {
     TK_SELF, TK_SUPER, TK_UNSAFE,
 
     TK_EFFECT, TK_PERFORM, TK_HANDLE, TK_RESUME,
+    TK_INLINE, TK_TAG,
 
     // operators
     TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT,

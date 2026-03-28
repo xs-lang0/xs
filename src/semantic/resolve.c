@@ -129,6 +129,10 @@ static void collect_toplevel(Node *prog, SymTab *st) {
                 sym_define(st, s->fn_decl.name ? s->fn_decl.name : "",
                            SYM_FN, NULL, s, 0);
                 break;
+            case NODE_TAG_DECL:
+                sym_define(st, s->tag_decl.name ? s->tag_decl.name : "",
+                           SYM_FN, NULL, s, 0);
+                break;
             case NODE_STRUCT_DECL:
                 sym_define(st, s->struct_decl.name ? s->struct_decl.name : "",
                            SYM_STRUCT, NULL, s, 0);
@@ -190,6 +194,19 @@ static void resolve_node(Node *n, SymTab *st, SemaCtx *ctx) {
                 sym_define(st, pm->name, SYM_PARAM, NULL, NULL, 0);
         }
         if (n->fn_decl.body) resolve_node(n->fn_decl.body, st, ctx);
+        scope_pop(st);
+        break;
+    }
+
+    case NODE_TAG_DECL: {
+        scope_push(st);
+        for (int i = 0; i < n->tag_decl.params.len; i++) {
+            Param *pm = &n->tag_decl.params.items[i];
+            if (pm->name)
+                sym_define(st, pm->name, SYM_PARAM, NULL, NULL, 0);
+        }
+        sym_define(st, "__block", SYM_PARAM, NULL, NULL, 0);
+        if (n->tag_decl.body) resolve_node(n->tag_decl.body, st, ctx);
         scope_pop(st);
         break;
     }

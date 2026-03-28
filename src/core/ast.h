@@ -130,6 +130,9 @@ typedef enum {
     NODE_ACTOR_DECL,
     NODE_SEND_EXPR,     /* actor ! message */
 
+    NODE_INLINE_C,
+    NODE_TAG_DECL,
+
     NODE_PROGRAM,
 } NodeTag;
 
@@ -529,6 +532,15 @@ struct Node {
         struct {
             char *pattern;  /* regex pattern string */
         } pat_regex;
+
+        struct { char *code; } inline_c;
+
+        struct {
+            char      *name;
+            ParamList  params;
+            Node      *body;
+            int        is_pub;
+        } tag_decl;
 
         struct { NodeList stmts; } program;
     };

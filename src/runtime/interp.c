@@ -579,7 +579,7 @@ static const char *value_type_str(Value *v) {
             else snprintf(tbuf, sizeof tbuf, "map<str, mixed>");
             return tbuf;
         }
-        case XS_FUNC: case XS_NATIVE: return "fn";
+        case XS_FUNC: case XS_NATIVE: case XS_OVERLOAD: return "fn";
         case XS_STRUCT_VAL: return v->st ? v->st->type_name : "struct";
         case XS_INST:  return (v->inst && v->inst->class_) ? v->inst->class_->name : "instance";
         case XS_ENUM_VAL: return v->en ? v->en->type_name : "enum";
@@ -957,6 +957,42 @@ Value *call_value(Interp *i, Value *callee, Value **args, int argc,
         frame_name = callee->fn->name;
     TRACE_CALL(i, frame_name ? frame_name : "<call>", i->current_span.line);
     interp_push_frame(i, frame_name, i->current_span);
+
+    if (callee->tag == XS_OVERLOAD) {
+        /* dispatch overloaded function by argument count */
+        XSArray *oset = callee->overload;
+        Value *best = NULL;
+        for (int oi = 0; oi < oset->len; oi++) {
+            Value *candidate = oset->items[oi];
+            if (candidate->tag == XS_NATIVE) {
+                if (!best) best = candidate; /* native is fallback */
+                continue;
+            }
+            if (candidate->tag != XS_FUNC) continue;
+            XSFunc *cfn = candidate->fn;
+            int min_arity = 0, max_arity = cfn->nparams;
+            int has_variadic = 0;
+            for (int pi = 0; pi < cfn->nparams; pi++) {
+                if (cfn->variadic_flags && cfn->variadic_flags[pi]) { has_variadic = 1; continue; }
+                if (!cfn->default_vals || !cfn->default_vals[pi]) min_arity++;
+            }
+            if (has_variadic) {
+                if (argc >= min_arity) { best = candidate; break; }
+            } else if (argc >= min_arity && argc <= max_arity) {
+                best = candidate; break;
+            }
+        }
+        if (!best) {
+            xs_runtime_error(i->current_span,
+                "no overload matches argument count",
+                "check the number of arguments",
+                "called with %d argument(s), no matching overload found", argc);
+            interp_pop_frame(i);
+            return value_incref(XS_NULL_VAL);
+        }
+        interp_pop_frame(i);
+        return call_value(i, best, args, argc, call_site);
+    }
 
     if (callee->tag == XS_NATIVE) {
         Value *result = callee->native(i, args, argc);
@@ -5196,6 +5232,17 @@ do_call: ;
     }
 
     case NODE_YIELD: {
+        /* Check if we're inside a tag (have __block in scope) */
+        Value *block = env_get(i->env, "__block");
+        if (block && (block->tag == XS_FUNC || block->tag == XS_NATIVE
+#ifdef XSC_ENABLE_VM
+                      || block->tag == XS_CLOSURE
+#endif
+                      )) {
+            /* Tag mode: yield means "call the block" */
+            Value *result = call_value(i, block, NULL, 0, "yield");
+            return result;
+        }
         Value *val = n->yield_.value ? EVAL(i, n->yield_.value) : value_incref(XS_NULL_VAL);
         if (i->cf.signal) { value_decref(val); return value_incref(XS_NULL_VAL); }
         if (i->yield_collect) {
@@ -7598,8 +7645,20 @@ void interp_exec(Interp *i, Node *stmt) {
         if (stmt->fn_decl.ret_type && stmt->fn_decl.ret_type->name)
             fn->ret_type_name = xs_strdup(stmt->fn_decl.ret_type->name);
         Value *v = xs_func_new(fn);
-        if (stmt->fn_decl.name)
-            env_define(i->env, stmt->fn_decl.name, v, 1);
+        if (stmt->fn_decl.name) {
+            Value *existing = env_get(i->env, stmt->fn_decl.name);
+            if (existing && existing->tag == XS_OVERLOAD) {
+                array_push(existing->overload, value_incref(v));
+            } else if (existing && (existing->tag == XS_FUNC || existing->tag == XS_NATIVE)) {
+                Value *oset = xs_overload_new();
+                array_push(oset->overload, value_incref(existing));
+                array_push(oset->overload, value_incref(v));
+                env_set(i->env, stmt->fn_decl.name, oset);
+                value_decref(oset);
+            } else {
+                env_define(i->env, stmt->fn_decl.name, v, 1);
+            }
+        }
         value_decref(v);
         break;
     }
@@ -8209,6 +8268,49 @@ void interp_exec(Interp *i, Node *stmt) {
     case NODE_MATCH:
     case NODE_TRY: {
         Value *v = interp_eval(i, stmt);
+        value_decref(v);
+        break;
+    }
+
+    case NODE_INLINE_C: {
+        fprintf(stderr, "xs: error: inline C blocks cannot be interpreted\n");
+        fprintf(stderr, "  hint: use 'xs transpile --target c' to compile inline C code\n");
+        break;
+    }
+
+    case NODE_TAG_DECL: {
+        /* Desugar: tag name(params) { body } -> fn name(params, __block) { body }
+           where yield inside body calls __block() */
+        int nparams = stmt->tag_decl.params.len + 1;  /* +1 for __block */
+        Node **params = xs_malloc(nparams * sizeof(Node*));
+        Node **defaults = xs_calloc(nparams, sizeof(Node*));
+        int *varflags = xs_calloc(nparams, sizeof(int));
+        for (int j = 0; j < stmt->tag_decl.params.len; j++) {
+            Param *pm = &stmt->tag_decl.params.items[j];
+            if (pm->pattern) {
+                params[j] = pm->pattern;
+            } else {
+                Node *pn = node_new(NODE_PAT_IDENT, pm->span);
+                pn->pat_ident.name = xs_strdup(pm->name ? pm->name : "_");
+                pn->pat_ident.mutable = 0;
+                params[j] = pn;
+            }
+            defaults[j] = pm->default_val;
+            varflags[j] = pm->variadic;
+        }
+        /* Add implicit __block parameter */
+        Node *bp = node_new(NODE_PAT_IDENT, stmt->span);
+        bp->pat_ident.name = xs_strdup("__block");
+        bp->pat_ident.mutable = 0;
+        params[nparams - 1] = bp;
+        defaults[nparams - 1] = NULL;
+        varflags[nparams - 1] = 0;
+
+        XSFunc *fn = func_new_ex(stmt->tag_decl.name, params, nparams,
+                                 stmt->tag_decl.body, i->env, defaults, varflags);
+        Value *v = xs_func_new(fn);
+        if (stmt->tag_decl.name)
+            env_define(i->env, stmt->tag_decl.name, v, 1);
         value_decref(v);
         break;
     }

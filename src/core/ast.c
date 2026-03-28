@@ -443,6 +443,14 @@ void node_free(Node *n) {
     case NODE_PAT_REGEX:
         free(n->pat_regex.pattern);
         break;
+    case NODE_INLINE_C:
+        free(n->inline_c.code);
+        break;
+    case NODE_TAG_DECL:
+        free(n->tag_decl.name);
+        paramlist_free(&n->tag_decl.params);
+        node_free(n->tag_decl.body);
+        break;
     case NODE_PROGRAM:
         nodelist_free(&n->program.stmts);
         break;
