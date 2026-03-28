@@ -8,6 +8,7 @@
     { "include": "#numbers" },
     { "include": "#keywords" },
     { "include": "#function-declaration" },
+    { "include": "#tag-declaration" },
     { "include": "#builtins" },
     { "include": "#constants" },
     { "include": "#types" },
@@ -22,13 +23,49 @@
         },
         {
           "name": "comment.block.xs",
-          "begin": "/\\*",
-          "end": "\\*/"
+          "begin": "\\{-",
+          "end": "-\\}"
         }
       ]
     },
     "strings": {
       "patterns": [
+        {
+          "name": "string.quoted.triple.xs",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.xs",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.xs",
+              "contentName": "source.xs.embedded",
+              "begin": "(?<!\\\\)\\{",
+              "end": "\\}",
+              "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.xs" } },
+              "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.xs" } },
+              "patterns": [{ "include": "source.xs" }]
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.raw.xs",
+          "begin": "r\"",
+          "end": "\""
+        },
+        {
+          "name": "string.quoted.color.xs",
+          "begin": "c\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.xs",
+              "match": "\\\\."
+            }
+          ]
+        },
         {
           "name": "string.quoted.double.xs",
           "begin": "\"",
@@ -40,10 +77,11 @@
             },
             {
               "name": "meta.interpolation.xs",
+              "contentName": "source.xs.embedded",
               "begin": "(?<!\\\\)\\{",
               "end": "\\}",
-              "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.xs" } },
-              "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.xs" } },
+              "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.xs" } },
+              "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.xs" } },
               "patterns": [{ "include": "source.xs" }]
             }
           ]
@@ -56,6 +94,15 @@
             {
               "name": "constant.character.escape.xs",
               "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.xs",
+              "contentName": "source.xs.embedded",
+              "begin": "(?<!\\\\)\\{",
+              "end": "\\}",
+              "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.xs" } },
+              "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.xs" } },
+              "patterns": [{ "include": "source.xs" }]
             }
           ]
         }
@@ -89,7 +136,7 @@
         },
         {
           "name": "keyword.declaration.xs",
-          "match": "\\b(fn|let|var|const|struct|enum|trait|impl|class|type|macro)\\b"
+          "match": "\\b(fn|let|var|const|struct|enum|trait|impl|class|type|macro|tag)\\b"
         },
         {
           "name": "keyword.import.xs",
@@ -101,14 +148,25 @@
         },
         {
           "name": "keyword.other.xs",
-          "match": "\\b(pub|mut|static|effect|perform|handle|resume|spawn|nursery)\\b"
+          "match": "\\b(pub|mut|static|inline|unsafe|effect|perform|handle|resume|spawn|nursery|actor)\\b"
         }
       ]
     },
     "function-declaration": {
       "patterns": [
         {
-          "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+          "match": "\\b(fn\\*?)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*[(<]",
+          "captures": {
+            "1": { "name": "keyword.declaration.xs" },
+            "2": { "name": "entity.name.function.xs" }
+          }
+        }
+      ]
+    },
+    "tag-declaration": {
+      "patterns": [
+        {
+          "match": "\\b(tag)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*[({]",
           "captures": {
             "1": { "name": "keyword.declaration.xs" },
             "2": { "name": "entity.name.function.xs" }
@@ -120,7 +178,7 @@
       "patterns": [
         {
           "name": "support.function.xs",
-          "match": "\\b(print|println|input|len|type|range|assert|panic|typeof)\\b"
+          "match": "\\b(print|println|eprint|eprintln|input|len|type|range|assert|assert_eq|panic|typeof|dbg|pprint|repr|exit|todo|unreachable|copy|clone|signal|derived)\\b"
         }
       ]
     },
@@ -140,7 +198,7 @@
       "patterns": [
         {
           "name": "storage.type.primitive.xs",
-          "match": "\\b(int|float|str|bool|null|array|map|tuple|any|void)\\b"
+          "match": "\\b(int|i8|i16|i32|i64|u8|u16|u32|u64|float|f32|f64|str|string|bool|char|byte|re|any|dyn|void|unit|never)\\b"
         },
         {
           "name": "entity.name.type.xs",
@@ -166,6 +224,18 @@
         {
           "name": "keyword.operator.power.xs",
           "match": "\\*\\*"
+        },
+        {
+          "name": "keyword.operator.spaceship.xs",
+          "match": "<=>"
+        },
+        {
+          "name": "keyword.operator.null-coalesce.xs",
+          "match": "\\?\\?"
+        },
+        {
+          "name": "keyword.operator.concat.xs",
+          "match": "\\+\\+"
         }
       ]
     }
