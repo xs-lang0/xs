@@ -317,7 +317,8 @@ static int is_known_type_name(const char *name, SymTab *st) {
     /* common aliases not in ty_from_name */
     if (strcmp(name, "int") == 0 || strcmp(name, "float") == 0 ||
         strcmp(name, "string") == 0 || strcmp(name, "byte") == 0 ||
-        strcmp(name, "any") == 0 || strcmp(name, "void") == 0) return 1;
+        strcmp(name, "any") == 0 || strcmp(name, "void") == 0 ||
+        strcmp(name, "re") == 0 || strcmp(name, "regex") == 0) return 1;
     /* container types */
     if (strcmp(name, "array") == 0 || strcmp(name, "map") == 0 ||
         strcmp(name, "tuple") == 0 || strcmp(name, "option") == 0 ||

@@ -212,6 +212,7 @@ static Value *builtin_type(Interp *i, Value **args, int argc) {
     case XS_RANGE:  return xs_str("range");
     case XS_SIGNAL: return xs_str("signal");
     case XS_ACTOR:  return xs_str("actor");
+    case XS_REGEX:  return xs_str("re");
     case XS_MODULE: return xs_str("module");
     default:        return xs_str("unknown");
     }
@@ -246,6 +247,7 @@ static Value *builtin_type_of(Interp *i, Value **args, int argc) {
     case XS_RANGE:  return xs_str("Range");
     case XS_SIGNAL: return xs_str("Signal");
     case XS_ACTOR:  return xs_str("Actor");
+    case XS_REGEX:  return xs_str("Re");
     default:        return xs_str("Unknown");
     }
 }

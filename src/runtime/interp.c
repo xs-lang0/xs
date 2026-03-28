@@ -3315,6 +3315,61 @@ static Value *eval_method(Interp *i, Value *obj, const char *method,
         }
     }
 
+    if (obj->tag == XS_REGEX && obj->s) {
+        const char *pat = obj->s;
+        if (strcmp(method, "test") == 0 || strcmp(method, "is_match") == 0) {
+            if (argc < 1 || args[0]->tag != XS_STR) return value_incref(XS_FALSE_VAL);
+            regex_t re;
+            if (regcomp(&re, pat, REG_EXTENDED | REG_NOSUB) != 0) return value_incref(XS_FALSE_VAL);
+            int ok = (regexec(&re, args[0]->s, 0, NULL, 0) == 0);
+            regfree(&re);
+            return ok ? value_incref(XS_TRUE_VAL) : value_incref(XS_FALSE_VAL);
+        }
+        if (strcmp(method, "match") == 0 || strcmp(method, "find") == 0) {
+            if (argc < 1 || args[0]->tag != XS_STR) return value_incref(XS_NULL_VAL);
+            regex_t re;
+            if (regcomp(&re, pat, REG_EXTENDED) != 0) return value_incref(XS_NULL_VAL);
+            regmatch_t m[1];
+            if (regexec(&re, args[0]->s, 1, m, 0) == 0) {
+                int len = m[0].rm_eo - m[0].rm_so;
+                Value *r = xs_str_n(args[0]->s + m[0].rm_so, (size_t)len);
+                regfree(&re);
+                return r;
+            }
+            regfree(&re);
+            return value_incref(XS_NULL_VAL);
+        }
+        if (strcmp(method, "replace") == 0) {
+            if (argc < 2 || args[0]->tag != XS_STR || args[1]->tag != XS_STR)
+                return value_incref(XS_NULL_VAL);
+            regex_t re;
+            if (regcomp(&re, pat, REG_EXTENDED) != 0) return value_incref(args[0]);
+            regmatch_t m[1];
+            if (regexec(&re, args[0]->s, 1, m, 0) == 0) {
+                int pre_len = m[0].rm_so;
+                int post_start = m[0].rm_eo;
+                int rlen = (int)strlen(args[1]->s);
+                int slen = (int)strlen(args[0]->s);
+                char *buf = xs_malloc((size_t)(pre_len + rlen + slen - post_start + 1));
+                memcpy(buf, args[0]->s, (size_t)pre_len);
+                memcpy(buf + pre_len, args[1]->s, (size_t)rlen);
+                memcpy(buf + pre_len + rlen, args[0]->s + post_start, (size_t)(slen - post_start));
+                buf[pre_len + rlen + slen - post_start] = '\0';
+                Value *r = xs_str(buf); free(buf);
+                regfree(&re);
+                return r;
+            }
+            regfree(&re);
+            return value_incref(args[0]);
+        }
+        if (strcmp(method, "source") == 0 || strcmp(method, "pattern") == 0) {
+            return xs_str(pat);
+        }
+        if (strcmp(method, "to_str") == 0) {
+            char *s = value_str(obj); Value *v = xs_str(s); free(s); return v;
+        }
+    }
+
     if (obj->tag == XS_INT || obj->tag == XS_FLOAT || obj->tag == XS_BIGINT) {
         double num_f = (obj->tag==XS_FLOAT)?obj->f:(obj->tag==XS_BIGINT)?bigint_to_double(obj->bigint):(double)obj->i;
         int64_t num_i = (obj->tag==XS_INT)?obj->i:(obj->tag==XS_BIGINT)?bigint_to_i64(obj->bigint):(int64_t)obj->f;
@@ -4212,6 +4267,7 @@ Value *interp_eval(Interp *i, Node *n) {
     case NODE_LIT_BOOL:  return n->lit_bool.bval?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
     case NODE_LIT_NULL:  return value_incref(XS_NULL_VAL);
     case NODE_LIT_CHAR:  return xs_char(n->lit_char.cval);
+    case NODE_LIT_REGEX: return xs_regex(n->lit_regex.pattern);
     case NODE_LIT_STRING:
         return xs_str(n->lit_string.sval ? n->lit_string.sval : "");
 

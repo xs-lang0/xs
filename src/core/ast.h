@@ -81,6 +81,7 @@ typedef enum {
     NODE_LIST_COMP,
     NODE_MAP_COMP,
     NODE_INTERP_STRING, /* string with interpolation */
+    NODE_LIT_REGEX,     /* /pattern/ regex literal */
 
     NODE_LET,
     NODE_VAR,
@@ -243,6 +244,8 @@ struct Node {
             NodeList parts;      /* alternating str/expr for interp */
             int      interpolated;
         } lit_string;
+
+        struct { char *pattern; } lit_regex;
 
         struct { int bval; } lit_bool;
         struct { char cval; } lit_char;
