@@ -17,7 +17,7 @@ typedef struct {
     int64_t   ival;
     double    fval;
     int       bval;
-    char     *sval;   /* not owned — points into node */
+    char     *sval;   /* not owned: points into node */
 } ConstVal;
 
 static ConstVal const_val(const Node *n) {
@@ -828,7 +828,7 @@ Node *opt_strength_reduce(Node *node, int *count) {
 
 typedef struct {
     char *name;
-    Node *fn_decl;   /* not owned — points into AST */
+    Node *fn_decl;   /* not owned: points into AST */
 } InlineCandidate;
 
 typedef struct {

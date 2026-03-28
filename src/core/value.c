@@ -630,7 +630,7 @@ void array_free(XSArray *a) {
     free(a);
 }
 
-/* map — open addressing, string keys */
+/* map: open addressing, string keys */
 #define MAP_LOAD_MAX 0.7
 
 XSMap *map_new(void) {

@@ -443,7 +443,7 @@ static Node *parse_string_literal(Parser *p, Token *tok) {
             nodelist_push(&n->lit_string.parts, sn);
             pi = 0;
 
-            /* find matching } — skip over quoted strings */
+            /* find matching }: skip over quoted strings */
             int depth = 1, j = i+1;
             while (j < len && depth > 0) {
                 char ch = raw[j];
@@ -467,7 +467,7 @@ static Node *parse_string_literal(Parser *p, Token *tok) {
             int elen = j - i - 1;
 
             if (elen == 0) {
-                /* Empty {} — treat as literal '{' '}' */
+                /* Empty {}: treat as literal '{' '}' */
                 piece[pi++] = '{'; piece[pi++] = '}';
                 i = j + 1;
                 continue;
@@ -649,7 +649,7 @@ static Node *parse_primary(Parser *p) {
             return n;
         }
 
-        /* Struct init: Name { ... } — only on same line */
+        /* Struct init: Name { ... }: only on same line */
         Token *next = pp_peek(p, 0);
         if (next->kind == TK_LBRACE && next->span.line == tok->span.line) {
             /* Heuristic: check if next content looks like field: val */
@@ -734,7 +734,7 @@ static Node *parse_primary(Parser *p) {
 
     case TK_YIELD: {
         pp_advance(p);
-        /* yield expr — parse expression if not at statement boundary */
+        /* yield expr: parse expression if not at statement boundary */
         Node *val = NULL;
         Token *nt = pp_peek(p, 0);
         if (nt->kind != TK_NEWLINE && nt->kind != TK_SEMICOLON &&
@@ -802,7 +802,7 @@ static Node *parse_primary(Parser *p) {
             return n;
         }
         pp_expect_ex(p, TK_RPAREN, "expected ')'", paren_line);
-        /* Check for single-param lambda: (x) => body — suppressed in pattern expr context */
+        /* Check for single-param lambda: (x) => body: suppressed in pattern expr context */
         if (!p->no_arrow_lambda && pp_check(p, TK_FAT_ARROW)) {
             pp_advance(p);
             ParamList pl = paramlist_new();
@@ -1167,7 +1167,7 @@ static Node *parse_postfix(Parser *p, Node *left) {
                 }
                 continue;
             }
-            /* dot followed by int: tuple indexing (0.0 etc) — treat as field */
+            /* dot followed by int: tuple indexing (0.0 etc): treat as field */
             if (name_tok->kind == TK_INT) {
                 pp_advance(p);
                 char buf[32]; snprintf(buf,32,"%lld",(long long)name_tok->ival);
@@ -1242,7 +1242,7 @@ static Node *parse_postfix(Parser *p, Node *left) {
             continue;
         }
 
-        /* Try operator: expr? — propagate Err early return */
+        /* Try operator: expr?: propagate Err early return */
         if (tok->kind == TK_QUESTION &&
             pp_peek(p, 1)->kind != TK_QUESTION &&
             pp_peek(p, 1)->kind != TK_DOT) {
@@ -1329,7 +1329,7 @@ static Node *parse_prefix(Parser *p) {
         char *lbl = NULL;
         Node *val = NULL;
         Token *next = pp_peek(p, 0);
-        /* 'break label' — if next is an ident followed by statement boundary */
+        /* 'break label': if next is an ident followed by statement boundary */
         if (next->kind == TK_IDENT) {
             Token *after = pp_peek(p, 1);
             if (after->kind == TK_SEMICOLON || after->kind == TK_RBRACE ||
@@ -2083,7 +2083,7 @@ static Node *parse_pattern(Parser *p) {
         return n;
     }
 
-    /* Tuple pattern: (a, b) — but ( followed by lambda is expression pattern */
+    /* Tuple pattern: (a, b): but ( followed by lambda is expression pattern */
     if (tok->kind == TK_LPAREN) {
         Token *t1 = pp_peek(p, 1);
         /* ( followed by | or (| means lambda → expression pattern */
@@ -2157,7 +2157,7 @@ static Node *parse_pattern(Parser *p) {
         }
         pp_expect(p, TK_RBRACE, "expected '}'");
         Node *n = node_new(NODE_PAT_STRUCT, span);
-        n->pat_struct.path     = NULL; /* no type name — map destructuring */
+        n->pat_struct.path     = NULL; /* no type name: map destructuring */
         n->pat_struct.fields   = fields;
         n->pat_struct.defaults = defaults;
         n->pat_struct.rest     = rest;
@@ -2328,7 +2328,7 @@ static Node *parse_try(Parser *p) {
             pat = parse_pattern(p);
             pp_expect(p, TK_RPAREN, "expected ')'");
         } else if (pp_peek(p,0)->kind == TK_IDENT && pp_peek(p,1)->kind == TK_LBRACE) {
-            /* catch e { ... } — bare identifier before block */
+            /* catch e { ... }: bare identifier before block */
             Token *et = pp_advance(p);
             pat = node_new(NODE_PAT_IDENT, et->span);
             pat->pat_ident.name    = xs_strdup(et->sval ? et->sval : "_");
@@ -2502,7 +2502,7 @@ static Node *parse_fn_decl(Parser *p, int is_pub, int is_async, int is_pure) {
     Token *kw = pp_expect(p, TK_FN, "expected 'fn'");
     Span span = kw->span;
 
-    /* fn* generator marker — but fn *(params) is operator overload, not a generator */
+    /* fn* generator marker: but fn *(params) is operator overload, not a generator */
     int is_generator = 0;
     if (pp_check(p, TK_STAR) && pp_peek(p, 1)->kind != TK_LPAREN) {
         is_generator = 1;
@@ -3121,7 +3121,7 @@ static Node *parse_import(Parser *p) {
                 Token *it = pp_expect(p, TK_IDENT, "expected name");
                 items = xs_realloc(items, (nitems+1)*sizeof(char*));
                 items[nitems++] = xs_strdup(it->sval ? it->sval : "");
-                pp_match(p, TK_AS); /* optional alias — skip for now */
+                pp_match(p, TK_AS); /* optional alias: skip for now */
                 if (pp_peek(p,0)->kind == TK_IDENT && pp_peek(p,-1)->kind == TK_AS)
                     pp_advance(p);
                 if (!pp_match(p, TK_COMMA)) break;
@@ -3326,7 +3326,7 @@ static Node *parse_stmt(Parser *p) {
         n->trait_decl.super_trait  = NULL;
         n->trait_decl.methods      = nodelist_new();
 
-        /* optional generics <T> — skip */
+        /* optional generics <T>: skip */
         if (pp_check(p, TK_LT)) {
             int d=1; pp_advance(p);
             while (!pp_at_end(p) && d>0) {

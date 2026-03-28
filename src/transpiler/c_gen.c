@@ -108,7 +108,7 @@ typedef struct {
     int id;
     Node *node;        /* the lambda/fn-expr node */
     int n_params;
-    /* simple capture list — names of free variables */
+    /* simple capture list: names of free variables */
     const char *captures[16];
     int n_captures;
 } LambdaInfo;
@@ -168,7 +168,7 @@ static void add_boxed_var(const char *name) {
     if (n_boxed < MAX_BOXED) boxed_vars[n_boxed++] = name;
 }
 
-/* actor field rewriting — when emitting actor method bodies, identifiers
+/* actor field rewriting: when emitting actor method bodies, identifiers
    that match state fields get rewritten to self->field */
 static const char **actor_fields = NULL;
 static int n_actor_fields = 0;
@@ -798,7 +798,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
             /* check if callee might be a closure (variable holding fn) */
             int might_be_closure = 0;
             if (n->call.callee && n->call.callee->tag == NODE_INDEX) {
-                /* e.g. counter["inc"]() — indexing into map, likely returns closure */
+                /* e.g. counter["inc"](): indexing into map, likely returns closure */
                 might_be_closure = 1;
             }
             /* variable calls might be closures if the var was assigned from a function
@@ -806,7 +806,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
             if (n->call.callee && n->call.callee->tag == NODE_IDENT &&
                 lookup_fn_param_count(n->call.callee->ident.name) < 0 &&
                 !is_c_keyword(n->call.callee->ident.name)) {
-                /* not a known function — might be a closure variable */
+                /* not a known function: might be a closure variable */
                 might_be_closure = 1;
             }
             if (might_be_closure) {
@@ -926,7 +926,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
         } else if (strcmp(meth, "map") == 0 || strcmp(meth, "filter") == 0 ||
                    strcmp(meth, "reduce") == 0 || strcmp(meth, "any") == 0 ||
                    strcmp(meth, "all") == 0) {
-            /* array method with callback — use xs_call */
+            /* array method with callback: use xs_call */
             int mid = defer_label_counter++;
             if (strcmp(meth, "map") == 0) {
                 sb_printf(s, "({ xs_val __am_%d = xs_array(0);\n", mid);
@@ -1006,7 +1006,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
                 }
                 sb_addc(s, ')');
             } else if (n_impl_types == 1) {
-                /* single impl type — assume method belongs to it */
+                /* single impl type: assume method belongs to it */
                 sb_printf(s, "%s_%s(", impl_types[0].type_name, meth);
                 emit_expr(s, n->method_call.obj, depth);
                 for (int i = 0; i < n->method_call.args.len; i++) {
@@ -1341,7 +1341,7 @@ static void emit_expr(SB *s, Node *n, int depth) {
         else sb_add(s, "XS_NULL");
         break;
     case NODE_IF: {
-        /* if as expression — ternary */
+        /* if as expression: ternary */
         sb_add(s, "(xs_truthy(");
         emit_expr(s, n->if_expr.cond, depth);
         sb_add(s, ") ? ");
@@ -1616,7 +1616,7 @@ static void emit_pattern_cond(SB *s, Node *pat, const char *subject, int depth) 
     }
     case NODE_PAT_ENUM: {
         if (pat->pat_enum.path) {
-            /* check _variant matches — extract variant name from path like "Shape::Circle" */
+            /* check _variant matches: extract variant name from path like "Shape::Circle" */
             const char *vname = pat->pat_enum.path;
             if (vname) {
                 const char *sep = strstr(vname, "::");

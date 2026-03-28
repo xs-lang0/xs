@@ -395,51 +395,42 @@ static Node *parse_file(const char *path, DiagContext *dctx) {
 static void usage(void) {
     printf(
         "Usage:\n"
-        "  xs [file.xs] [args...]           Run a script (no file = REPL)\n"
-        "  xs run <file.xs> [args...]        Run a script\n"
-        "  xs repl                           Start interactive REPL\n"
-        "  xs test [pattern]                 Run tests\n"
-        "  xs bench [pattern]                Run benchmarks\n"
-        "  xs coverage [pattern]             Run with coverage\n"
-        "  xs profile <file.xs>              Run with sampling profiler\n"
-        "  xs lint [file|dir] [--fix]        Lint source files\n"
-        "  xs fmt [file|dir] [--check]       Format source files\n"
-        "  xs doc [dir]                      Generate documentation\n"
-        "  xs transpile --target <js|c|wasm32|wasi> <file.xs>\n"
-        "                                    Transpile to target language\n"
-        "  xs replay <trace.xst> [--ui]      Replay execution trace\n"
-        "  xs new <name>                     Scaffold new project\n"
-        "  xs install [pkg]                  Install dependencies\n"
-        "  xs remove <pkg>                   Remove dependency\n"
-        "  xs update                         Update dependencies\n"
-        "  xs publish                        Publish package\n"
-        "  xs search <query>                 Search package registry\n"
-        "  xs check <file.xs>                Type-check a file\n"
-        "  xs build <file.xs> [-o out.xsc]    Compile to bytecode (.xsc)\n"
-        "  xs run <file.xsc>                 Run compiled bytecode\n"
-        "  xs lsp [-s <lsp.xs>]              Start LSP server\n"
-        "  xs dap                            Start DAP debug server\n"
+        "  xs <file.xs> [args...]        Run a script\n"
+        "  xs                            Start interactive REPL\n"
+        "  xs -e '<code>'                Evaluate inline code\n"
         "\n"
-        "Flags:\n"
-        "  --check              Type-check only, no execution\n"
-        "  --lenient            Enable lenient mode\n"
-        "  --strict             Require type annotations everywhere\n"
-        "  --optimize           Run AST optimizer before execution\n"
-        "  --backend <interp|vm|jit>  Select execution backend\n"
-        "  --vm                 Use bytecode VM (alias: --backend vm)\n"
-        "  --jit                Use JIT compilation (alias: --backend jit)\n"
-        "  --debug <file>       Run with DAP debug server\n"
-        "  --emit <bytecode|ast|ir|js|c|wasm>  Dump IR or transpile\n"
-        "  --record <file.xst>  Record execution trace\n"
-        "  --trace-sample <rate>  Production sampling rate (0.0-1.0)\n"
-        "  --trace-deep           Deep serialize complex values in trace\n"
-        "  --watch              Watch files and hot-reload\n"
-        "  --plugin <path>      Load plugin .so/.dll\n"
-        "  --sandbox            Sandbox plugins (subprocess isolation)\n"
-        "  --no-color           Disable ANSI color output\n"
-        "  -e, --eval <code>    Evaluate an inline expression\n"
-        "  --version, -V        Show version information\n"
-        "  --help, -h           Show this help message\n"
+        "Commands:\n"
+        "  run <file.xs|file.xsc>        Run source or compiled bytecode\n"
+        "  check <file.xs>               Type-check without running\n"
+        "  build <file.xs> [-o out.xsc]  Compile to bytecode\n"
+        "  test [pattern]                Run test files\n"
+        "  bench [pattern]               Run benchmarks\n"
+        "  lint [file|dir] [--fix]       Lint source files\n"
+        "  fmt [file|dir] [--check]      Format source files\n"
+        "  doc [dir]                     Generate documentation\n"
+        "  new <name>                    Scaffold a new project\n"
+        "  lsp                           Start LSP server\n"
+        "  dap                           Start DAP debug server\n"
+        "  install [pkg]                 Install dependencies\n"
+        "  remove <pkg>                  Remove a dependency\n"
+        "  explain <code>                Explain an error code\n"
+        "\n"
+        "Flags (can appear before or after the filename):\n"
+        "  --vm                 Use bytecode VM backend\n"
+        "  --jit                Use JIT backend (x86-64)\n"
+        "  --check              Type-check only, don't run\n"
+        "  --strict             Require all type annotations\n"
+        "  --lenient            Downgrade errors to warnings\n"
+        "  --optimize           Run AST optimizer\n"
+        "  --emit <target>      Dump IR: ast, bytecode, ir, js, c, wasm\n"
+        "  --watch              Re-run on file change\n"
+        "  --profile            Enable sampling profiler\n"
+        "  --coverage           Enable line/branch coverage\n"
+        "  --plugin <path>      Load native plugin (.so/.dll)\n"
+        "  --no-color           Disable colored output\n"
+        "  -e, --eval <code>    Evaluate inline code\n"
+        "  -V, --version        Show version\n"
+        "  -h, --help           Show this help\n"
     );
 }
 
@@ -1863,7 +1854,7 @@ int main(int argc, char **argv) {
             cache_free(g_sema_cache);
             return diag_explain(argv[++i]);
         }
-        else if (argv[i][0] != '-') { filename = argv[i]; file_arg = i; break; }
+        else if (argv[i][0] != '-' && !filename) { filename = argv[i]; file_arg = i; }
     }
 
     if (!filename) { usage(); return 1; }
@@ -1990,6 +1981,13 @@ run_file:;
                 node_free(program);
                 cache_free(g_sema_cache);
                 return 1;
+            }
+            if (do_check) {
+                printf("No errors found in %s\n", filename);
+                node_free(program);
+                free(src_for_cache);
+                cache_free(g_sema_cache);
+                return 0;
             }
         }
         XSProto *proto = compile_program(program);

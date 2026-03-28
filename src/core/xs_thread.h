@@ -1,4 +1,4 @@
-/* xs_thread.h — cross-platform threads (Win32 / pthreads) */
+/* xs_thread.h: cross-platform threads (Win32 / pthreads) */
 #ifndef XS_THREAD_H
 #define XS_THREAD_H
 

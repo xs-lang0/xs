@@ -247,7 +247,7 @@ static char *lex_string_body(Lexer *l, char quote, int *out_interp) {
                 char esc = lpeek(l, 0);
                 if (esc == '{') {
                     ladvance(l);
-                    /* literal brace — use sentinel \x01{ so parser can detect */
+                    /* literal brace: use sentinel \x01{ so parser can detect */
                     sb_push(&sb, '\x01'); sb_push(&sb, '{');
                 } else if (esc == '}') {
                     ladvance(l);
@@ -515,7 +515,7 @@ static Token lex_number(Lexer *l, int sl, int sc, int sp) {
         char *endp;
         long long val = strtoll(s, &endp, 10);
         if (errno == ERANGE || (strlen(s) > 18 && strcmp(s, "9223372036854775807") > 0)) {
-            /* Overflows i64 — store as bigint string */
+            /* Overflows i64: store as bigint string */
             t.kind = TK_BIGINT;
             t.sval = xs_strdup(s);
         } else {
@@ -554,7 +554,7 @@ static Token lex_ident(Lexer *l, int sl, int sc, int sp) {
             return t;
         }
         /* c"..." colored string literal: lex as string, emit with ANSI wrapping */
-        /* Spec format: c"style;style;...;text" — styles first, text after last ';' */
+        /* Spec format: c"style;style;...;text": styles first, text after last ';' */
         /* Also supports interpolation in the text portion */
         if (kw == TK_IDENT && name[0]=='c' && name[1]=='\0' && lpeek(l,0)=='"') {
             ladvance(l); /* consume opening " */
@@ -638,21 +638,21 @@ static Token lex_ident(Lexer *l, int sl, int sc, int sp) {
                     else if (strcmp(tok2,"bg_bright_magenta")==0) code=105;
                     else if (strcmp(tok2,"bg_bright_cyan")==0) code=106;
                     else if (strcmp(tok2,"bg_bright_white")==0) code=107;
-                    /* fg256,N — 256-color foreground */
+                    /* fg256,N: 256-color foreground */
                     else if (strncmp(tok2,"fg256,",6)==0) {
                         int n = atoi(tok2+6);
                         if (!first_code) codes_pos += snprintf(codes+codes_pos, sizeof(codes)-(size_t)codes_pos, ";");
                         codes_pos += snprintf(codes+codes_pos, sizeof(codes)-(size_t)codes_pos, "38;5;%d",n);
                         first_code = 0; handled = 1;
                     }
-                    /* bg256,N — 256-color background */
+                    /* bg256,N: 256-color background */
                     else if (strncmp(tok2,"bg256,",6)==0) {
                         int n = atoi(tok2+6);
                         if (!first_code) codes_pos += snprintf(codes+codes_pos, sizeof(codes)-(size_t)codes_pos, ";");
                         codes_pos += snprintf(codes+codes_pos, sizeof(codes)-(size_t)codes_pos, "48;5;%d",n);
                         first_code = 0; handled = 1;
                     }
-                    /* rgb,R,G,B — truecolor foreground */
+                    /* rgb,R,G,B: truecolor foreground */
                     else if (strncmp(tok2,"rgb,",4)==0) {
                         int r2=0,g=0,b=0;
                         sscanf(tok2+4,"%d,%d,%d",&r2,&g,&b);
@@ -660,7 +660,7 @@ static Token lex_ident(Lexer *l, int sl, int sc, int sp) {
                         codes_pos += snprintf(codes+codes_pos, sizeof(codes)-(size_t)codes_pos, "38;2;%d;%d;%d",r2,g,b);
                         first_code = 0; handled = 1;
                     }
-                    /* bgrgb,R,G,B — truecolor background */
+                    /* bgrgb,R,G,B: truecolor background */
                     else if (strncmp(tok2,"bgrgb,",6)==0) {
                         int r2=0,g=0,b=0;
                         sscanf(tok2+6,"%d,%d,%d",&r2,&g,&b);
@@ -745,7 +745,7 @@ static void lex_next(Lexer *l) {
         return;
     }
 
-    /* {- block comment -} — nestable */
+    /* {- block comment -}: nestable */
     if (ch=='{' && lpeek(l,1)=='-') {
         int cline = l->line, ccol = l->col;
         StrBuf csb; sb_init(&csb);
@@ -769,7 +769,7 @@ static void lex_next(Lexer *l) {
                 "block comment starts here but never closes");
             diag_hint(d, "add closing `-}` to match the opening `{-`");
             if (depth > 1)
-                diag_note(d, "nesting depth is %d — %d closing `-}` delimiters needed",
+                diag_note(d, "nesting depth is %d: %d closing `-}` delimiters needed",
                           depth, depth);
             diag_render_one(d, l->source, l->filename);
             diag_free(d);

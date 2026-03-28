@@ -930,7 +930,7 @@ static void dap_handle_evaluate(DapState *st, int req_seq, const char *msg) {
         return;
     }
 
-    /* Evaluate — use interp_eval for expressions, interp_exec for statements */
+    /* Evaluate: use interp_eval for expressions, interp_exec for statements */
     Value *result = NULL;
     if (prog->tag == NODE_PROGRAM && prog->program.stmts.len == 1) {
         Node *stmt = prog->program.stmts.items[0];

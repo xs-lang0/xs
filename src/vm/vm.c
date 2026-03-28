@@ -219,7 +219,7 @@ static Value *vm_assert_eq(Interp *interp, Value **args, int argc) {
         char *b = value_repr(args[1]);
         const char *msg = (argc >= 3 && args[2]->tag == XS_STR) ? args[2]->s : "";
         fprintf(stderr, "xs: assertion failed: assert_eq(%s, %s)%s%s\n",
-                a, b, msg[0] ? " — " : "", msg);
+                a, b, msg[0] ? ": " : "", msg);
         free(a); free(b);
         exit(1);
     }
@@ -702,7 +702,7 @@ static Value *vm_load_plugin(Interp *interp, Value **args, int argc) {
     vm_run(plugin_vm, proto);
     g_vm_for_invoke = saved_invoke;
     g_plugin_vm = saved_main_vm;
-    /* don't free globals — they're shared */
+    /* don't free globals: they're shared */
     plugin_vm->globals = NULL;
     /* cleanup plugin_vm manually */
     while (plugin_vm->sp > plugin_vm->stack) value_decref(*--plugin_vm->sp);
@@ -1046,7 +1046,7 @@ static int call_frame_push(VM *vm, Value *closure_val, int argc) {
     if (arity < 0) {
         /* could be generator (old encoding) or variadic (new encoding) */
         int decoded = -(arity + 1);
-        /* check if proto has more locals than decoded — variadic indicator */
+        /* check if proto has more locals than decoded: variadic indicator */
         if (cl->proto->nlocals > decoded + 1 || argc != decoded) {
             is_variadic = 1;
             arity = decoded;
@@ -1078,7 +1078,7 @@ static int call_frame_push(VM *vm, Value *closure_val, int argc) {
             for (int i = argc; i < arity; i++) PUSH(value_incref(XS_NULL_VAL));
             argc = arity;
         } else if (argc > arity && !is_gen) {
-            /* too many args — pop extras */
+            /* too many args: pop extras */
             for (int i = argc; i > arity; i--) value_decref(POP());
             argc = arity;
         }
@@ -1936,7 +1936,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     Value *v=map_get(mc_obj->map,mc_args[0]->s);
                     mc_result=v?value_incref(v):(mc_argc>=2?value_incref(mc_args[1]):value_incref(XS_NULL_VAL));
                 } else if (strcmp(mc_name,"set")==0&&mc_argc>=2&&mc_args[0]->tag==XS_STR) {
-                    /* check if this is a plugin global.set — delegate to native */
+                    /* check if this is a plugin global.set: delegate to native */
                     Value *set_fn = map_get(mc_obj->map, "set");
                     if (set_fn && set_fn->tag == XS_NATIVE) {
                         goto map_generic_method;
@@ -2211,7 +2211,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                                 PUSH(r2 ? r2 : value_incref(XS_NULL_VAL));
                             }
                         } else {
-                            /* closure without self — treat as plain call */
+                            /* closure without self: treat as plain call */
                             value_decref(mc_obj);
                             vm->sp[-mc_argc - 1] = value_incref(fn);
                             Value *sv = vm->sp[-mc_argc - 1]; value_incref(sv);
@@ -2609,7 +2609,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     int base=(mc_argc>=1&&mc_args[0]->tag==XS_INT)?(int)mc_args[0]->i:10;
                     mc_result=xs_int((int64_t)strtoll(s,NULL,base));
                 } else if (strcmp(mc_name,"from_chars")==0) {
-                    /* join chars into string — just return self if called on a string */
+                    /* join chars into string: just return self if called on a string */
                     mc_result=value_incref(mc_obj);
                 } else if (strcmp(mc_name,"is_a")==0&&mc_argc>=1&&mc_args[0]->tag==XS_STR) {
                     mc_result=xs_bool(strcmp(mc_args[0]->s,"str")==0||strcmp(mc_args[0]->s,"String")==0);
@@ -3036,7 +3036,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     for(int j=mc_obj->arr->len-1;j>=0;j--) array_push(arr->arr,value_incref(mc_obj->arr->items[j]));
                     mc_result=arr;
                 } else if (strcmp(mc_name,"scan")==0&&mc_argc>=2) {
-                    /* scan(init, fn) — init first, fn second, matching interpreter */
+                    /* scan(init, fn): init first, fn second, matching interpreter */
                     Value *acc=value_incref(mc_args[0]);
                     Value *arr=xs_array_new();
                     array_push(arr->arr,value_incref(acc));
@@ -3447,7 +3447,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                 CallFrame *cf = &vm->frames[fi];
                 if (cf->try_depth > 0) {
                     TryEntry *te = &cf->try_stack[--cf->try_depth];
-                    /* don't unwind stack — keep it intact for resume */
+                    /* don't unwind stack: keep it intact for resume */
                     /* just jump to handler within the handler frame */
                     vm->sp = te->stack_top;
                     PUSH(eff_val);
@@ -3601,7 +3601,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     if (cl_arity == 0) {
                         Value *result = vm_invoke(vm, fn, NULL, 0);
                         frame = FRAME;
-                        /* check if result is an actor — unwrap as actor instance */
+                        /* check if result is an actor: unwrap as actor instance */
                         if (result && result->tag == XS_MAP && map_get(result->map, "__actor_name")) {
                             Value *actor_inst = xs_map_new();
                             Value *state = map_get(result->map, "__state");

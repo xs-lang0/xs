@@ -1,4 +1,4 @@
-/* xs_compat.h — platform shims */
+/* xs_compat.h: platform shims */
 #ifndef XS_COMPAT_H
 #define XS_COMPAT_H
 

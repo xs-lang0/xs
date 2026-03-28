@@ -161,7 +161,7 @@ void         nodepairlist_free(NodePairList *pl);
 
 typedef struct {
     Node        *pattern;    /* PatIdent or PatWild typically */
-    char        *name;       /* shortcut — non-NULL for simple params */
+    char        *name;       /* shortcut: non-NULL for simple params */
     Node        *default_val;/* may be NULL */
     int          variadic;
     int          keyword_only;

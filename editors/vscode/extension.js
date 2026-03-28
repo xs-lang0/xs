@@ -36,7 +36,7 @@ function findXsBinary() {
   return process.platform === "win32" ? "xs.exe" : "xs";
 }
 
-// quote path for the terminal shell — handles spaces and backslashes
+// quote path for the terminal shell: handles spaces and backslashes
 function shellQuote(p) {
   // for PowerShell/cmd on windows, use & operator with quoted path
   if (process.platform === "win32") {
@@ -134,7 +134,7 @@ function activate(context) {
           if (clean) outputChannel.appendLine(clean);
           if (!err) vscode.window.showInformationMessage("No type errors found");
           else {
-            vscode.window.showWarningMessage("Type errors found — see XS output");
+            vscode.window.showWarningMessage("Type errors found: see XS output");
             outputChannel.show();
           }
         });
@@ -178,7 +178,7 @@ function activate(context) {
     })
   );
 
-  // LSP — find bundled lsp.xs
+  // LSP: find bundled lsp.xs
   const extDir = path.dirname(__dirname);
   const lspCandidates = [
     path.resolve(extDir, "lsp.xs"),                    // bundled in extension
@@ -204,11 +204,11 @@ function activate(context) {
   client = new LanguageClient("xs", "XS Language Server", serverOptions, clientOptions);
   client.start().then(() => {
     statusItem.text = "$(zap) XS";
-    statusItem.tooltip = "XS Language Server — running";
+    statusItem.tooltip = "XS Language Server: running";
     outputChannel.appendLine("XS Language Server started");
   }).catch((err) => {
     statusItem.text = "$(warning) XS";
-    statusItem.tooltip = "XS Language Server — failed";
+    statusItem.tooltip = "XS Language Server: failed";
     const msg = `XS Language Server failed to start: ${err.message}. Set "xs.path" in settings.`;
     vscode.window.showWarningMessage(msg);
     outputChannel.appendLine(msg);

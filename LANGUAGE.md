@@ -51,7 +51,7 @@ let count: int = 42
 var name: str = "XS"
 ```
 
-`let` bindings cannot be reassigned — that's a runtime error. `var` bindings can be reassigned with `=`.
+`let` bindings cannot be reassigned: that's a runtime error. `var` bindings can be reassigned with `=`.
 
 `const` is identical to `let` at runtime.
 
@@ -137,7 +137,7 @@ Floats are IEEE 754 double-precision. Bigints support all arithmetic operators a
 
 ## Strings
 
-Both single and double quotes create strings. They're identical — both support interpolation and escape sequences.
+Both single and double quotes create strings. They're identical: both support interpolation and escape sequences.
 
 ```xs
 let s = "hello world"
@@ -207,7 +207,7 @@ println(raw)                     -- no {x} here \n raw
 
 ### Color Strings
 
-Embed ANSI terminal colors at parse time. Format: `c"style;style;...;text"` — the last segment is the text, everything before it is styling.
+Embed ANSI terminal colors at parse time. Format: `c"style;style;...;text"`: the last segment is the text, everything before it is styling.
 
 ```xs
 let err = c"bold;red;Error!"
@@ -421,7 +421,7 @@ m.merge(other_map)               -- merge (right side wins on key conflict)
 let m2 = #{...m, "extra": true}
 ```
 
-Map literals use `#{}` — the `#` distinguishes them from blocks. Keys can be strings or integers.
+Map literals use `#{}`: the `#` distinguishes them from blocks. Keys can be strings or integers.
 
 ---
 
@@ -604,7 +604,7 @@ Also available: `&=`, `|=`, `^=`, `<<=`, `>>=`.
 
 ## Numeric Behavior
 
-### Integer Division — Truncation Toward Zero
+### Integer Division: Truncation Toward Zero
 
 ```xs
 println(7 / 3)                   -- 2
@@ -612,7 +612,7 @@ println((-7) / 3)                -- -2  (toward zero, NOT -3)
 println(7 / (-3))                -- -2
 ```
 
-### Floor Division — Toward Negative Infinity
+### Floor Division: Toward Negative Infinity
 
 ```xs
 println(5 // 2)                  -- 2
@@ -620,7 +620,7 @@ println(-7 // 2)                 -- -4
 println(7 // -2)                 -- -4
 ```
 
-### Modulo — Sign Follows Dividend
+### Modulo: Sign Follows Dividend
 
 ```xs
 println(7 % 3)                   -- 1
@@ -630,7 +630,7 @@ println(7 % (-3))                -- 1   (sign follows 7)
 
 ### Division by Zero
 
-Division by zero doesn't crash — it prints a runtime warning to stderr and returns `null`:
+Division by zero doesn't crash: it prints a runtime warning to stderr and returns `null`:
 
 ```xs
 let d = 10 / 0                   -- prints warning, d is null
@@ -674,7 +674,7 @@ if x > 0 {
 
 Braces are always required.
 
-`if` works as an expression — it returns the value of the taken branch:
+`if` works as an expression: it returns the value of the taken branch:
 
 ```xs
 let sign = if x > 0 { "+" } else { "-" }
@@ -780,7 +780,7 @@ outer2: for i in range(3) {
 
 ## Pattern Matching
 
-`match` is an expression — it returns the value of the matched arm.
+`match` is an expression: it returns the value of the matched arm.
 
 ```xs
 let result = match value {
@@ -929,7 +929,7 @@ fn main() {
 Decorate functions with `@` or `#[...]` attributes before the `fn` keyword.
 
 ```xs
--- @pure: checked by sema — cannot call println, read_file, sleep, etc.
+-- @pure: checked by sema: cannot call println, read_file, sleep, etc.
 @pure
 fn add(a, b) { return a + b }
 
@@ -963,7 +963,7 @@ impl Point {
 }
 ```
 
-`@pure` is enforced by the semantic analyzer — calling impure functions (I/O, sleep, exit) inside a `@pure` function is an error.
+`@pure` is enforced by the semantic analyzer: calling impure functions (I/O, sleep, exit) inside a `@pure` function is an error.
 
 ### Closures
 
@@ -983,7 +983,7 @@ println(c())                     -- 2
 println(c())                     -- 3
 ```
 
-Nested closures work — each level captures its parent's environment:
+Nested closures work: each level captures its parent's environment:
 
 ```xs
 fn outer() {
@@ -1276,10 +1276,10 @@ trait Iterator {
 
 The semantic analyzer enforces trait implementations:
 
-- **Missing methods** — if an impl block is missing a required method (one without a default body), that's an error.
-- **Parameter count mismatch** — if the impl's method has a different number of params than the trait declares, that's an error.
-- **Return type mismatch** — if the trait declares `-> str` and the impl returns `-> int`, that's an error.
-- **Orphan rule** — you can only implement a trait if either the trait or the type is defined in the same file. Implementing a foreign trait for a foreign type is an error.
+- **Missing methods**: if an impl block is missing a required method (one without a default body), that's an error.
+- **Parameter count mismatch**: if the impl's method has a different number of params than the trait declares, that's an error.
+- **Return type mismatch**: if the trait declares `-> str` and the impl returns `-> int`, that's an error.
+- **Orphan rule**: you can only implement a trait if either the trait or the type is defined in the same file. Implementing a foreign trait for a foreign type is an error.
 
 ---
 
@@ -1354,7 +1354,7 @@ println(c.debug)                 -- false
 
 ## Type System
 
-XS has gradual typing. Code runs fine without any annotations. Add them where you want enforcement — the type checker only kicks in on annotated code and passes through everything else silently.
+XS has gradual typing. Code runs fine without any annotations. Add them where you want enforcement: the type checker only kicks in on annotated code and passes through everything else silently.
 
 ### Type Annotations
 
@@ -1399,7 +1399,7 @@ const PI: f64 = 3.14159
 | `void` / `unit` | No value |
 | `never` | Function that never returns |
 
-Integer annotations are interchangeable for checking purposes — `int`, `i32`, and `i64` all accept integer literals. Same for `float`, `f32`, `f64`.
+Integer annotations are interchangeable for checking purposes: `int`, `i32`, and `i64` all accept integer literals. Same for `float`, `f32`, `f64`.
 
 ### Composite Types
 
@@ -1475,7 +1475,7 @@ let x: Foo = 42
 --   hint: check spelling or define a struct/enum named 'Foo'
 ```
 
-**User-defined types work too** — if you define a struct or enum, it becomes a valid type name:
+**User-defined types work too**: if you define a struct or enum, it becomes a valid type name:
 ```xs
 struct Point { x: int, y: int }
 let p: Point = Point { x: 1, y: 2 }  -- valid
@@ -1540,7 +1540,7 @@ fn display<T: Describe>(item: T) -> str {
 }
 ```
 
-Structs and enums can also have type parameters (parsed but currently erased at runtime — the syntax is accepted for forward compatibility):
+Structs and enums can also have type parameters (parsed but currently erased at runtime: the syntax is accepted for forward compatibility):
 
 ```xs
 struct Pair<A, B> { first: A, second: B }
@@ -1659,7 +1659,7 @@ Defers run even if an exception is thrown.
 
 ## Unsafe Blocks
 
-`unsafe { }` marks a block as unchecked. Currently a parsing/AST annotation — the runtime doesn't restrict anything inside unsafe blocks, but it signals intent to the reader and to future tooling.
+`unsafe { }` marks a block as unchecked. Currently a parsing/AST annotation: the runtime doesn't restrict anything inside unsafe blocks, but it signals intent to the reader and to future tooling.
 
 ```xs
 unsafe {
@@ -1701,7 +1701,7 @@ Signals are also available via `import reactive` as `reactive.signal()` and `rea
 
 ## Algebraic Effects
 
-Effects let you perform an operation without knowing how it will be handled — the handler decides. Think of it as exceptions you can resume from.
+Effects let you perform an operation without knowing how it will be handled: the handler decides. Think of it as exceptions you can resume from.
 
 ```xs
 -- declare an effect
@@ -1722,7 +1722,7 @@ let result = handle greet() {
 println(result)                  -- Hello, World!
 ```
 
-`resume` returns a value to the `perform` site — execution continues from where it left off.
+`resume` returns a value to the `perform` site: execution continues from where it left off.
 
 ### Effect with Accumulator
 

@@ -1,4 +1,4 @@
-/* xs_bigint.h — arbitrary-precision integers (little-endian limb array) */
+/* xs_bigint.h: arbitrary-precision integers (little-endian limb array) */
 #ifndef XS_BIGINT_H
 #define XS_BIGINT_H
 

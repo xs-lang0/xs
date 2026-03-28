@@ -1,4 +1,4 @@
-/* xs.h — shared types and forward decls */
+/* xs.h: shared types and forward decls */
 #ifndef XS_H
 #define XS_H
 

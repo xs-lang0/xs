@@ -808,7 +808,7 @@ static int detect_dot_type(const char *line, int col) {
     /* Number literal: digit or '.' (float) just before the member dot */
     if (ch >= '0' && ch <= '9') return 'n';
 
-    /* Could be an identifier — no way to know the type without full
+    /* Could be an identifier: no way to know the type without full
      * type inference, so return 0 to offer all methods. */
     return 0;
 }
@@ -900,7 +900,7 @@ static void lsp_handle_completions(int id, const char *json) {
                                 xs_number_methods, "number");
             break;
         default:
-            /* Unknown type — offer all method sets */
+            /* Unknown type: offer all method sets */
             append_method_items(buf, bufsz, &off, &first,
                                 xs_string_methods, "str");
             append_method_items(buf, bufsz, &off, &first,

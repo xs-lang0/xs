@@ -1118,7 +1118,7 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
 
             if (!pat || pat->tag == NODE_PAT_WILD ||
                 (pat->tag == NODE_PAT_IDENT && !arm->guard)) {
-                /* wildcard — always matches */
+                /* wildcard: always matches */
             } else if (pat->tag == NODE_PAT_LIT) {
                 emit_a(c, OP_LOAD_LOCAL, subj_slot);
                 switch (pat->pat_lit.tag) {
@@ -2111,7 +2111,7 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
             emit(c, MAKE_B(OP_CALL, 0, 0, 1));
             if (!want_value) emit(c, MAKE_A(OP_POP, 0, 0));
         } else if (n->use_.path) {
-            /* regular use — treat as no-op in VM for now */
+            /* regular use: treat as no-op in VM for now */
             if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
         } else {
             if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));

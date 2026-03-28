@@ -1,7 +1,7 @@
 {
   "name": "xsl-vscode-ext",
   "displayName": "XSL Support",
-  "description": "Full language support for XS — syntax highlighting, LSP, debugger, and tooling",
+  "description": "Full language support for XS: syntax highlighting, LSP, debugger, and tooling",
   "publisher": "xs",
   "version": "0.4.0",
   "engines": {
