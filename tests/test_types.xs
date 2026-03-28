@@ -157,8 +157,8 @@ assert_eq(pat.source(), "[0-9]+")
 -- regex in match
 fn classify_re(s) {
     return match s {
-        /^[0-9]+$/ => "number"
-        /^[a-zA-Z_]+$/ => "word"
+        /[0-9]+/ => "number"
+        /[a-zA-Z_]+/ => "word"
         _ => "other"
     }
 }
