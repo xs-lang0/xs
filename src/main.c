@@ -377,6 +377,7 @@ static Node *parse_file(const char *path, DiagContext *dctx) {
     Lexer lex; lexer_init(&lex, src, path);
     TokenArray ta = lexer_tokenize(&lex);
     Parser p; parser_init(&p, &ta, path);
+    p.source = src;
     p.diag = dctx;
     Node *prog = parser_parse(&p);
     token_array_free(&ta);

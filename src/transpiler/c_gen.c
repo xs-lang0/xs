@@ -2614,6 +2614,25 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         emit_expr(s, n, depth);
         sb_add(s, ";\n");
         break;
+    case NODE_INLINE_C:
+        sb_indent(s, depth);
+        sb_add(s, "/* inline C */\n");
+        if (n->inline_c.code) sb_add(s, n->inline_c.code);
+        sb_addc(s, '\n');
+        break;
+    case NODE_TAG_DECL:
+        /* Emit as regular function with __block as last param */
+        sb_indent(s, depth);
+        sb_printf(s, "XsValue %s(", n->tag_decl.name ? n->tag_decl.name : "_tag");
+        for (int ti = 0; ti < n->tag_decl.params.len; ti++) {
+            Param *pm = &n->tag_decl.params.items[ti];
+            sb_printf(s, "XsValue %s, ", pm->name ? pm->name : "_");
+        }
+        sb_add(s, "XsValue __block) {\n");
+        if (n->tag_decl.body) emit_stmt(s, n->tag_decl.body, depth + 1);
+        sb_indent(s, depth);
+        sb_add(s, "}\n");
+        break;
     default:
         /* emit as expression statement for any unhandled node */
         sb_indent(s, depth);

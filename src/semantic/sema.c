@@ -187,6 +187,11 @@ static void walk_children(SemaCtx *ctx, Node *n) {
             for (int i = 0; i < n->match.arms.len; i++)
                 walk(ctx, n->match.arms.items[i].body);
             break;
+        case NODE_TAG_DECL:
+            if (n->tag_decl.body) walk(ctx, n->tag_decl.body);
+            break;
+        case NODE_INLINE_C:
+            break;
         default: break;
     }
 }
@@ -390,6 +395,7 @@ static void collect_decls(SemaCtx *ctx, Node *prog) {
         Node *s = prog->program.stmts.items[i];
         if (!s) continue;
         if (s->tag == NODE_FN_DECL     && s->fn_decl.name)     defname_add(s->fn_decl.name);
+        if (s->tag == NODE_TAG_DECL    && s->tag_decl.name)    defname_add(s->tag_decl.name);
         if (s->tag == NODE_STRUCT_DECL  && s->struct_decl.name) defname_add(s->struct_decl.name);
         if (s->tag == NODE_ENUM_DECL    && s->enum_decl.name)   defname_add(s->enum_decl.name);
         if (s->tag == NODE_TRAIT_DECL   && s->trait_decl.name) {

@@ -125,6 +125,12 @@ Value *xs_module(XSMap *m) {
     return v;
 }
 
+Value *xs_overload_new(void) {
+    Value *v = val_alloc(XS_OVERLOAD);
+    v->overload = array_new();
+    return v;
+}
+
 Value *xs_regex(const char *pattern) {
     Value *v = val_alloc(XS_REGEX);
     v->s = xs_strdup(pattern ? pattern : "");
@@ -230,6 +236,9 @@ static void free_value(Value *v) {
                     free(v->inst);
                 }
             }
+            break;
+        case XS_OVERLOAD:
+            if (v->overload) array_free(v->overload);
             break;
         case XS_ACTOR:
             if (v->actor) {
@@ -493,6 +502,18 @@ char *value_repr(Value *v) {
             return xs_strdup(buf);
         case XS_MODULE:
             return xs_strdup("<module>");
+        case XS_OVERLOAD: {
+            if (v->overload && v->overload->len > 0 &&
+                v->overload->items[0]->tag == XS_FUNC &&
+                v->overload->items[0]->fn->name) {
+                snprintf(buf, sizeof(buf), "<overloaded fn %s (%d variants)>",
+                    v->overload->items[0]->fn->name, v->overload->len);
+            } else {
+                snprintf(buf, sizeof(buf), "<overloaded fn (%d variants)>",
+                    v->overload ? v->overload->len : 0);
+            }
+            return xs_strdup(buf);
+        }
 #ifdef XSC_ENABLE_VM
         case XS_CLOSURE: return xs_strdup("<closure>");
 #endif

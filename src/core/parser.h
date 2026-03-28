@@ -15,6 +15,7 @@ typedef struct {
     int         ntokens;
     int         pos;
     const char *filename;
+    const char *source;          /* raw source text for inline C extraction */
     ParseError  error;
     int         had_error;
     int         error_count;     /* total parse errors reported */

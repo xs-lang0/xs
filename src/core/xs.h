@@ -55,6 +55,7 @@ typedef enum {
     XS_ACTOR,
     XS_REGEX,
     XS_MODULE,
+    XS_OVERLOAD,
 #ifdef XSC_ENABLE_VM
     XS_CLOSURE,
 #endif
@@ -174,6 +175,7 @@ struct Value {
         XSRange   *range;
         XSSignal  *signal;
         XSActor   *actor;
+        XSArray   *overload;  /* array of XS_FUNC values for overloaded fns */
 #ifdef XSC_ENABLE_VM
         XSClosure *cl;
 #endif

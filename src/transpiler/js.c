@@ -1722,6 +1722,27 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         emit_expr(s, n, depth);
         sb_add(s, ";\n");
         break;
+    case NODE_INLINE_C:
+        sb_indent(s, depth);
+        sb_add(s, "throw new Error('inline C blocks not supported in JS target');\n");
+        break;
+    case NODE_TAG_DECL:
+        /* Emit as a regular function with __block as last param */
+        sb_indent(s, depth);
+        sb_printf(s, "function %s", n->tag_decl.name ? n->tag_decl.name : "_tag");
+        sb_addc(s, '(');
+        for (int ti = 0; ti < n->tag_decl.params.len; ti++) {
+            if (ti > 0) sb_add(s, ", ");
+            Param *pm = &n->tag_decl.params.items[ti];
+            sb_add(s, pm->name ? pm->name : "_");
+        }
+        if (n->tag_decl.params.len > 0) sb_add(s, ", ");
+        sb_add(s, "__block");
+        sb_add(s, ") {\n");
+        if (n->tag_decl.body) emit_stmt(s, n->tag_decl.body, depth + 1);
+        sb_indent(s, depth);
+        sb_add(s, "}\n");
+        break;
     default:
         /* for any remaining node types, emit as expression statement */
         sb_indent(s, depth);

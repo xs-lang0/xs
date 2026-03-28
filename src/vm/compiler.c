@@ -2119,6 +2119,32 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
         return;
     }
 
+    case NODE_INLINE_C:
+        /* inline C not supported in VM mode */
+        fprintf(stderr, "xs: error: inline C blocks require transpilation, not VM execution\n");
+        if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
+        return;
+
+    case NODE_TAG_DECL: {
+        /* Compile tag as a function with implicit __block param */
+        ParamList augmented = paramlist_new();
+        for (int ti = 0; ti < n->tag_decl.params.len; ti++)
+            paramlist_push(&augmented, n->tag_decl.params.items[ti]);
+        Param block_param = {0};
+        block_param.name = "__block";
+        Node *bp = node_new(NODE_PAT_IDENT, n->span);
+        bp->pat_ident.name = xs_strdup("__block");
+        bp->pat_ident.mutable = 0;
+        block_param.pattern = bp;
+        paramlist_push(&augmented, block_param);
+        int idx = compile_fn(c, n->tag_decl.name, &augmented, n->tag_decl.body);
+        (void)idx;
+        emit_make_closure(c, idx);
+        if (want_value) emit(c, MAKE_A(OP_DUP, 0, 0));
+        compile_name_store(c, n->tag_decl.name);
+        return;
+    }
+
     default:
         fprintf(stderr, "unhandled node tag %d\n", (int)n->tag);
         if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));

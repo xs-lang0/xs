@@ -124,10 +124,12 @@ void parser_init(Parser *p, TokenArray *ta, const char *filename) {
     p->ntokens     = ta->len;
     p->pos         = 0;
     p->filename    = filename ? filename : "<stdin>";
+    p->source      = NULL;
     p->had_error   = 0;
     p->error_count = 0;
     p->max_errors  = 10;
     p->panic_mode  = 0;
+    p->no_arrow_lambda = 0;
     p->diag        = NULL;
     memset(&p->error, 0, sizeof(p->error));
 }
@@ -1232,7 +1234,7 @@ static Node *parse_postfix(Parser *p, Node *left) {
             continue;
         }
 
-        /* Call: expr(args) */
+        /* Call: expr(args) with optional trailing block */
         if (tok->kind == TK_LPAREN) {
             if (tok->span.line > left->span.end_line) break;
             pp_advance(p);
@@ -1240,6 +1242,8 @@ static Node *parse_postfix(Parser *p, Node *left) {
             NodePairList kwargs = nodepairlist_new();
             parse_call_args(p, &args, &kwargs);
             pp_expect(p, TK_RPAREN, "expected ')'");
+            /* Note: trailing block syntax is handled at the statement level, not here,
+               to avoid conflicts with for/if/while bodies */
             Node *n = node_new(NODE_CALL, tok->span);
             n->call.callee = left;
             n->call.args   = args;
@@ -3501,6 +3505,15 @@ static Node *parse_stmt(Parser *p) {
                 synchronize(p);
             } else {
                 val = parse_expr(p, 0);
+                /* trailing block for let x = call(args) { block } */
+                if (val && val->tag == NODE_CALL && pp_check(p, TK_LBRACE)) {
+                    Node *block = parse_block(p);
+                    Node *lambda = node_new(NODE_LAMBDA, block->span);
+                    lambda->lambda.params = paramlist_new();
+                    lambda->lambda.body = block;
+                    lambda->lambda.is_generator = 0;
+                    nodelist_push(&val->call.args, lambda);
+                }
             }
         }
         pp_match(p, TK_SEMICOLON);
@@ -3629,6 +3642,69 @@ static Node *parse_stmt(Parser *p) {
         return n;
     }
 
+    /* inline c { raw_code } */
+    if (tok->kind == TK_INLINE) {
+        pp_advance(p); /* consume 'inline' */
+        Token *lang = pp_peek(p, 0);
+        if (lang->kind != TK_IDENT || !lang->sval || strcmp(lang->sval, "c") != 0) {
+            parse_error_at(p, lang->span, "P0001", "expected 'c' after 'inline'");
+            return node_new(NODE_LIT_NULL, span);
+        }
+        pp_advance(p); /* consume 'c' */
+        Token *ob = pp_expect(p, TK_LBRACE, "expected '{' after 'inline c'");
+        (void)ob;
+        /* Capture raw text between braces by scanning tokens and reconstructing from source */
+        int brace_depth = 1;
+        int start_offset = pp_peek(p, 0)->span.offset;
+        int end_offset = start_offset;
+        while (!pp_at_end(p) && brace_depth > 0) {
+            Token *t = pp_peek(p, 0);
+            if (t->kind == TK_LBRACE) brace_depth++;
+            else if (t->kind == TK_RBRACE) {
+                brace_depth--;
+                if (brace_depth == 0) {
+                    end_offset = t->span.offset;
+                    pp_advance(p); /* consume closing } */
+                    break;
+                }
+            }
+            pp_advance(p);
+        }
+        /* Extract raw source text */
+        int code_len = end_offset - start_offset;
+        char *code = NULL;
+        if (code_len > 0 && p->source) {
+            code = xs_strndup(p->source + start_offset, code_len);
+        } else {
+            code = xs_strdup("");
+        }
+        Node *n = node_new(NODE_INLINE_C, span);
+        n->inline_c.code = code;
+        return n;
+    }
+
+    /* tag name(params) { body } - user-defined control structures */
+    if (tok->kind == TK_TAG) {
+        pp_advance(p); /* consume 'tag' */
+        Token *name_tok2 = pp_expect(p, TK_IDENT, "expected tag name");
+        char *tname = xs_strdup(name_tok2->sval ? name_tok2->sval : "");
+        ParamList params = {NULL, 0, 0};
+        if (pp_match(p, TK_LPAREN)) {
+            params = parse_params(p);
+            pp_expect(p, TK_RPAREN, "expected ')'");
+        }
+        Node *body = NULL;
+        if (pp_check(p, TK_LBRACE)) {
+            body = parse_block(p);
+        }
+        Node *n = node_new(NODE_TAG_DECL, span);
+        n->tag_decl.name   = tname;
+        n->tag_decl.params = params;
+        n->tag_decl.body   = body;
+        n->tag_decl.is_pub = is_pub;
+        return n;
+    }
+
     /* Labeled loop: ident: for/while/loop */
     if (tok->kind == TK_IDENT && pp_peek(p, 1)->kind == TK_COLON) {
         Token *next2 = pp_peek(p, 2);
@@ -3697,6 +3773,16 @@ static Node *parse_stmt(Parser *p) {
 
     /* Expression statement */
     Node *expr = parse_expr(p, 0);
+    /* Trailing block: call(args) { block } -> call(args, || { block })
+       Only at statement level to avoid conflicts with for/if/while */
+    if (expr->tag == NODE_CALL && pp_check(p, TK_LBRACE)) {
+        Node *block = parse_block(p);
+        Node *lambda = node_new(NODE_LAMBDA, block->span);
+        lambda->lambda.params = paramlist_new();
+        lambda->lambda.body = block;
+        lambda->lambda.is_generator = 0;
+        nodelist_push(&expr->call.args, lambda);
+    }
     int has_semi = (pp_match(p, TK_SEMICOLON) != NULL);
     /* Return/Break/Continue/Throw are their own stmt types */
     if (expr->tag == NODE_RETURN || expr->tag == NODE_BREAK ||
