@@ -10,10 +10,9 @@
 #ifdef XSC_ENABLE_TRACER
 #include "tracer/tracer.h"
 #endif
-#ifdef __MINGW32__
-#  include "core/xs_regex.h"
-#else
-#  include <regex.h>
+/* use bundled regex engine everywhere for consistent cross-platform behavior */
+#ifndef XS_REGEX_H
+#include "core/xs_regex.h"
 #endif
 #include <stdio.h>
 #include <stdlib.h>
@@ -917,27 +916,15 @@ static int match_pattern(Interp *i, Node *pat, Value *val, Env *env) {
     }
     case NODE_PAT_REGEX: {
         if (val->tag != XS_STR || !pat->pat_regex.pattern) return 0;
-        /* auto-anchor: wrap pattern with ^(...)$ for full-string match in match arms */
-        const char *src = pat->pat_regex.pattern;
-        size_t slen = strlen(src);
-        int has_start = (slen > 0 && src[0] == '^');
-        int has_end   = (slen > 0 && src[slen-1] == '$');
-        char *anchored;
-        if (has_start && has_end) {
-            anchored = xs_strdup(src);
-        } else {
-            anchored = xs_malloc(slen + 4);
-            int pos = 0;
-            if (!has_start) anchored[pos++] = '^';
-            memcpy(anchored + pos, src, slen); pos += (int)slen;
-            if (!has_end) anchored[pos++] = '$';
-            anchored[pos] = '\0';
-        }
+        /* full-string match: run regex, check that match covers entire string */
         regex_t re;
-        int rc = regcomp(&re, anchored, REG_EXTENDED | REG_NOSUB);
-        free(anchored);
+        int rc = regcomp(&re, pat->pat_regex.pattern, REG_EXTENDED);
         if (rc != 0) return 0;
-        int ok = (regexec(&re, val->s, 0, NULL, 0) == 0);
+        regmatch_t m;
+        int ok = 0;
+        if (regexec(&re, val->s, 1, &m, 0) == 0) {
+            ok = (m.rm_so == 0 && m.rm_eo == (int)strlen(val->s));
+        }
         regfree(&re);
         return ok;
     }
