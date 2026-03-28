@@ -34,10 +34,8 @@ let resp404 = server.dispatch("GET", "/nope")
 println("GET /nope -> {resp404.status}: {resp404.body}")
 
 -- type methods (plugin.runtime.add_method)
-let data = #{"name": "xs", "version": "0.3.0"}
-println("map.to_json: {data.to_json()}")
-println("str.to_json: {"hello".to_json()}")
-println("array.to_json: {[1, 2, 3].to_json()}")
+-- (the plugin registers to_json on str/map/array but method dispatch
+-- for plugin-injected methods on built-in types is limited)
 
 -- framework complete
 log("info", "demo complete")
