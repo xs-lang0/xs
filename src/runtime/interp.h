@@ -69,6 +69,9 @@ struct Interp {
     int          call_stack_cap;
     DiagContext  *diag;
 
+    /* tracer */
+    void        *tracer;  /* XSTracer*, or NULL if not recording */
+
     /* phase 2: source kept alive for plugin re-parse */
     const char  *source;
     int          needs_reparse;

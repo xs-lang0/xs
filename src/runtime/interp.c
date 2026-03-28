@@ -7,6 +7,9 @@
 #include "core/parser.h"
 #include "core/xs_bigint.h"
 #include "core/xs_utils.h"
+#ifdef XSC_ENABLE_TRACER
+#include "tracer/tracer.h"
+#endif
 #ifdef __MINGW32__
 #  include "core/xs_regex.h"
 #else
@@ -25,6 +28,19 @@
 #include <sys/stat.h>
 
 Interp *g_current_interp = NULL;
+
+#ifdef XSC_ENABLE_TRACER
+#define TRACE_CALL(i, name, line) \
+    do { if ((i)->tracer) tracer_record_call((XSTracer*)(i)->tracer, name, line); } while(0)
+#define TRACE_RETURN(i, name, val) \
+    do { if ((i)->tracer) tracer_record_return((XSTracer*)(i)->tracer, name, val); } while(0)
+#define TRACE_STORE(i, name, val) \
+    do { if ((i)->tracer) tracer_record_store((XSTracer*)(i)->tracer, name, val); } while(0)
+#else
+#define TRACE_CALL(i, name, line)   ((void)0)
+#define TRACE_RETURN(i, name, val)  ((void)0)
+#define TRACE_STORE(i, name, val)   ((void)0)
+#endif
 
 /* forward decl for plugin system */
 Value *call_value(Interp *i, Value *callee, Value **args, int argc,
@@ -935,10 +951,12 @@ Value *call_value(Interp *i, Value *callee, Value **args, int argc,
     const char *frame_name = call_site;
     if (!frame_name && callee->tag == XS_FUNC && callee->fn->name)
         frame_name = callee->fn->name;
+    TRACE_CALL(i, frame_name ? frame_name : "<call>", i->current_span.line);
     interp_push_frame(i, frame_name, i->current_span);
 
     if (callee->tag == XS_NATIVE) {
         Value *result = callee->native(i, args, argc);
+        TRACE_RETURN(i, frame_name ? frame_name : "<call>", result);
         interp_pop_frame(i);
         return result ? result : value_incref(XS_NULL_VAL);
     }
@@ -1181,6 +1199,7 @@ tail_call_entry: ;
             i->cf.value = xs_str("type error");
         }
 
+        TRACE_RETURN(i, fn->name ? fn->name : "<fn>", result);
         env_decref(i->env);
         i->env = saved_env;
         i->depth--;
@@ -4537,6 +4556,7 @@ Value *interp_eval(Interp *i, Node *n) {
         }
 
         if (target->tag == NODE_IDENT) {
+            TRACE_STORE(i, target->ident.name, result);
             int r = env_set(i->env, target->ident.name, result);
             if (r == -1) {
                 env_define(i->env, target->ident.name, result, 1);
@@ -7458,6 +7478,7 @@ void interp_exec(Interp *i, Node *stmt) {
         int mutable = (stmt->tag == NODE_VAR) || stmt->let.mutable;
         if (stmt->let.name) {
             env_define(i->env, stmt->let.name, val, mutable);
+            TRACE_STORE(i, stmt->let.name, val);
         } else if (stmt->let.pattern) {
             bind_pattern(i, stmt->let.pattern, val, i->env, mutable);
         }

@@ -416,6 +416,7 @@ static void usage(void) {
         "  explain <code>                Explain an error code\n"
         "\n"
         "Flags (can appear before or after the filename):\n"
+        "  --record <file.xst>  Record execution trace\n"
         "  --vm                 Use bytecode VM backend\n"
         "  --jit                Use JIT backend (x86-64)\n"
         "  --check              Type-check only, don't run\n"
@@ -838,8 +839,19 @@ int main(int argc, char **argv) {
                                 "Disable ANSI color codes in all output.\n"
                                 "Useful for piping output or terminals without color support.\n")
                 H("--record",   "Flag: --record <file.xst>\n\n"
-                                "Record an execution trace to a file.\n"
-                                "Replay later with: xs replay <file.xst>\n")
+                                "Record an execution trace to a binary .xst file.\n"
+                                "Traces function calls, returns, and variable stores.\n\n"
+                                "Usage:\n"
+                                "  xs --record trace.xst script.xs\n"
+                                "  xs script.xs --record trace.xst\n\n"
+                                "Options:\n"
+                                "  --trace-deep    Serialize complex values (arrays, maps) as JSON\n\n"
+                                "Replay:\n"
+                                "  xs replay trace.xst\n\n"
+                                "The trace file uses a binary format (header: XST1).\n"
+                                "Events: CALL (function entry), RETURN (function exit),\n"
+                                "        STORE (variable assignment). Each event has a\n"
+                                "        nanosecond timestamp relative to program start.\n")
                 H("--plugin",   "Flag: --plugin <path.so>\n\n"
                                 "Load a native plugin (.so/.dll) before execution.\n"
                                 "The plugin must export xs_plugin_init().\n")
@@ -2117,6 +2129,7 @@ run_file:;
 #ifdef XSC_ENABLE_TRACER
         XSTracer *tracer = record_path ? tracer_new(record_path) : NULL;
         if (tracer && trace_deep) tracer_set_deep(tracer, 1);
+        interp->tracer = tracer;
 #endif
 #ifdef XSC_ENABLE_COVERAGE
         interp->coverage = cov;
