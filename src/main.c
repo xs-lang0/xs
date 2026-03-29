@@ -754,9 +754,9 @@ int main(int argc, char **argv) {
                                "  <name>/.gitignore          Git ignore rules\n")
                 H("install",   "Usage: xs install [pkg]\n\n"
                                "Install dependencies from xs.toml, or a specific package.\n"
-                               "Packages are installed to xs_modules/.\n")
+                               "Packages are installed to xs_lib/.\n")
                 H("remove",    "Usage: xs remove <pkg>\n\n"
-                               "Remove an installed package from xs_modules/.\n")
+                               "Remove an installed package from xs_lib/.\n")
                 H("update",    "Usage: xs update [pkg]\n\n"
                                "Update all dependencies or a specific package to latest version.\n")
                 H("publish",   "Usage: xs publish\n\n"
@@ -1565,7 +1565,7 @@ int main(int argc, char **argv) {
                 snprintf(pathbuf, sizeof pathbuf, "%s/.gitignore", pname);
                 f = fopen(pathbuf, "w");
                 if (!f) { fprintf(stderr, "xs new: cannot write '%s'\n", pathbuf); return 1; }
-                fprintf(f, "xs_modules/\n*.xsc\n.xs_cache/\nbuild/\n");
+                fprintf(f, "xs_lib/\n*.xsc\n.xs_cache/\nbuild/\n");
                 fclose(f);
                 snprintf(pathbuf, sizeof pathbuf, "%s/tests", pname);
                 mkdir(pathbuf, 0755);

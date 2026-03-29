@@ -470,7 +470,7 @@ xs install              # install all from xs.toml
 xs install http-client  # install a specific package
 ```
 
-Packages are installed to `xs_modules/`.
+Packages are installed to `xs_lib/`.
 
 ### `xs remove <pkg>`
 

@@ -217,7 +217,7 @@ int pkg_new(const char *name) {
 
     snprintf(pathbuf, sizeof pathbuf, "%s/.gitignore", name);
     if (write_file(pathbuf,
-        "xs_modules/\n"
+        "xs_lib/\n"
         "*.xsc\n"
         ".xs_cache/\n")) return 1;
 
@@ -259,9 +259,9 @@ int pkg_install(const char *package_name) {
                         val++;
                     }
                     if (strlen(line) > 0) {
-                        mkdir("xs_modules", 0755);
+                        mkdir("xs_lib", 0755);
                         char dirpath[2048];
-                        snprintf(dirpath, sizeof(dirpath), "xs_modules/%s", line);
+                        snprintf(dirpath, sizeof(dirpath), "xs_lib/%s", line);
                         if (strncmp(val, "file://", 7) == 0) {
                             const char *src = val + 7;
                             if (is_directory(src)) {
@@ -306,7 +306,7 @@ int pkg_install(const char *package_name) {
         return 0;
     }
 
-    mkdir("xs_modules", 0755);
+    mkdir("xs_lib", 0755);
 
     const char *pkg_name = package_name;
     const char *source = package_name;
@@ -328,7 +328,7 @@ int pkg_install(const char *package_name) {
     }
 
     char dirpath[1024];
-    snprintf(dirpath, sizeof(dirpath), "xs_modules/%s", pkg_name);
+    snprintf(dirpath, sizeof(dirpath), "xs_lib/%s", pkg_name);
 
     if (is_local) {
         if (!is_directory(source)) {
@@ -420,7 +420,7 @@ int pkg_remove(const char *package_name) {
         return 1;
     }
     char dirpath[1024];
-    snprintf(dirpath, sizeof(dirpath), "xs_modules/%s", package_name);
+    snprintf(dirpath, sizeof(dirpath), "xs_lib/%s", package_name);
 
     if (!is_directory(dirpath)) {
         fprintf(stderr, "xs remove: package '%s' not installed\n", package_name);
@@ -436,9 +436,9 @@ int pkg_remove(const char *package_name) {
 
 /* xs update */
 int pkg_update(const char *package_name) {
-    DIR *d = opendir("xs_modules");
+    DIR *d = opendir("xs_lib");
     if (!d) {
-        printf("no xs_modules/ directory found: nothing to update\n");
+        printf("no xs_lib/ directory found: nothing to update\n");
         return 0;
     }
 
@@ -450,7 +450,7 @@ int pkg_update(const char *package_name) {
         if (ent->d_name[0] == '.') continue;
 
         char fullpath[1024];
-        snprintf(fullpath, sizeof(fullpath), "xs_modules/%s", ent->d_name);
+        snprintf(fullpath, sizeof(fullpath), "xs_lib/%s", ent->d_name);
         if (!is_directory(fullpath)) continue;
 
         if (package_name && strcmp(ent->d_name, package_name) != 0) continue;
@@ -508,9 +508,9 @@ int pkg_update(const char *package_name) {
 }
 
 int pkg_list(void) {
-    DIR *d = opendir("xs_modules");
+    DIR *d = opendir("xs_lib");
     if (!d) {
-        printf("no xs_modules/ directory found\n");
+        printf("no xs_lib/ directory found\n");
         return 0;
     }
     struct dirent *ent;
@@ -518,7 +518,7 @@ int pkg_list(void) {
     while ((ent = readdir(d)) != NULL) {
         if (ent->d_name[0] == '.') continue;
         char fullpath[1024];
-        snprintf(fullpath, sizeof(fullpath), "xs_modules/%s", ent->d_name);
+        snprintf(fullpath, sizeof(fullpath), "xs_lib/%s", ent->d_name);
         DIR *sub = opendir(fullpath);
         if (sub) {
             closedir(sub);
