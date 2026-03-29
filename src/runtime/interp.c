@@ -5953,20 +5953,20 @@ static Value *try_load_xs_module(Interp *i, const char *modname) {
     char path[2048];
     struct stat st;
 
-    /* try xs_modules/<name>/main.xs */
-    snprintf(path, sizeof(path), "xs_modules/%s/main.xs", modname);
+    /* try xs_lib/<name>/main.xs */
+    snprintf(path, sizeof(path), "xs_lib/%s/main.xs", modname);
     if (stat(path, &st) == 0) return load_xs_module_file(i, path);
 
-    /* try xs_modules/<name>/lib.xs */
-    snprintf(path, sizeof(path), "xs_modules/%s/lib.xs", modname);
+    /* try xs_lib/<name>/lib.xs */
+    snprintf(path, sizeof(path), "xs_lib/%s/lib.xs", modname);
     if (stat(path, &st) == 0) return load_xs_module_file(i, path);
 
-    /* try xs_modules/<name>/src/lib.xs */
-    snprintf(path, sizeof(path), "xs_modules/%s/src/lib.xs", modname);
+    /* try xs_lib/<name>/src/lib.xs */
+    snprintf(path, sizeof(path), "xs_lib/%s/src/lib.xs", modname);
     if (stat(path, &st) == 0) return load_xs_module_file(i, path);
 
-    /* try xs_modules/<name>/<name>.xs */
-    snprintf(path, sizeof(path), "xs_modules/%s/%s.xs", modname, modname);
+    /* try xs_lib/<name>/<name>.xs */
+    snprintf(path, sizeof(path), "xs_lib/%s/%s.xs", modname, modname);
     if (stat(path, &st) == 0) return load_xs_module_file(i, path);
 
     return NULL;
