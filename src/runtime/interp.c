@@ -28,6 +28,24 @@
 
 Interp *g_current_interp = NULL;
 
+/* reactive bind dependency tracking */
+static char **g_dep_track_names = NULL;
+static int g_dep_track_len = 0, g_dep_track_cap = 0;
+static int g_dep_tracking = 0;
+
+static void dep_track_add(const char *name) {
+    if (!g_dep_tracking) return;
+    /* avoid duplicates */
+    for (int i = 0; i < g_dep_track_len; i++)
+        if (strcmp(g_dep_track_names[i], name) == 0) return;
+    if (g_dep_track_len >= g_dep_track_cap) {
+        g_dep_track_cap = g_dep_track_cap ? g_dep_track_cap * 2 : 8;
+        g_dep_track_names = xs_realloc(g_dep_track_names,
+            g_dep_track_cap * sizeof(char*));
+    }
+    g_dep_track_names[g_dep_track_len++] = xs_strdup(name);
+}
+
 #ifdef XSC_ENABLE_TRACER
 #define TRACE_CALL(i, name, line) \
     do { if ((i)->tracer) tracer_record_call((XSTracer*)(i)->tracer, name, line); } while(0)
@@ -1122,6 +1140,28 @@ tail_call_entry: ;
                     break;
                 }
                 arg_idx2++;
+            }
+        }
+
+        /* check where contracts on parameters */
+        if (fn->param_contracts && !i->cf.signal) {
+            for (int j = 0; j < fn->nparams; j++) {
+                if (!fn->param_contracts[j]) continue;
+                Env *saved_pc = i->env;
+                i->env = call_env;
+                Value *check = interp_eval(i, fn->param_contracts[j]);
+                i->env = saved_pc;
+                if (!value_truthy(check)) {
+                    value_decref(check);
+                    char msg[512];
+                    snprintf(msg, sizeof msg,
+                        "contract violation: parameter %d of '%s' does not satisfy 'where' constraint",
+                        j + 1, fn->name ? fn->name : "<anonymous>");
+                    i->cf.signal = CF_THROW;
+                    i->cf.value = xs_str(msg);
+                    break;
+                }
+                value_decref(check);
             }
         }
 
@@ -4521,6 +4561,7 @@ Value *interp_eval(Interp *i, Node *n) {
     }
 
     case NODE_IDENT: {
+        dep_track_add(n->ident.name);
         Value *v = env_get(i->env, n->ident.name);
         if (!v) {
             const char *suggestion = find_similar_name(i->env, n->ident.name);
@@ -6229,6 +6270,8 @@ static const char *node_tag_to_string(NodeTag tag) {
     case NODE_SPREAD:     return "spread";
     case NODE_STRUCT_INIT:return "struct_init";
     case NODE_EXPR_STMT:  return "expr_stmt";
+    case NODE_BIND:       return "bind";
+    case NODE_ADAPT_FN:   return "adapt_fn";
     default:              return "unknown";
     }
 }
@@ -6272,6 +6315,8 @@ static int node_tag_from_string(const char *s) {
     if (strcmp(s, "spread") == 0) return NODE_SPREAD;
     if (strcmp(s, "struct_init") == 0) return NODE_STRUCT_INIT;
     if (strcmp(s, "expr_stmt") == 0) return NODE_EXPR_STMT;
+    if (strcmp(s, "bind") == 0) return NODE_BIND;
+    if (strcmp(s, "adapt_fn") == 0) return NODE_ADAPT_FN;
     return -1;
 }
 
@@ -7582,6 +7627,28 @@ void interp_exec(Interp *i, Node *stmt) {
                 i->cf.value = xs_str("type error");
             }
         }
+        /* check where contract before defining */
+        if (stmt->let.contract && !i->cf.signal) {
+            Env *cenv = env_new(i->env);
+            env_define(cenv, stmt->let.name ? stmt->let.name : "_", val, 0);
+            Env *saved = i->env;
+            i->env = cenv;
+            Value *check = EVAL(i, stmt->let.contract);
+            i->env = saved;
+            int passed = value_truthy(check);
+            value_decref(check);
+            env_decref(cenv);
+            if (!passed) {
+                char *vs = value_repr(val);
+                char msg[512];
+                snprintf(msg, sizeof msg,
+                    "contract violation: value %s does not satisfy 'where' constraint for '%s'",
+                    vs, stmt->let.name ? stmt->let.name : "<pattern>");
+                free(vs);
+                i->cf.signal = CF_THROW;
+                i->cf.value = xs_str(msg);
+            }
+        }
         int mutable = (stmt->tag == NODE_VAR) || stmt->let.mutable;
         if (stmt->let.name) {
             env_define(i->env, stmt->let.name, val, mutable);
@@ -7602,6 +7669,28 @@ void interp_exec(Interp *i, Node *stmt) {
                     typeexpr_str(stmt->const_.type_ann), value_type_str(val));
                 i->cf.signal = CF_PANIC;
                 i->cf.value = xs_str("type error");
+            }
+        }
+        /* check where contract before defining */
+        if (stmt->const_.contract && !i->cf.signal) {
+            Env *cenv = env_new(i->env);
+            env_define(cenv, stmt->const_.name, val, 0);
+            Env *saved = i->env;
+            i->env = cenv;
+            Value *check = EVAL(i, stmt->const_.contract);
+            i->env = saved;
+            int passed = value_truthy(check);
+            value_decref(check);
+            env_decref(cenv);
+            if (!passed) {
+                char *vs = value_repr(val);
+                char msg[512];
+                snprintf(msg, sizeof msg,
+                    "contract violation: value %s does not satisfy 'where' constraint for '%s'",
+                    vs, stmt->const_.name);
+                free(vs);
+                i->cf.signal = CF_THROW;
+                i->cf.value = xs_str(msg);
             }
         }
         env_define(i->env, stmt->const_.name, val, 0);
@@ -7636,10 +7725,18 @@ void interp_exec(Interp *i, Node *stmt) {
             fn->deprecated_msg = xs_strdup(stmt->fn_decl.deprecated_msg);
         if (nparams > 0) {
             fn->param_type_names = xs_calloc(nparams, sizeof(char*));
+            int has_contracts = 0;
             for (int j = 0; j < nparams; j++) {
                 Param *pm = &stmt->fn_decl.params.items[j];
                 if (pm->type_ann && pm->type_ann->name)
                     fn->param_type_names[j] = xs_strdup(pm->type_ann->name);
+                if (pm->contract) has_contracts = 1;
+            }
+            if (has_contracts) {
+                fn->param_contracts = xs_calloc(nparams, sizeof(Node*));
+                for (int j = 0; j < nparams; j++) {
+                    fn->param_contracts[j] = stmt->fn_decl.params.items[j].contract;
+                }
             }
         }
         if (stmt->fn_decl.ret_type && stmt->fn_decl.ret_type->name)
@@ -8278,6 +8375,42 @@ void interp_exec(Interp *i, Node *stmt) {
         break;
     }
 
+    case NODE_BIND: {
+        /* reactive binding: bind name = expr */
+        /* start tracking deps */
+        int saved_tracking = g_dep_tracking;
+        char **saved_names = g_dep_track_names;
+        int saved_len = g_dep_track_len;
+        int saved_cap = g_dep_track_cap;
+        g_dep_tracking = 1;
+        g_dep_track_names = NULL;
+        g_dep_track_len = 0;
+        g_dep_track_cap = 0;
+
+        /* evaluate the expression */
+        Value *val = EVAL(i, stmt->bind_decl.expr);
+
+        /* capture deps */
+        char **deps = g_dep_track_names;
+        int ndeps = g_dep_track_len;
+
+        /* restore tracking state */
+        g_dep_tracking = saved_tracking;
+        g_dep_track_names = saved_names;
+        g_dep_track_len = saved_len;
+        g_dep_track_cap = saved_cap;
+
+        /* define as mutable var so reactive updates can overwrite */
+        env_define(i->env, stmt->bind_decl.name, val, 1);
+        value_decref(val);
+
+        /* register reactive binding */
+        env_set_reactive_interp(i);
+        env_add_reactive(i->env, stmt->bind_decl.name, stmt->bind_decl.expr,
+                         i->env, deps, ndeps);
+        break;
+    }
+
     case NODE_TAG_DECL: {
         /* Desugar: tag name(params) { body } -> fn name(params, __block) { body }
            where yield inside body calls __block() */
@@ -8311,6 +8444,58 @@ void interp_exec(Interp *i, Node *stmt) {
         Value *v = xs_func_new(fn);
         if (stmt->tag_decl.name)
             env_define(i->env, stmt->tag_decl.name, v, 1);
+        value_decref(v);
+        break;
+    }
+
+    case NODE_ADAPT_FN: {
+        /* Select the "native" branch, or first branch as fallback */
+        int sel = 0;
+        for (int j = 0; j < stmt->adapt_fn.nbranches; j++) {
+            if (strcmp(stmt->adapt_fn.targets[j], "native") == 0) { sel = j; break; }
+        }
+        if (stmt->adapt_fn.nbranches == 0) break;
+        Node *body = stmt->adapt_fn.bodies[sel];
+        int nparams = stmt->adapt_fn.params.len;
+        Node **params = nparams ? xs_malloc(nparams * sizeof(Node*)) : NULL;
+        Node **defaults = nparams ? xs_calloc(nparams, sizeof(Node*)) : NULL;
+        int *varflags = nparams ? xs_calloc(nparams, sizeof(int)) : NULL;
+        for (int j = 0; j < nparams; j++) {
+            Param *pm = &stmt->adapt_fn.params.items[j];
+            if (pm->pattern) {
+                params[j] = pm->pattern;
+            } else {
+                Node *pn = node_new(NODE_PAT_IDENT, pm->span);
+                pn->pat_ident.name = xs_strdup(pm->name ? pm->name : "_");
+                pn->pat_ident.mutable = 0;
+                params[j] = pn;
+            }
+            defaults[j] = pm->default_val;
+            varflags[j] = pm->variadic;
+        }
+        XSFunc *fn = func_new_ex(stmt->adapt_fn.name, params, nparams,
+                                 body, i->env, defaults, varflags);
+        if (nparams > 0) {
+            fn->param_type_names = xs_calloc(nparams, sizeof(char*));
+            int has_contracts = 0;
+            for (int j = 0; j < nparams; j++) {
+                Param *pm = &stmt->adapt_fn.params.items[j];
+                if (pm->type_ann && pm->type_ann->name)
+                    fn->param_type_names[j] = xs_strdup(pm->type_ann->name);
+                if (pm->contract) has_contracts = 1;
+            }
+            if (has_contracts) {
+                fn->param_contracts = xs_calloc(nparams, sizeof(Node*));
+                for (int j = 0; j < nparams; j++) {
+                    fn->param_contracts[j] = stmt->adapt_fn.params.items[j].contract;
+                }
+            }
+        }
+        if (stmt->adapt_fn.ret_type && stmt->adapt_fn.ret_type->name)
+            fn->ret_type_name = xs_strdup(stmt->adapt_fn.ret_type->name);
+        Value *v = xs_func_new(fn);
+        if (stmt->adapt_fn.name)
+            env_define(i->env, stmt->adapt_fn.name, v, 1);
         value_decref(v);
         break;
     }
@@ -8352,6 +8537,24 @@ static void hoist_functions(Interp *i, NodeList *stmts) {
         fn->is_async     = stmt->fn_decl.is_async;
         if (stmt->fn_decl.deprecated_msg)
             fn->deprecated_msg = xs_strdup(stmt->fn_decl.deprecated_msg);
+        if (nparams > 0) {
+            fn->param_type_names = xs_calloc(nparams, sizeof(char*));
+            int has_contracts = 0;
+            for (int k2 = 0; k2 < nparams; k2++) {
+                Param *pm2 = &stmt->fn_decl.params.items[k2];
+                if (pm2->type_ann && pm2->type_ann->name)
+                    fn->param_type_names[k2] = xs_strdup(pm2->type_ann->name);
+                if (pm2->contract) has_contracts = 1;
+            }
+            if (has_contracts) {
+                fn->param_contracts = xs_calloc(nparams, sizeof(Node*));
+                for (int k2 = 0; k2 < nparams; k2++) {
+                    fn->param_contracts[k2] = stmt->fn_decl.params.items[k2].contract;
+                }
+            }
+        }
+        if (stmt->fn_decl.ret_type && stmt->fn_decl.ret_type->name)
+            fn->ret_type_name = xs_strdup(stmt->fn_decl.ret_type->name);
         Value *v = xs_func_new(fn);
         env_define(i->env, stmt->fn_decl.name, v, 1);
         value_decref(v);

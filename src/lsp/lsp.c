@@ -43,7 +43,7 @@ static const char *xs_keywords[] = {
     "module", "class", "type", "as", "from",
     "effect", "perform", "handle", "resume",
     "spawn", "nursery", "macro",
-    "tag", "inline", "actor", "unsafe",
+    "tag", "inline", "actor", "unsafe", "bind",
     NULL
 };
 
@@ -174,6 +174,15 @@ static void collect_idents(LspDocument *doc, Node *n) {
     case NODE_TAG_DECL:
         if (n->tag_decl.name) doc_add_ident(doc, n->tag_decl.name);
         if (n->tag_decl.body) collect_idents(doc, n->tag_decl.body);
+        break;
+    case NODE_BIND:
+        if (n->bind_decl.name) doc_add_ident(doc, n->bind_decl.name);
+        if (n->bind_decl.expr) collect_idents(doc, n->bind_decl.expr);
+        break;
+    case NODE_ADAPT_FN:
+        if (n->adapt_fn.name) doc_add_ident(doc, n->adapt_fn.name);
+        for (int i = 0; i < n->adapt_fn.nbranches; i++)
+            if (n->adapt_fn.bodies[i]) collect_idents(doc, n->adapt_fn.bodies[i]);
         break;
     case NODE_PROGRAM:
         for (int i = 0; i < n->program.stmts.len; i++)
@@ -575,6 +584,8 @@ static const char *node_tag_name(NodeTag tag) {
     case NODE_MODULE_DECL: return "module";
     case NODE_IMPL_DECL:   return "impl block";
     case NODE_TAG_DECL:    return "tag";
+    case NODE_BIND:        return "bind";
+    case NODE_ADAPT_FN:    return "adapt fn";
     case NODE_LAMBDA:      return "lambda";
     default:               return NULL;
     }
@@ -606,6 +617,12 @@ static Node *find_decl_in_ast(Node *n, const char *name) {
     case NODE_TAG_DECL:
         if (n->tag_decl.name && strcmp(n->tag_decl.name, name) == 0) return n;
         return find_decl_in_ast(n->tag_decl.body, name);
+    case NODE_BIND:
+        if (n->bind_decl.name && strcmp(n->bind_decl.name, name) == 0) return n;
+        return NULL;
+    case NODE_ADAPT_FN:
+        if (n->adapt_fn.name && strcmp(n->adapt_fn.name, name) == 0) return n;
+        return NULL;
     case NODE_MODULE_DECL:
         if (n->module_decl.name && strcmp(n->module_decl.name, name) == 0) return n;
         for (int i = 0; i < n->module_decl.body.len; i++) {
@@ -709,6 +726,21 @@ static void build_hover_text(Node *decl, const char *name, char *out, size_t out
                             pm->name ? pm->name : "_");
         }
         snprintf(out + off, outsz - (size_t)off, ") { ... }");
+        break;
+    }
+    case NODE_BIND:
+        snprintf(out, outsz, "bind %s = <expr>", name);
+        break;
+    case NODE_ADAPT_FN: {
+        int off = 0;
+        off += snprintf(out + off, outsz - (size_t)off, "adapt fn %s(", name);
+        for (int i = 0; i < decl->adapt_fn.params.len; i++) {
+            if (i > 0) off += snprintf(out + off, outsz - (size_t)off, ", ");
+            Param *pm = &decl->adapt_fn.params.items[i];
+            off += snprintf(out + off, outsz - (size_t)off, "%s",
+                            pm->name ? pm->name : "_");
+        }
+        snprintf(out + off, outsz - (size_t)off, ") { %d target(s) }", decl->adapt_fn.nbranches);
         break;
     }
     case NODE_LET: case NODE_VAR:
@@ -972,6 +1004,8 @@ static void lsp_handle_completions(int id, const char *json) {
                         switch (decl->tag) {
                         case NODE_FN_DECL: kind = 3; break;
                         case NODE_TAG_DECL: kind = 3; break;     /* Function */
+                        case NODE_ADAPT_FN: kind = 3; break;     /* Function */
+                        case NODE_BIND: kind = 6; break;         /* Variable */
                         case NODE_STRUCT_DECL: kind = 22; break; /* Struct */
                         case NODE_ENUM_DECL: kind = 13; break;   /* Enum */
                         case NODE_TRAIT_DECL: kind = 8; break;    /* Interface */
@@ -1286,6 +1320,16 @@ static void collect_symbols_json(Node *n, char *buf, size_t bufsz, int *off, int
         /* SymbolKind: Function = 12 (tags are callable) */
         if (n->tag_decl.name)
             emit_symbol(buf, bufsz, off, first, n->tag_decl.name, 12, n->span);
+        break;
+    case NODE_BIND:
+        /* SymbolKind: Variable = 13 */
+        if (n->bind_decl.name)
+            emit_symbol(buf, bufsz, off, first, n->bind_decl.name, 13, n->span);
+        break;
+    case NODE_ADAPT_FN:
+        /* SymbolKind: Function = 12 */
+        if (n->adapt_fn.name)
+            emit_symbol(buf, bufsz, off, first, n->adapt_fn.name, 12, n->span);
         break;
     case NODE_TYPE_ALIAS:
         /* SymbolKind: TypeParameter = 26 */

@@ -80,6 +80,7 @@ void paramlist_free(ParamList *pl) {
         free(pl->items[i].name);
         node_free(pl->items[i].default_val);
         typeexpr_free(pl->items[i].type_ann);
+        node_free(pl->items[i].contract);
     }
     free(pl->items);
     pl->items = NULL; pl->len = pl->cap = 0;
@@ -321,11 +322,13 @@ void node_free(Node *n) {
         free(n->let.name);
         node_free(n->let.value);
         typeexpr_free(n->let.type_ann);
+        node_free(n->let.contract);
         break;
     case NODE_CONST:
         free(n->const_.name);
         node_free(n->const_.value);
         typeexpr_free(n->const_.type_ann);
+        node_free(n->const_.contract);
         break;
     case NODE_EXPR_STMT:
         node_free(n->expr_stmt.expr);
@@ -450,6 +453,21 @@ void node_free(Node *n) {
         free(n->tag_decl.name);
         paramlist_free(&n->tag_decl.params);
         node_free(n->tag_decl.body);
+        break;
+    case NODE_BIND:
+        free(n->bind_decl.name);
+        node_free(n->bind_decl.expr);
+        break;
+    case NODE_ADAPT_FN:
+        free(n->adapt_fn.name);
+        paramlist_free(&n->adapt_fn.params);
+        typeexpr_free(n->adapt_fn.ret_type);
+        for (int i = 0; i < n->adapt_fn.nbranches; i++) {
+            free(n->adapt_fn.targets[i]);
+            node_free(n->adapt_fn.bodies[i]);
+        }
+        free(n->adapt_fn.targets);
+        free(n->adapt_fn.bodies);
         break;
     case NODE_PROGRAM:
         nodelist_free(&n->program.stmts);

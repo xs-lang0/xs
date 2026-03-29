@@ -160,6 +160,16 @@ static Token *pp_match(Parser *p, TokenKind k) {
     return NULL;
 }
 
+/* contextual keyword: match 'where' as an identifier, not a reserved word */
+static int pp_match_where(Parser *p) {
+    Token *t = pp_peek(p, 0);
+    if (t->kind == TK_IDENT && t->sval && strcmp(t->sval, "where") == 0) {
+        pp_advance(p);
+        return 1;
+    }
+    return 0;
+}
+
 static const char *token_display_name(TokenKind k) {
     switch (k) {
     case TK_SEMICOLON: return "';'";
@@ -305,6 +315,7 @@ static int at_sync_point(TokenKind k) {
     return k == TK_LET || k == TK_VAR || k == TK_CONST || k == TK_FN ||
            k == TK_STRUCT || k == TK_ENUM || k == TK_CLASS || k == TK_IF ||
            k == TK_FOR || k == TK_WHILE || k == TK_RETURN || k == TK_IMPORT ||
+           k == TK_BIND || k == TK_ADAPT ||
            k == TK_SEMICOLON || k == TK_NEWLINE || k == TK_RBRACE || k == TK_EOF;
 }
 
@@ -2389,6 +2400,10 @@ static ParamList parse_params(Parser *p) {
             if (pp_match(p, TK_COLON)) {
                 pm.type_ann = parse_type_expr(p);
             }
+            /* Optional where clause */
+            if (pp_match_where(p)) {
+                pm.contract = parse_expr(p, 2);
+            }
             /* Default value */
             if (pp_match(p, TK_ASSIGN)) {
                 pm.default_val = parse_expr(p, 0);
@@ -3497,6 +3512,10 @@ static Node *parse_stmt(Parser *p) {
         Node *pat = parse_pattern(p);
         TypeExpr *ann = NULL;
         if (pp_match(p, TK_COLON)) ann = parse_type_expr(p);
+        Node *contract = NULL;
+        if (pp_match_where(p)) {
+            contract = parse_expr(p, 2);
+        }
         Node *val = NULL;
         if (pp_match(p, TK_ASSIGN)) {
             Token *next = pp_peek(p, 0);
@@ -3524,6 +3543,7 @@ static Node *parse_stmt(Parser *p) {
         n->let.value    = val;
         n->let.mutable  = mutable;
         n->let.type_ann = ann;
+        n->let.contract = contract;
         return n;
     }
     if (tok->kind == TK_VAR) {
@@ -3531,6 +3551,10 @@ static Node *parse_stmt(Parser *p) {
         Node *pat = parse_pattern(p);
         TypeExpr *ann = NULL;
         if (pp_match(p, TK_COLON)) ann = parse_type_expr(p);
+        Node *contract = NULL;
+        if (pp_match_where(p)) {
+            contract = parse_expr(p, 2);
+        }
         Node *val = NULL;
         if (pp_match(p, TK_ASSIGN)) {
             Token *next = pp_peek(p, 0);
@@ -3549,6 +3573,7 @@ static Node *parse_stmt(Parser *p) {
         n->let.value    = val;
         n->let.mutable  = 1;
         n->let.type_ann = ann;
+        n->let.contract = contract;
         return n;
     }
     if (tok->kind == TK_CONST) {
@@ -3556,6 +3581,10 @@ static Node *parse_stmt(Parser *p) {
         Token *name_tok3 = pp_expect(p, TK_IDENT, "expected name");
         TypeExpr *ann = NULL;
         if (pp_match(p, TK_COLON)) ann = parse_type_expr(p);
+        Node *contract = NULL;
+        if (pp_match_where(p)) {
+            contract = parse_expr(p, 2);
+        }
         pp_expect(p, TK_ASSIGN, "const requires value");
         Node *val = NULL;
         Token *cnext = pp_peek(p, 0);
@@ -3570,6 +3599,7 @@ static Node *parse_stmt(Parser *p) {
         n->const_.name     = xs_strdup(name_tok3->sval ? name_tok3->sval : "");
         n->const_.value    = val;
         n->const_.type_ann = ann;
+        n->const_.contract = contract;
         return n;
     }
 
@@ -3680,6 +3710,72 @@ static Node *parse_stmt(Parser *p) {
         }
         Node *n = node_new(NODE_INLINE_C, span);
         n->inline_c.code = code;
+        return n;
+    }
+
+    /* adapt fn name(params) -> ret { when target { body } ... } */
+    if (tok->kind == TK_ADAPT) {
+        pp_advance(p); /* consume 'adapt' */
+        pp_expect(p, TK_FN, "expected 'fn' after 'adapt'");
+        Token *name_tok2 = pp_expect(p, TK_IDENT, "expected function name after 'adapt fn'");
+        char *aname = xs_strdup(name_tok2->sval ? name_tok2->sval : "");
+
+        /* parse params */
+        pp_expect(p, TK_LPAREN, "expected '(' after adapt fn name");
+        ParamList aparams = parse_params(p);
+        pp_expect(p, TK_RPAREN, "expected ')'");
+
+        /* optional return type */
+        TypeExpr *aret_type = NULL;
+        if (pp_match(p, TK_ARROW)) aret_type = parse_type_expr(p);
+
+        /* parse when branches */
+        pp_expect(p, TK_LBRACE, "expected '{' to open adapt block");
+
+        char **targets = NULL;
+        Node **bodies = NULL;
+        int nbranches = 0;
+
+        while (!pp_check2(p, TK_RBRACE, TK_EOF)) {
+            /* skip newlines */
+            while (pp_match(p, TK_NEWLINE)) {}
+            if (pp_check2(p, TK_RBRACE, TK_EOF)) break;
+
+            pp_expect(p, TK_WHEN, "expected 'when' in adapt block");
+            Token *tgt_tok = pp_expect(p, TK_IDENT, "expected target name after 'when'");
+            char *tgt = xs_strdup(tgt_tok->sval ? tgt_tok->sval : "");
+
+            Node *body = parse_block(p);
+
+            targets = xs_realloc(targets, (nbranches + 1) * sizeof(char*));
+            bodies = xs_realloc(bodies, (nbranches + 1) * sizeof(Node*));
+            targets[nbranches] = tgt;
+            bodies[nbranches] = body;
+            nbranches++;
+        }
+        pp_expect(p, TK_RBRACE, "expected '}' to close adapt block");
+
+        Node *n = node_new(NODE_ADAPT_FN, span);
+        n->adapt_fn.name      = aname;
+        n->adapt_fn.params    = aparams;
+        n->adapt_fn.ret_type  = aret_type;
+        n->adapt_fn.is_pub    = is_pub;
+        n->adapt_fn.targets   = targets;
+        n->adapt_fn.bodies    = bodies;
+        n->adapt_fn.nbranches = nbranches;
+        return n;
+    }
+
+    /* bind name = expr - reactive binding */
+    if (tok->kind == TK_BIND) {
+        pp_advance(p); /* consume 'bind' */
+        Token *name_tok2 = pp_expect(p, TK_IDENT, "expected binding name after 'bind'");
+        char *bname = xs_strdup(name_tok2->sval ? name_tok2->sval : "");
+        pp_expect(p, TK_ASSIGN, "expected '=' after bind name");
+        Node *expr = parse_expr(p, 0);
+        Node *n = node_new(NODE_BIND, span);
+        n->bind_decl.name = bname;
+        n->bind_decl.expr = expr;
         return n;
     }
 

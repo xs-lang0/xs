@@ -71,6 +71,8 @@ static const KWEntry KEYWORDS[] = {
     {"resume",   TK_RESUME},
     {"inline",   TK_INLINE},
     {"tag",      TK_TAG},
+    {"bind",     TK_BIND},
+    {"adapt",    TK_ADAPT},
     {NULL,       TK_UNKNOWN},
 };
 
@@ -1095,6 +1097,8 @@ const char *token_kind_name(TokenKind k) {
     case TK_USE: return "use";
     case TK_INLINE: return "inline";
     case TK_TAG: return "tag";
+    case TK_BIND: return "bind";
+    case TK_ADAPT: return "adapt";
     default: return "?";
     }
 }

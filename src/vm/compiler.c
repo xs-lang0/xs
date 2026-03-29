@@ -2125,6 +2125,14 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
         if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
         return;
 
+    case NODE_BIND: {
+        /* Compile bind as a simple let (no reactive in VM mode) */
+        compile_node(c, n->bind_decl.expr, 1);
+        if (want_value) emit(c, MAKE_A(OP_DUP, 0, 0));
+        compile_name_store(c, n->bind_decl.name);
+        return;
+    }
+
     case NODE_TAG_DECL: {
         /* Compile tag as a function with implicit __block param */
         ParamList augmented = paramlist_new();
@@ -2142,6 +2150,25 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
         emit_make_closure(c, idx);
         if (want_value) emit(c, MAKE_A(OP_DUP, 0, 0));
         compile_name_store(c, n->tag_decl.name);
+        return;
+    }
+
+    case NODE_ADAPT_FN: {
+        /* Select "native" branch, fallback to first */
+        int sel = 0;
+        for (int ai = 0; ai < n->adapt_fn.nbranches; ai++) {
+            if (strcmp(n->adapt_fn.targets[ai], "native") == 0) { sel = ai; break; }
+        }
+        if (n->adapt_fn.nbranches == 0) {
+            if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
+            return;
+        }
+        int idx = compile_fn(c, n->adapt_fn.name,
+                             &n->adapt_fn.params,
+                             n->adapt_fn.bodies[sel]);
+        emit_make_closure(c, idx);
+        if (want_value) emit(c, MAKE_A(OP_DUP, 0, 0));
+        compile_name_store(c, n->adapt_fn.name);
         return;
     }
 
