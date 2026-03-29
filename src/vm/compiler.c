@@ -2172,6 +2172,58 @@ static void compile_node(Compiler *c, Node *n, int want_value) {
         return;
     }
 
+    case NODE_LIT_DURATION:
+        emit_const(c, xs_float(n->lit_duration.ms));
+        break;
+
+    case NODE_LIT_COLOR: {
+        /* build a map with r,g,b,a fields */
+        emit_const(c, xs_str("r"));
+        emit_const(c, xs_int(n->lit_color.r));
+        emit_const(c, xs_str("g"));
+        emit_const(c, xs_int(n->lit_color.g));
+        emit_const(c, xs_str("b"));
+        emit_const(c, xs_int(n->lit_color.b));
+        emit_const(c, xs_str("a"));
+        emit_const(c, xs_int(n->lit_color.a));
+        emit(c, MAKE_A(OP_MAKE_MAP, 4, 0));
+        break;
+    }
+
+    case NODE_LIT_DATE:
+        emit_const(c, xs_str(n->lit_date.value));
+        break;
+
+    case NODE_LIT_SIZE:
+        emit_const(c, xs_float(n->lit_size.bytes));
+        break;
+
+    case NODE_LIT_ANGLE:
+        emit_const(c, xs_float(n->lit_angle.radians));
+        break;
+
+    case NODE_EVERY:
+        compile_node(c, n->every_.interval, 1);
+        emit(c, MAKE_A(OP_POP, 0, 0));
+        compile_node(c, n->every_.body, want_value);
+        return;
+
+    case NODE_AFTER:
+        compile_node(c, n->after_.delay, 1);
+        emit(c, MAKE_A(OP_POP, 0, 0));
+        compile_node(c, n->after_.body, want_value);
+        return;
+
+    case NODE_TIMEOUT:
+        compile_node(c, n->timeout_.body, want_value);
+        return;
+
+    case NODE_DEBOUNCE:
+        compile_node(c, n->debounce_.delay, 1);
+        emit(c, MAKE_A(OP_POP, 0, 0));
+        compile_node(c, n->debounce_.body, want_value);
+        return;
+
     default:
         fprintf(stderr, "unhandled node tag %d\n", (int)n->tag);
         if (want_value) emit(c, MAKE_A(OP_PUSH_NULL, 0, 0));
