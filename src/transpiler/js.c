@@ -16,16 +16,22 @@ static void emit_block_body(SB *s, Node *block, int depth);
 static void emit_pattern_cond(SB *s, Node *pat, const char *subject, int depth);
 static void emit_pattern_bindings(SB *s, Node *pat, const char *subject, int depth);
 
+/* state: are we inside a class method body? */
+static int in_class_method = 0;
+
 /* helpers */
 static int is_callee_name(Node *callee, const char *name) {
     return callee && callee->tag == NODE_IDENT && strcmp(callee->ident.name, name) == 0;
 }
 
-static void emit_params(SB *s, ParamList *pl) {
+static void emit_params_ex(SB *s, ParamList *pl, int skip_self) {
     sb_addc(s, '(');
+    int first = 1;
     for (int i = 0; i < pl->len; i++) {
-        if (i) sb_add(s, ", ");
         Param *p = &pl->items[i];
+        if (skip_self && p->name && strcmp(p->name, "self") == 0) continue;
+        if (!first) sb_add(s, ", ");
+        first = 0;
         if (p->variadic) sb_add(s, "...");
         if (p->name) sb_add(s, p->name);
         else sb_add(s, "_");
@@ -35,6 +41,10 @@ static void emit_params(SB *s, ParamList *pl) {
         }
     }
     sb_addc(s, ')');
+}
+
+static void emit_params(SB *s, ParamList *pl) {
+    emit_params_ex(s, pl, 0);
 }
 
 /* expression emitter */
@@ -119,7 +129,10 @@ static void emit_expr(SB *s, Node *n, int depth) {
         sb_add(s, "])");
         break;
     case NODE_IDENT:
-        sb_add(s, n->ident.name);
+        if (in_class_method && n->ident.name && strcmp(n->ident.name, "self") == 0)
+            sb_add(s, "this");
+        else
+            sb_add(s, n->ident.name);
         break;
     case NODE_BINOP: {
         const char *op = n->binop.op;
@@ -205,7 +218,53 @@ static void emit_expr(SB *s, Node *n, int depth) {
             sb_add(s, "__xs_print(");
         } else if (is_callee_name(n->call.callee, "print")) {
             sb_add(s, "__xs_write(");
+        } else if (is_callee_name(n->call.callee, "str")) {
+            sb_add(s, "String(");
+        } else if (is_callee_name(n->call.callee, "int")) {
+            sb_add(s, "Math.trunc(Number(");
+        } else if (is_callee_name(n->call.callee, "float")) {
+            sb_add(s, "Number(");
+        } else if (is_callee_name(n->call.callee, "type")) {
+            sb_add(s, "typeof(");
+        } else if (is_callee_name(n->call.callee, "len")) {
+            /* len(x) -> (x).length - handled specially below */
+            sb_addc(s, '(');
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            sb_add(s, ").length");
+            break;
+        } else if (is_callee_name(n->call.callee, "assert")) {
+            sb_add(s, "(function(){ if (!(");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            sb_add(s, ")) throw new Error(\"assertion failed\"); })()");
+            break;
+        } else if (is_callee_name(n->call.callee, "assert_eq")) {
+            sb_add(s, "(function(){ if ((");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            sb_add(s, ") !== (");
+            if (n->call.args.len > 1) emit_expr(s, n->call.args.items[1], depth);
+            sb_add(s, ")) throw new Error(\"assertion failed: \" + (");
+            if (n->call.args.len > 0) emit_expr(s, n->call.args.items[0], depth);
+            sb_add(s, ") + \" !== \" + (");
+            if (n->call.args.len > 1) emit_expr(s, n->call.args.items[1], depth);
+            sb_add(s, ")); })()");
+            break;
+        } else if (is_callee_name(n->call.callee, "push") && n->call.args.len == 2) {
+            emit_expr(s, n->call.args.items[0], depth);
+            sb_add(s, ".push(");
+            emit_expr(s, n->call.args.items[1], depth);
+            sb_addc(s, ')');
+            break;
+        } else if (is_callee_name(n->call.callee, "input")) {
+            sb_add(s, "prompt(");
         } else {
+            /* check if callee is a capitalized identifier (constructor call) */
+            int is_ctor = 0;
+            if (n->call.callee && n->call.callee->tag == NODE_IDENT &&
+                n->call.callee->ident.name && n->call.callee->ident.name[0] >= 'A' &&
+                n->call.callee->ident.name[0] <= 'Z') {
+                is_ctor = 1;
+            }
+            if (is_ctor) sb_add(s, "new ");
             emit_expr(s, n->call.callee, depth);
             sb_addc(s, '(');
         }
@@ -225,7 +284,12 @@ static void emit_expr(SB *s, Node *n, int depth) {
             }
             sb_addc(s, '}');
         }
-        sb_addc(s, ')');
+        /* close extra paren for int() which wraps in Math.trunc(Number(...)) */
+        if (is_callee_name(n->call.callee, "int")) {
+            sb_add(s, "))");
+        } else {
+            sb_addc(s, ')');
+        }
         break;
     }
     case NODE_METHOD_CALL:
@@ -877,8 +941,14 @@ static void emit_expr(SB *s, Node *n, int depth) {
         sb_add(s, "while (");
         emit_expr(s, n->while_loop.cond, depth);
         sb_add(s, ") {\n");
-        if (n->while_loop.body)
+        if (n->while_loop.body) {
             emit_block_body(s, n->while_loop.body, depth + 1);
+            if (n->while_loop.body->tag == NODE_BLOCK && n->while_loop.body->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, n->while_loop.body->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
+        }
         sb_indent(s, depth);
         sb_add(s, "} })()");
         break;
@@ -892,8 +962,14 @@ static void emit_expr(SB *s, Node *n, int depth) {
         sb_add(s, " of ");
         emit_expr(s, n->for_loop.iter, depth);
         sb_add(s, ") {\n");
-        if (n->for_loop.body)
+        if (n->for_loop.body) {
             emit_block_body(s, n->for_loop.body, depth + 1);
+            if (n->for_loop.body->tag == NODE_BLOCK && n->for_loop.body->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, n->for_loop.body->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
+        }
         sb_indent(s, depth);
         sb_add(s, "} })()");
         break;
@@ -902,8 +978,14 @@ static void emit_expr(SB *s, Node *n, int depth) {
         sb_add(s, "(function() { ");
         if (n->loop.label) sb_printf(s, "%s: ", n->loop.label);
         sb_add(s, "while (true) {\n");
-        if (n->loop.body)
+        if (n->loop.body) {
             emit_block_body(s, n->loop.body, depth + 1);
+            if (n->loop.body->tag == NODE_BLOCK && n->loop.body->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, n->loop.body->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
+        }
         sb_indent(s, depth);
         sb_add(s, "} })()");
         break;
@@ -1101,7 +1183,8 @@ static void emit_pattern_bindings(SB *s, Node *pat, const char *subject, int dep
     }
 }
 
-/* emit block body (statements inside { }) */
+/* emit block body (statements inside { })
+   NOTE: does NOT emit block.expr - callers must handle implicit return/tail expr */
 static void emit_block_body(SB *s, Node *block, int depth) {
     if (!block) return;
     if (block->tag != NODE_BLOCK) {
@@ -1110,11 +1193,6 @@ static void emit_block_body(SB *s, Node *block, int depth) {
     }
     for (int i = 0; i < block->block.stmts.len; i++) {
         emit_stmt(s, block->block.stmts.items[i], depth);
-    }
-    if (block->block.expr) {
-        sb_indent(s, depth);
-        emit_expr(s, block->block.expr, depth);
-        sb_add(s, ";\n");
     }
 }
 
@@ -1260,21 +1338,39 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         sb_add(s, "if (");
         emit_expr(s, n->if_expr.cond, depth);
         sb_add(s, ") {\n");
-        if (n->if_expr.then)
+        if (n->if_expr.then) {
             emit_block_body(s, n->if_expr.then, depth + 1);
+            if (n->if_expr.then->tag == NODE_BLOCK && n->if_expr.then->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, n->if_expr.then->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
+        }
         sb_indent(s, depth);
         sb_addc(s, '}');
         for (int i = 0; i < n->if_expr.elif_conds.len; i++) {
             sb_add(s, " else if (");
             emit_expr(s, n->if_expr.elif_conds.items[i], depth);
             sb_add(s, ") {\n");
-            emit_block_body(s, n->if_expr.elif_thens.items[i], depth + 1);
+            Node *et = n->if_expr.elif_thens.items[i];
+            emit_block_body(s, et, depth + 1);
+            if (et && et->tag == NODE_BLOCK && et->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, et->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
             sb_indent(s, depth);
             sb_addc(s, '}');
         }
         if (n->if_expr.else_branch) {
             sb_add(s, " else {\n");
-            emit_block_body(s, n->if_expr.else_branch, depth + 1);
+            Node *eb = n->if_expr.else_branch;
+            emit_block_body(s, eb, depth + 1);
+            if (eb->tag == NODE_BLOCK && eb->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, eb->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
             sb_indent(s, depth);
             sb_addc(s, '}');
         }
@@ -1287,8 +1383,14 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         sb_add(s, "while (");
         emit_expr(s, n->while_loop.cond, depth);
         sb_add(s, ") {\n");
-        if (n->while_loop.body)
+        if (n->while_loop.body) {
             emit_block_body(s, n->while_loop.body, depth + 1);
+            if (n->while_loop.body->tag == NODE_BLOCK && n->while_loop.body->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, n->while_loop.body->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
+        }
         sb_indent(s, depth);
         sb_add(s, "}\n");
         break;
@@ -1301,8 +1403,14 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         sb_add(s, " of ");
         emit_expr(s, n->for_loop.iter, depth);
         sb_add(s, ") {\n");
-        if (n->for_loop.body)
+        if (n->for_loop.body) {
             emit_block_body(s, n->for_loop.body, depth + 1);
+            if (n->for_loop.body->tag == NODE_BLOCK && n->for_loop.body->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, n->for_loop.body->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
+        }
         sb_indent(s, depth);
         sb_add(s, "}\n");
         break;
@@ -1310,8 +1418,14 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         sb_indent(s, depth);
         if (n->loop.label) sb_printf(s, "%s: ", n->loop.label);
         sb_add(s, "while (true) {\n");
-        if (n->loop.body)
+        if (n->loop.body) {
             emit_block_body(s, n->loop.body, depth + 1);
+            if (n->loop.body->tag == NODE_BLOCK && n->loop.body->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, n->loop.body->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
+        }
         sb_indent(s, depth);
         sb_add(s, "}\n");
         break;
@@ -1338,6 +1452,11 @@ static void emit_stmt(SB *s, Node *n, int depth) {
             emit_pattern_bindings(s, arm->pattern, "__subject", depth + 2);
             if (arm->body && arm->body->tag == NODE_BLOCK) {
                 emit_block_body(s, arm->body, depth + 2);
+                if (arm->body->block.expr) {
+                    sb_indent(s, depth + 2);
+                    emit_expr(s, arm->body->block.expr, depth + 2);
+                    sb_add(s, ";\n");
+                }
             } else if (arm->body) {
                 sb_indent(s, depth + 2);
                 emit_expr(s, arm->body, depth + 2);
@@ -1353,8 +1472,14 @@ static void emit_stmt(SB *s, Node *n, int depth) {
     case NODE_TRY: {
         sb_indent(s, depth);
         sb_add(s, "try {\n");
-        if (n->try_.body)
+        if (n->try_.body) {
             emit_block_body(s, n->try_.body, depth + 1);
+            if (n->try_.body->tag == NODE_BLOCK && n->try_.body->block.expr) {
+                sb_indent(s, depth + 1);
+                emit_expr(s, n->try_.body->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
+        }
         sb_indent(s, depth);
         sb_addc(s, '}');
         if (n->try_.catch_arms.len > 0) {
@@ -1365,6 +1490,11 @@ static void emit_stmt(SB *s, Node *n, int depth) {
                 emit_pattern_bindings(s, arm->pattern, "__e", depth + 1);
                 if (arm->body && arm->body->tag == NODE_BLOCK) {
                     emit_block_body(s, arm->body, depth + 1);
+                    if (arm->body->block.expr) {
+                        sb_indent(s, depth + 1);
+                        emit_expr(s, arm->body->block.expr, depth + 1);
+                        sb_add(s, ";\n");
+                    }
                 } else if (arm->body) {
                     sb_indent(s, depth + 1);
                     emit_expr(s, arm->body, depth + 1);
@@ -1589,31 +1719,35 @@ static void emit_stmt(SB *s, Node *n, int depth) {
         for (int i = 0; i < n->class_decl.members.len; i++) {
             Node *m = n->class_decl.members.items[i];
             if (m && m->tag == NODE_FN_DECL) {
+                int is_ctor = m->fn_decl.name &&
+                    (strcmp(m->fn_decl.name, "new") == 0 || strcmp(m->fn_decl.name, "init") == 0);
                 /* method inside class */
                 sb_indent(s, depth + 1);
                 if (m->fn_decl.is_async) sb_add(s, "async ");
                 if (m->fn_decl.is_generator) sb_addc(s, '*');
-                if (m->fn_decl.name && strcmp(m->fn_decl.name, "init") == 0) {
+                if (is_ctor) {
                     sb_add(s, "constructor");
                 } else {
                     sb_add(s, m->fn_decl.name ? m->fn_decl.name : "_");
                 }
-                emit_params(s, &m->fn_decl.params);
+                emit_params_ex(s, &m->fn_decl.params, 1);
                 sb_add(s, " {\n");
+                in_class_method = 1;
                 if (m->fn_decl.body && m->fn_decl.body->tag == NODE_BLOCK) {
                     emit_block_body(s, m->fn_decl.body, depth + 2);
                     if (m->fn_decl.body->block.expr) {
                         sb_indent(s, depth + 2);
-                        sb_add(s, "return ");
+                        if (!is_ctor) sb_add(s, "return ");
                         emit_expr(s, m->fn_decl.body->block.expr, depth + 2);
                         sb_add(s, ";\n");
                     }
                 } else if (m->fn_decl.body) {
                     sb_indent(s, depth + 2);
-                    sb_add(s, "return ");
+                    if (!is_ctor) sb_add(s, "return ");
                     emit_expr(s, m->fn_decl.body, depth + 2);
                     sb_add(s, ";\n");
                 }
+                in_class_method = 0;
                 sb_indent(s, depth + 1);
                 sb_add(s, "}\n");
             } else if (m) {
@@ -1795,19 +1929,47 @@ char *transpile_js(Node *program, const char *filename) {
     sb_add(&s, "const __xs_print = (...args) => console.log(...args);\n");
     sb_add(&s, "const __xs_write = (...args) => { if (typeof process !== 'undefined') "
                "process.stdout.write(args.map(String).join('')); else console.log(...args); };\n");
-    sb_add(&s, "const __xs_resume = (v) => v;\n\n");
+    sb_add(&s, "const __xs_resume = (v) => v;\n");
+    /* channel runtime */
+    sb_add(&s, "function __xs_channel() {\n");
+    sb_add(&s, "    const buf = [];\n");
+    sb_add(&s, "    return {\n");
+    sb_add(&s, "        send(v) { buf.push(v); },\n");
+    sb_add(&s, "        recv() { return buf.shift(); },\n");
+    sb_add(&s, "        len() { return buf.length; },\n");
+    sb_add(&s, "        is_empty() { return buf.length === 0; },\n");
+    sb_add(&s, "        is_full() { return false; }\n");
+    sb_add(&s, "    };\n");
+    sb_add(&s, "}\n");
+    sb_add(&s, "const channel = __xs_channel;\n\n");
 
     if (!program) {
         sb_add(&s, "// (empty program)\n");
         return s.data;
     }
 
+    /* reset class method state */
+    in_class_method = 0;
+
+    int has_main = 0;
+
     if (program->tag == NODE_PROGRAM) {
         for (int i = 0; i < program->program.stmts.len; i++) {
-            emit_node(&s, program->program.stmts.items[i], 0);
+            Node *st = program->program.stmts.items[i];
+            emit_node(&s, st, 0);
+            /* check if this is a main() function declaration */
+            if (st && st->tag == NODE_FN_DECL && st->fn_decl.name &&
+                strcmp(st->fn_decl.name, "main") == 0) {
+                has_main = 1;
+            }
         }
     } else {
         emit_node(&s, program, 0);
+    }
+
+    /* auto-call main if defined */
+    if (has_main) {
+        sb_add(&s, "main();\n");
     }
 
     return s.data;
