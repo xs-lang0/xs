@@ -423,6 +423,25 @@ plugin.ast.return_node(expr)           -- return statement
 plugin.ast.assign("name", value_node)  -- assignment
 ```
 
+### Universal Literals
+
+```xs
+plugin.ast.duration(5000)                -- duration node (value in ms)
+plugin.ast.color(255, 102, 0, 255)       -- color node (r, g, b, a)
+plugin.ast.date("2024-03-15")            -- date node (ISO string)
+plugin.ast.size(10240)                   -- size node (value in bytes)
+plugin.ast.angle(1.5708)                 -- angle node (value in radians)
+```
+
+### Temporal Primitives
+
+```xs
+plugin.ast.every(duration_node, body)            -- every loop
+plugin.ast.after(duration_node, body)            -- delayed execution
+plugin.ast.timeout(duration_node, body, else_body) -- timeout with fallback
+plugin.ast.debounce(duration_node, body)         -- debounced execution
+```
+
 All of these return map representations of AST nodes that the interpreter knows how to evaluate. You use them inside `on_unknown` / `on_unknown_expr` / `override` handlers to build the desugared form of your custom syntax.
 
 ---

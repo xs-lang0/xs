@@ -35,6 +35,8 @@ The default backend. Handles the full language.
 | Plugin system | works |
 | Standard library (14 modules) | works |
 | HTTPS via embedded BearSSL | works |
+| Universal literals (duration, color, date, size, angle) | works |
+| Temporal primitives (every, after, timeout, debounce) | works |
 
 All 17 test suites pass on Linux, macOS, and Windows.
 
@@ -154,6 +156,8 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 
 ## Recent Changes (v0.2.3)
 
+- Added: universal literals via `use literals` pragma - duration (5s, 200ms, 2m30s), color (#ff6600), date (2024-03-15), size (10kb, 2mb), angle (90deg, 3.14rad)
+- Added: temporal primitives - `every`, `after`, `timeout`, `debounce` for scheduling constructs
 - Added: reactive bindings (`bind x = expr`) - variables that auto-update when dependencies change
 - Added: gradual contracts (`where` clauses) - runtime-checked conditions on type annotations
 - Added: adapt functions (`adapt fn`) - multi-target function bodies with `when native/js/wasm` branches

@@ -3090,6 +3090,193 @@ Foreign function interface for calling native C code.
 
 ---
 
+## Universal Literals
+
+XS supports domain-specific literal types for durations, colors, dates, sizes, and angles. Enable them with a `use literals` pragma at the top of your file:
+
+```xs
+use literals duration, color, date, size, angle
+```
+
+You can enable all of them or pick just the ones you need. Without the pragma, these literals aren't available.
+
+### Duration
+
+Duration literals represent time values, stored internally as milliseconds:
+
+```xs
+use literals duration
+
+let timeout = 5s         -- 5000 ms
+let frame = 200ms        -- 200 ms
+let warmup = 2m30s       -- 150000 ms
+let hour = 1h            -- 3600000 ms
+let ttl = 3d             -- 259200000 ms
+
+println(timeout)         -- 5000
+println(warmup + 1s)     -- 151000
+```
+
+Supported suffixes: `ms`, `s`, `m`, `h`, `d`. You can combine them like `2m30s` or `1h15m`.
+
+### Color
+
+Color literals use hex notation, stored as a map with `r`, `g`, `b`, `a` keys:
+
+```xs
+use literals color
+
+let orange = #ff6600
+let white = #fff            -- shorthand, expands to #ffffff
+let semi = #ff660080        -- with alpha
+
+println(orange.r)           -- 255
+println(orange.g)           -- 102
+println(orange.b)           -- 0
+println(semi.a)             -- 128
+```
+
+Three-character shorthand (`#abc`) expands to six characters (`#aabbcc`). Alpha defaults to 255 if not specified.
+
+### Date
+
+Date literals use ISO format, stored as an ISO date string:
+
+```xs
+use literals date
+
+let release = 2024-03-15
+println(release)            -- "2024-03-15"
+```
+
+### Size
+
+Size literals represent byte counts, stored internally as bytes:
+
+```xs
+use literals size
+
+let chunk = 10kb            -- 10240
+let cache = 2mb             -- 2097152
+let disk = 1gb              -- 1073741824
+
+println(chunk)              -- 10240
+```
+
+Supported suffixes: `b`, `kb`, `mb`, `gb`, `tb`. Uses binary units (1kb = 1024 bytes).
+
+### Angle
+
+Angle literals, stored internally as radians:
+
+```xs
+use literals angle
+
+let right = 90deg           -- ~1.5708 rad
+let pi = 3.14rad            -- 3.14 rad
+
+println(right)              -- 1.5707963267948966
+println(pi)                 -- 3.14
+```
+
+Supported suffixes: `deg`, `rad`. Degree values are converted to radians automatically.
+
+---
+
+## Temporal Primitives
+
+Temporal primitives provide built-in scheduling constructs. They pair naturally with duration literals but also accept plain numeric values (interpreted as milliseconds).
+
+### every
+
+Runs a block repeatedly at a fixed interval. In the interpreter, the body runs once (for deterministic script execution). When transpiled to JavaScript, it maps to `setInterval`.
+
+```xs
+use literals duration
+
+every 1s {
+    println("tick")
+}
+```
+
+### after
+
+Runs a block once after a delay:
+
+```xs
+use literals duration
+
+after 500ms {
+    println("delayed hello")
+}
+```
+
+### timeout
+
+Runs a block with a time limit. If the block doesn't finish in time, the `else` fallback runs instead:
+
+```xs
+use literals duration
+
+timeout 2s {
+    let result = slow_computation()
+    println(result)
+} else {
+    println("timed out")
+}
+```
+
+### debounce
+
+Debounces execution - if called repeatedly, only the last call within the window actually runs:
+
+```xs
+use literals duration
+
+debounce 300ms {
+    println("search: {query}")
+}
+```
+
+### Practical examples
+
+Combining duration literals with temporal primitives:
+
+```xs
+use literals duration
+
+-- polling with every
+var health = "unknown"
+every 30s {
+    health = check_server()
+}
+
+-- delayed initialization
+after 2s {
+    connect_to_database()
+}
+
+-- request with timeout
+timeout 5s {
+    let data = fetch_api("/users")
+    process(data)
+} else {
+    println("API request timed out, using cache")
+    process(cached_data)
+}
+
+-- debounced input handling
+var query = ""
+fn on_input(text) {
+    query = text
+    debounce 200ms {
+        search(query)
+    }
+}
+```
+
+---
+
 ## Execution Backends
 
 ```bash
