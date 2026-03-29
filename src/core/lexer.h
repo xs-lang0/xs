@@ -32,6 +32,7 @@ typedef enum {
 
     TK_EFFECT, TK_PERFORM, TK_HANDLE, TK_RESUME,
     TK_INLINE, TK_TAG, TK_BIND, TK_ADAPT,
+    TK_EVERY, TK_AFTER, TK_TIMEOUT, TK_DEBOUNCE,
 
     // operators
     TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT,
@@ -100,6 +101,7 @@ typedef struct {
     int         source_len;
     int         line, col;
     int         paren_depth;
+    uint8_t     literals;    /* bitfield: 0=duration,1=color,2=date,3=size,4=angle */
     TokenArray  tokens;
     CommentList comments;
 } Lexer;

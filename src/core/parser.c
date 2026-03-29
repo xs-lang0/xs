@@ -130,6 +130,7 @@ void parser_init(Parser *p, TokenArray *ta, const char *filename) {
     p->max_errors  = 10;
     p->panic_mode  = 0;
     p->no_arrow_lambda = 0;
+    p->literals    = 0;
     p->diag        = NULL;
     memset(&p->error, 0, sizeof(p->error));
 }
@@ -518,6 +519,107 @@ static Node *parse_primary(Parser *p) {
     switch (tok->kind) {
     case TK_INT: {
         pp_advance(p);
+        double numval = (double)tok->ival;
+        /* check for unit suffix literals */
+        if (p->literals) {
+            Token *suf = pp_peek(p, 0);
+            if (suf->kind == TK_IDENT && suf->sval) {
+                /* duration suffixes */
+                if ((p->literals & 0x01) && strcmp(suf->sval, "ms") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_DURATION, span);
+                    n->lit_duration.ms = numval;
+                    return n;
+                }
+                if ((p->literals & 0x01) && strcmp(suf->sval, "s") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_DURATION, span);
+                    n->lit_duration.ms = numval * 1000.0;
+                    return n;
+                }
+                if ((p->literals & 0x01) && strcmp(suf->sval, "m") == 0) {
+                    pp_advance(p);
+                    double total = numval * 60000.0;
+                    /* compound: 2m30s - check if next token is number+s */
+                    Token *nx2 = pp_peek(p, 0);
+                    if (nx2->kind == TK_INT) {
+                        double sub = (double)nx2->ival;
+                        Token *suf2 = pp_peek(p, 1);
+                        if (suf2->kind == TK_IDENT && suf2->sval && strcmp(suf2->sval, "s") == 0) {
+                            pp_advance(p); pp_advance(p);
+                            total += sub * 1000.0;
+                        }
+                    }
+                    Node *n = node_new(NODE_LIT_DURATION, span);
+                    n->lit_duration.ms = total;
+                    return n;
+                }
+                /* compound: 2m30s lexed as INT + IDENT("m30s") */
+                if ((p->literals & 0x01) && suf->sval[0] == 'm' && isdigit(suf->sval[1])) {
+                    pp_advance(p);
+                    double total = numval * 60000.0;
+                    const char *rest = suf->sval + 1;
+                    char *endp = NULL;
+                    double sub = strtod(rest, &endp);
+                    if (endp && (*endp == 's' || *endp == '\0')) {
+                        total += sub * 1000.0;
+                    }
+                    Node *n = node_new(NODE_LIT_DURATION, span);
+                    n->lit_duration.ms = total;
+                    return n;
+                }
+                if ((p->literals & 0x01) && strcmp(suf->sval, "h") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_DURATION, span);
+                    n->lit_duration.ms = numval * 3600000.0;
+                    return n;
+                }
+                if ((p->literals & 0x01) && strcmp(suf->sval, "d") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_DURATION, span);
+                    n->lit_duration.ms = numval * 86400000.0;
+                    return n;
+                }
+                /* size suffixes */
+                if ((p->literals & 0x08) && strcmp(suf->sval, "kb") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_SIZE, span);
+                    n->lit_size.bytes = numval * 1024.0;
+                    return n;
+                }
+                if ((p->literals & 0x08) && strcmp(suf->sval, "mb") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_SIZE, span);
+                    n->lit_size.bytes = numval * 1048576.0;
+                    return n;
+                }
+                if ((p->literals & 0x08) && strcmp(suf->sval, "gb") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_SIZE, span);
+                    n->lit_size.bytes = numval * 1073741824.0;
+                    return n;
+                }
+                if ((p->literals & 0x08) && strcmp(suf->sval, "tb") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_SIZE, span);
+                    n->lit_size.bytes = numval * 1099511627776.0;
+                    return n;
+                }
+                /* angle suffixes */
+                if ((p->literals & 0x10) && strcmp(suf->sval, "deg") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_ANGLE, span);
+                    n->lit_angle.radians = numval * 3.14159265358979323846 / 180.0;
+                    return n;
+                }
+                if ((p->literals & 0x10) && strcmp(suf->sval, "rad") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_ANGLE, span);
+                    n->lit_angle.radians = numval;
+                    return n;
+                }
+            }
+        }
         Node *n = node_new(NODE_LIT_INT, span);
         n->lit_int.ival = tok->ival;
         return n;
@@ -530,6 +632,64 @@ static Node *parse_primary(Parser *p) {
     }
     case TK_FLOAT: {
         pp_advance(p);
+        double numval = tok->fval;
+        /* check for unit suffix literals */
+        if (p->literals) {
+            Token *suf = pp_peek(p, 0);
+            if (suf->kind == TK_IDENT && suf->sval) {
+                /* duration suffixes */
+                if ((p->literals & 0x01) && strcmp(suf->sval, "ms") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_DURATION, span);
+                    n->lit_duration.ms = numval;
+                    return n;
+                }
+                if ((p->literals & 0x01) && strcmp(suf->sval, "s") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_DURATION, span);
+                    n->lit_duration.ms = numval * 1000.0;
+                    return n;
+                }
+                /* size suffixes */
+                if ((p->literals & 0x08) && strcmp(suf->sval, "mb") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_SIZE, span);
+                    n->lit_size.bytes = numval * 1048576.0;
+                    return n;
+                }
+                if ((p->literals & 0x08) && strcmp(suf->sval, "gb") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_SIZE, span);
+                    n->lit_size.bytes = numval * 1073741824.0;
+                    return n;
+                }
+                if ((p->literals & 0x08) && strcmp(suf->sval, "kb") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_SIZE, span);
+                    n->lit_size.bytes = numval * 1024.0;
+                    return n;
+                }
+                if ((p->literals & 0x08) && strcmp(suf->sval, "tb") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_SIZE, span);
+                    n->lit_size.bytes = numval * 1099511627776.0;
+                    return n;
+                }
+                /* angle suffixes */
+                if ((p->literals & 0x10) && strcmp(suf->sval, "deg") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_ANGLE, span);
+                    n->lit_angle.radians = numval * 3.14159265358979323846 / 180.0;
+                    return n;
+                }
+                if ((p->literals & 0x10) && strcmp(suf->sval, "rad") == 0) {
+                    pp_advance(p);
+                    Node *n = node_new(NODE_LIT_ANGLE, span);
+                    n->lit_angle.radians = numval;
+                    return n;
+                }
+            }
+        }
         Node *n = node_new(NODE_LIT_FLOAT, span);
         n->lit_float.fval = tok->fval;
         return n;
@@ -546,6 +706,35 @@ static Node *parse_primary(Parser *p) {
     }
     case TK_STRING: {
         pp_advance(p);
+        /* color literal: "#ff6600" or "#fff" from lexer */
+        if ((p->literals & 0x02) && tok->sval && tok->sval[0] == '#') {
+            const char *hex = tok->sval + 1;
+            int hlen = (int)strlen(hex);
+            int r = 0, g = 0, b = 0, a = 255;
+            if (hlen == 3) {
+                int rr, gg, bb;
+                sscanf(hex, "%1x%1x%1x", &rr, &gg, &bb);
+                r = rr * 17; g = gg * 17; b = bb * 17;
+            } else if (hlen == 6) {
+                sscanf(hex, "%02x%02x%02x", &r, &g, &b);
+            } else if (hlen == 8) {
+                sscanf(hex, "%02x%02x%02x%02x", &r, &g, &b, &a);
+            }
+            Node *n = node_new(NODE_LIT_COLOR, span);
+            n->lit_color.r = r;
+            n->lit_color.g = g;
+            n->lit_color.b = b;
+            n->lit_color.a = a;
+            return n;
+        }
+        /* date literal: "2024-03-15" from lexer */
+        if ((p->literals & 0x04) && tok->sval && strlen(tok->sval) >= 10 &&
+            tok->sval[4] == '-' && tok->sval[7] == '-' &&
+            isdigit(tok->sval[0]) && isdigit(tok->sval[5]) && isdigit(tok->sval[8])) {
+            Node *n = node_new(NODE_LIT_DATE, span);
+            n->lit_date.value = xs_strdup(tok->sval);
+            return n;
+        }
         return parse_string_literal(p, tok);
     }
     case TK_RAW_STRING: {
@@ -2998,6 +3187,35 @@ static Node *parse_use(Parser *p) {
     Token *kw = pp_expect(p, TK_USE, "expected 'use'");
     Span span = kw->span;
 
+    /* check for `use literals duration, color, date, size, angle` */
+    {
+        Token *next2 = pp_peek(p, 0);
+        if (next2->kind == TK_IDENT && next2->sval && strcmp(next2->sval, "literals") == 0) {
+            pp_advance(p); /* consume 'literals' */
+            /* parse comma-separated list of literal type names */
+            while (!pp_at_end(p)) {
+                Token *lt = pp_peek(p, 0);
+                if (lt->kind != TK_IDENT) break;
+                if (lt->sval) {
+                    if (strcmp(lt->sval, "duration") == 0) p->literals |= 0x01;
+                    else if (strcmp(lt->sval, "color") == 0) p->literals |= 0x02;
+                    else if (strcmp(lt->sval, "date") == 0) p->literals |= 0x04;
+                    else if (strcmp(lt->sval, "size") == 0) p->literals |= 0x08;
+                    else if (strcmp(lt->sval, "angle") == 0) p->literals |= 0x10;
+                    /* unknown literal types are silently ignored */
+                }
+                pp_advance(p);
+                if (!pp_match(p, TK_COMMA)) break;
+            }
+            pp_match(p, TK_SEMICOLON);
+            /* return a no-op node */
+            Node *n = node_new(NODE_EXPR_STMT, span);
+            n->expr_stmt.expr = NULL;
+            n->expr_stmt.has_semicolon = 1;
+            return n;
+        }
+    }
+
     /* check for `use plugin "path"` */
     int is_plugin = 0;
     Token *next = pp_peek(p, 0);
@@ -3166,6 +3384,56 @@ static Node *parse_import(Parser *p) {
     n->import.alias  = alias;
     n->import.items  = items;
     n->import.nitems = nitems;
+    return n;
+}
+
+/* temporal statements */
+static Node *parse_every(Parser *p) {
+    Token *kw = pp_expect(p, TK_EVERY, "expected 'every'");
+    Span span = kw->span;
+    Node *interval = parse_expr(p, 0);
+    Node *body = parse_block(p);
+    Node *n = node_new(NODE_EVERY, span);
+    n->every_.interval = interval;
+    n->every_.body = body;
+    return n;
+}
+
+static Node *parse_after(Parser *p) {
+    Token *kw = pp_expect(p, TK_AFTER, "expected 'after'");
+    Span span = kw->span;
+    Node *delay = parse_expr(p, 0);
+    Node *body = parse_block(p);
+    Node *n = node_new(NODE_AFTER, span);
+    n->after_.delay = delay;
+    n->after_.body = body;
+    return n;
+}
+
+static Node *parse_timeout(Parser *p) {
+    Token *kw = pp_expect(p, TK_TIMEOUT, "expected 'timeout'");
+    Span span = kw->span;
+    Node *duration = parse_expr(p, 0);
+    Node *body = parse_block(p);
+    Node *fallback = NULL;
+    if (pp_match(p, TK_ELSE)) {
+        fallback = parse_block(p);
+    }
+    Node *n = node_new(NODE_TIMEOUT, span);
+    n->timeout_.duration = duration;
+    n->timeout_.body = body;
+    n->timeout_.fallback = fallback;
+    return n;
+}
+
+static Node *parse_debounce(Parser *p) {
+    Token *kw = pp_expect(p, TK_DEBOUNCE, "expected 'debounce'");
+    Span span = kw->span;
+    Node *delay = parse_expr(p, 0);
+    Node *body = parse_block(p);
+    Node *n = node_new(NODE_DEBOUNCE, span);
+    n->debounce_.delay = delay;
+    n->debounce_.body = body;
     return n;
 }
 
@@ -3409,6 +3677,10 @@ static Node *parse_stmt(Parser *p) {
     }
     if (tok->kind == TK_IMPORT) return parse_import(p);
     if (tok->kind == TK_USE) return parse_use(p);
+    if (tok->kind == TK_EVERY) return parse_every(p);
+    if (tok->kind == TK_AFTER) return parse_after(p);
+    if (tok->kind == TK_TIMEOUT) return parse_timeout(p);
+    if (tok->kind == TK_DEBOUNCE) return parse_debounce(p);
     if (tok->kind == TK_EFFECT) return parse_effect_decl(p);
 
     if (tok->kind == TK_MODULE) {

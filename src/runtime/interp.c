@@ -5888,6 +5888,53 @@ do_call: ;
         return result;
     }
 
+    case NODE_LIT_DURATION: {
+        return xs_float(n->lit_duration.ms);
+    }
+    case NODE_LIT_COLOR: {
+        Value *v = xs_map_new();
+        map_set(v->map, "r", xs_int(n->lit_color.r));
+        map_set(v->map, "g", xs_int(n->lit_color.g));
+        map_set(v->map, "b", xs_int(n->lit_color.b));
+        map_set(v->map, "a", xs_int(n->lit_color.a));
+        return v;
+    }
+    case NODE_LIT_DATE: {
+        return xs_str(n->lit_date.value);
+    }
+    case NODE_LIT_SIZE: {
+        return xs_float(n->lit_size.bytes);
+    }
+    case NODE_LIT_ANGLE: {
+        return xs_float(n->lit_angle.radians);
+    }
+    case NODE_EVERY: {
+        Value *interval = EVAL(i, n->every_.interval);
+        value_decref(interval);
+        Value *result = EVAL(i, n->every_.body);
+        return result;
+    }
+    case NODE_AFTER: {
+        Value *delay = EVAL(i, n->after_.delay);
+        value_decref(delay);
+        return EVAL(i, n->after_.body);
+    }
+    case NODE_TIMEOUT: {
+        Value *result = EVAL(i, n->timeout_.body);
+        if (i->cf.signal == CF_PANIC && n->timeout_.fallback) {
+            i->cf.signal = 0;
+            if (i->cf.value) { value_decref(i->cf.value); i->cf.value = NULL; }
+            value_decref(result);
+            result = EVAL(i, n->timeout_.fallback);
+        }
+        return result;
+    }
+    case NODE_DEBOUNCE: {
+        Value *delay = EVAL(i, n->debounce_.delay);
+        value_decref(delay);
+        return EVAL(i, n->debounce_.body);
+    }
+
     default:
         /* Delegate to exec for statement nodes used in expression context */
         interp_exec(i, n);
@@ -5916,6 +5963,7 @@ static Value *load_xs_module_file(Interp *i, const char *filepath) {
     TokenArray ta = lexer_tokenize(&lex);
     Parser p;
     parser_init(&p, &ta, filepath_owned);
+    p.literals = lex.literals;
     Node *prog = parser_parse(&p);
     token_array_free(&ta);
     if (!prog || p.had_error) {
@@ -6272,6 +6320,15 @@ static const char *node_tag_to_string(NodeTag tag) {
     case NODE_EXPR_STMT:  return "expr_stmt";
     case NODE_BIND:       return "bind";
     case NODE_ADAPT_FN:   return "adapt_fn";
+    case NODE_LIT_DURATION: return "duration";
+    case NODE_LIT_COLOR:  return "color";
+    case NODE_LIT_DATE:   return "date";
+    case NODE_LIT_SIZE:   return "size";
+    case NODE_LIT_ANGLE:  return "angle";
+    case NODE_EVERY:      return "every";
+    case NODE_AFTER:      return "after";
+    case NODE_TIMEOUT:    return "timeout";
+    case NODE_DEBOUNCE:   return "debounce";
     default:              return "unknown";
     }
 }

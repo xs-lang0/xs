@@ -22,6 +22,7 @@ typedef struct {
     int         max_errors;      /* stop after this many (default 10) */
     int         panic_mode;      /* in panic mode, suppress new errors until sync */
     int         no_arrow_lambda; /* when set, (expr) => is NOT a lambda */
+    uint8_t     literals;        /* bitfield: 0=duration,1=color,2=date,3=size,4=angle */
     DiagContext *diag;     /* unified diagnostic engine (may be NULL) */
 } Parser;
 
