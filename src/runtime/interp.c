@@ -8148,6 +8148,20 @@ void interp_exec(Interp *i, Node *stmt) {
         }
 
         if (stmt->use_.is_plugin) {
+            struct stat pst;
+            /* if file doesn't exist, try xs_lib/<name>/plugin.xs */
+            if (stat(resolved, &pst) != 0) {
+                char lib_try[PATH_MAX];
+                snprintf(lib_try, sizeof(lib_try), "xs_lib/%s/plugin.xs", use_path);
+                if (stat(lib_try, &pst) == 0) {
+                    snprintf(resolved, sizeof(resolved), "%s", lib_try);
+                } else {
+                    /* try xs_lib/<name>/main.xs */
+                    snprintf(lib_try, sizeof(lib_try), "xs_lib/%s/main.xs", use_path);
+                    if (stat(lib_try, &pst) == 0)
+                        snprintf(resolved, sizeof(resolved), "%s", lib_try);
+                }
+            }
             exec_plugin_load(i, stmt, resolved);
             break;
         }
