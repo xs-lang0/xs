@@ -6276,6 +6276,78 @@ static Value *native_ast_map_node(Interp *interp, Value **args, int argc) {
     map_set(m->map, "values", (argc > 1 && args[1]) ? value_incref(args[1]) : xs_array_new());
     return m;
 }
+static Value *native_ast_duration(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("duration"));
+    map_set(m->map, "ms", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_float(0.0));
+    return m;
+}
+static Value *native_ast_color(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("color"));
+    map_set(m->map, "r", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_int(0));
+    map_set(m->map, "g", (argc > 1 && args[1]) ? value_incref(args[1]) : xs_int(0));
+    map_set(m->map, "b", (argc > 2 && args[2]) ? value_incref(args[2]) : xs_int(0));
+    map_set(m->map, "a", (argc > 3 && args[3]) ? value_incref(args[3]) : xs_int(255));
+    return m;
+}
+static Value *native_ast_date(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("date"));
+    map_set(m->map, "value", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_str(""));
+    return m;
+}
+static Value *native_ast_size(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("size"));
+    map_set(m->map, "bytes", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_float(0.0));
+    return m;
+}
+static Value *native_ast_angle(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("angle"));
+    map_set(m->map, "radians", (argc > 0 && args[0]) ? value_incref(args[0]) : xs_float(0.0));
+    return m;
+}
+static Value *native_ast_every(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("every"));
+    map_set(m->map, "interval", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "body", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_after(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("after"));
+    map_set(m->map, "delay", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "body", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    return m;
+}
+static Value *native_ast_timeout(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("timeout"));
+    map_set(m->map, "duration", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "body", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    if (argc > 2 && args[2])
+        map_set(m->map, "fallback", value_incref(args[2]));
+    return m;
+}
+static Value *native_ast_debounce(Interp *interp, Value **args, int argc) {
+    (void)interp;
+    Value *m = xs_map_new();
+    map_set(m->map, "tag", xs_str("debounce"));
+    map_set(m->map, "delay", (argc > 0 && args[0]) ? value_incref(args[0]) : value_incref(XS_NULL_VAL));
+    map_set(m->map, "body", (argc > 1 && args[1]) ? value_incref(args[1]) : value_incref(XS_NULL_VAL));
+    return m;
+}
 
 /* phase 2: node tag string conversion */
 
@@ -6374,6 +6446,15 @@ static int node_tag_from_string(const char *s) {
     if (strcmp(s, "expr_stmt") == 0) return NODE_EXPR_STMT;
     if (strcmp(s, "bind") == 0) return NODE_BIND;
     if (strcmp(s, "adapt_fn") == 0) return NODE_ADAPT_FN;
+    if (strcmp(s, "duration") == 0) return NODE_LIT_DURATION;
+    if (strcmp(s, "color") == 0) return NODE_LIT_COLOR;
+    if (strcmp(s, "date") == 0) return NODE_LIT_DATE;
+    if (strcmp(s, "size") == 0) return NODE_LIT_SIZE;
+    if (strcmp(s, "angle") == 0) return NODE_LIT_ANGLE;
+    if (strcmp(s, "every") == 0) return NODE_EVERY;
+    if (strcmp(s, "after") == 0) return NODE_AFTER;
+    if (strcmp(s, "timeout") == 0) return NODE_TIMEOUT;
+    if (strcmp(s, "debounce") == 0) return NODE_DEBOUNCE;
     return -1;
 }
 
@@ -6475,6 +6556,42 @@ static Value *node_to_xs_map(Node *n) {
         map_set(m->map, "body", node_to_xs_map(n->fn_decl.body));
         break;
     }
+    case NODE_LIT_DURATION:
+        map_set(m->map, "ms", xs_float(n->lit_duration.ms));
+        break;
+    case NODE_LIT_COLOR:
+        map_set(m->map, "r", xs_int(n->lit_color.r));
+        map_set(m->map, "g", xs_int(n->lit_color.g));
+        map_set(m->map, "b", xs_int(n->lit_color.b));
+        map_set(m->map, "a", xs_int(n->lit_color.a));
+        break;
+    case NODE_LIT_DATE:
+        map_set(m->map, "value", xs_str(n->lit_date.value ? n->lit_date.value : ""));
+        break;
+    case NODE_LIT_SIZE:
+        map_set(m->map, "bytes", xs_float(n->lit_size.bytes));
+        break;
+    case NODE_LIT_ANGLE:
+        map_set(m->map, "radians", xs_float(n->lit_angle.radians));
+        break;
+    case NODE_EVERY:
+        map_set(m->map, "interval", node_to_xs_map(n->every_.interval));
+        map_set(m->map, "body", node_to_xs_map(n->every_.body));
+        break;
+    case NODE_AFTER:
+        map_set(m->map, "delay", node_to_xs_map(n->after_.delay));
+        map_set(m->map, "body", node_to_xs_map(n->after_.body));
+        break;
+    case NODE_TIMEOUT:
+        map_set(m->map, "duration", node_to_xs_map(n->timeout_.duration));
+        map_set(m->map, "body", node_to_xs_map(n->timeout_.body));
+        if (n->timeout_.fallback)
+            map_set(m->map, "fallback", node_to_xs_map(n->timeout_.fallback));
+        break;
+    case NODE_DEBOUNCE:
+        map_set(m->map, "delay", node_to_xs_map(n->debounce_.delay));
+        map_set(m->map, "body", node_to_xs_map(n->debounce_.body));
+        break;
     default:
         break;
     }
@@ -6728,6 +6845,87 @@ static Node *node_from_xs_map(Value *map) {
             n->expr_stmt.has_semicolon = 0;
             return n;
         }
+    }
+    if (tag_i == NODE_LIT_DURATION) {
+        Node *n = node_new(NODE_LIT_DURATION, sp);
+        Value *v = map_get(map->map, "ms");
+        n->lit_duration.ms = (v && v->tag == XS_FLOAT) ? v->f :
+                             (v && v->tag == XS_INT) ? (double)v->i : 0.0;
+        return n;
+    }
+    if (tag_i == NODE_LIT_COLOR) {
+        Node *n = node_new(NODE_LIT_COLOR, sp);
+        Value *r = map_get(map->map, "r");
+        Value *g = map_get(map->map, "g");
+        Value *b = map_get(map->map, "b");
+        Value *a = map_get(map->map, "a");
+        n->lit_color.r = (r && r->tag == XS_INT) ? r->i : 0;
+        n->lit_color.g = (g && g->tag == XS_INT) ? g->i : 0;
+        n->lit_color.b = (b && b->tag == XS_INT) ? b->i : 0;
+        n->lit_color.a = (a && a->tag == XS_INT) ? a->i : 255;
+        return n;
+    }
+    if (tag_i == NODE_LIT_DATE) {
+        Node *n = node_new(NODE_LIT_DATE, sp);
+        Value *v = map_get(map->map, "value");
+        n->lit_date.value = xs_strdup((v && v->tag == XS_STR) ? v->s : "");
+        return n;
+    }
+    if (tag_i == NODE_LIT_SIZE) {
+        Node *n = node_new(NODE_LIT_SIZE, sp);
+        Value *v = map_get(map->map, "bytes");
+        n->lit_size.bytes = (v && v->tag == XS_FLOAT) ? v->f :
+                            (v && v->tag == XS_INT) ? (double)v->i : 0.0;
+        return n;
+    }
+    if (tag_i == NODE_LIT_ANGLE) {
+        Node *n = node_new(NODE_LIT_ANGLE, sp);
+        Value *v = map_get(map->map, "radians");
+        n->lit_angle.radians = (v && v->tag == XS_FLOAT) ? v->f :
+                               (v && v->tag == XS_INT) ? (double)v->i : 0.0;
+        return n;
+    }
+    if (tag_i == NODE_EVERY) {
+        Node *n = node_new(NODE_EVERY, sp);
+        Value *interval = map_get(map->map, "interval");
+        Value *body = map_get(map->map, "body");
+        n->every_.interval = node_from_xs_map(interval);
+        n->every_.body = node_from_xs_map(body);
+        if (!n->every_.interval) n->every_.interval = node_new(NODE_LIT_NULL, sp);
+        if (!n->every_.body) n->every_.body = node_new(NODE_LIT_NULL, sp);
+        return n;
+    }
+    if (tag_i == NODE_AFTER) {
+        Node *n = node_new(NODE_AFTER, sp);
+        Value *delay = map_get(map->map, "delay");
+        Value *body = map_get(map->map, "body");
+        n->after_.delay = node_from_xs_map(delay);
+        n->after_.body = node_from_xs_map(body);
+        if (!n->after_.delay) n->after_.delay = node_new(NODE_LIT_NULL, sp);
+        if (!n->after_.body) n->after_.body = node_new(NODE_LIT_NULL, sp);
+        return n;
+    }
+    if (tag_i == NODE_TIMEOUT) {
+        Node *n = node_new(NODE_TIMEOUT, sp);
+        Value *dur = map_get(map->map, "duration");
+        Value *body = map_get(map->map, "body");
+        Value *fb = map_get(map->map, "fallback");
+        n->timeout_.duration = node_from_xs_map(dur);
+        n->timeout_.body = node_from_xs_map(body);
+        n->timeout_.fallback = (fb && fb->tag == XS_MAP) ? node_from_xs_map(fb) : NULL;
+        if (!n->timeout_.duration) n->timeout_.duration = node_new(NODE_LIT_NULL, sp);
+        if (!n->timeout_.body) n->timeout_.body = node_new(NODE_LIT_NULL, sp);
+        return n;
+    }
+    if (tag_i == NODE_DEBOUNCE) {
+        Node *n = node_new(NODE_DEBOUNCE, sp);
+        Value *delay = map_get(map->map, "delay");
+        Value *body = map_get(map->map, "body");
+        n->debounce_.delay = node_from_xs_map(delay);
+        n->debounce_.body = node_from_xs_map(body);
+        if (!n->debounce_.delay) n->debounce_.delay = node_new(NODE_LIT_NULL, sp);
+        if (!n->debounce_.body) n->debounce_.body = node_new(NODE_LIT_NULL, sp);
+        return n;
     }
 
     /* Unsupported tag: wrap as a plugin_eval node that calls the XS value directly.
@@ -7457,6 +7655,15 @@ static void build_plugin_map(Value *plugin_map) {
     map_set(ast_map->map, "while_loop", xs_native(native_ast_while_loop));
     map_set(ast_map->map, "array", xs_native(native_ast_array));
     map_set(ast_map->map, "map", xs_native(native_ast_map_node));
+    map_set(ast_map->map, "duration", xs_native(native_ast_duration));
+    map_set(ast_map->map, "color", xs_native(native_ast_color));
+    map_set(ast_map->map, "date", xs_native(native_ast_date));
+    map_set(ast_map->map, "size", xs_native(native_ast_size));
+    map_set(ast_map->map, "angle", xs_native(native_ast_angle));
+    map_set(ast_map->map, "every", xs_native(native_ast_every));
+    map_set(ast_map->map, "after", xs_native(native_ast_after));
+    map_set(ast_map->map, "timeout", xs_native(native_ast_timeout));
+    map_set(ast_map->map, "debounce", xs_native(native_ast_debounce));
     map_set(plugin_map->map, "ast", ast_map);
     value_decref(ast_map);
 }
