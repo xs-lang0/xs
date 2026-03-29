@@ -469,6 +469,30 @@ void node_free(Node *n) {
         free(n->adapt_fn.targets);
         free(n->adapt_fn.bodies);
         break;
+    case NODE_LIT_DURATION: break;
+    case NODE_LIT_COLOR: break;
+    case NODE_LIT_DATE:
+        free(n->lit_date.value);
+        break;
+    case NODE_LIT_SIZE: break;
+    case NODE_LIT_ANGLE: break;
+    case NODE_EVERY:
+        node_free(n->every_.interval);
+        node_free(n->every_.body);
+        break;
+    case NODE_AFTER:
+        node_free(n->after_.delay);
+        node_free(n->after_.body);
+        break;
+    case NODE_TIMEOUT:
+        node_free(n->timeout_.duration);
+        node_free(n->timeout_.body);
+        node_free(n->timeout_.fallback);
+        break;
+    case NODE_DEBOUNCE:
+        node_free(n->debounce_.delay);
+        node_free(n->debounce_.body);
+        break;
     case NODE_PROGRAM:
         nodelist_free(&n->program.stmts);
         break;
