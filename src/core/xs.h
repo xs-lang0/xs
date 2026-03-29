@@ -92,6 +92,7 @@ struct XSFunc {
     char    *deprecated_msg;
     char   **param_type_names;
     char    *ret_type_name;
+    Node   **param_contracts; /* where clause per param, may be NULL */
     int      refcount;
 };
 

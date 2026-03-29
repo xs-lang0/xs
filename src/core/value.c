@@ -807,5 +807,6 @@ void func_free(XSFunc *fn) {
         free(fn->param_type_names);
     }
     free(fn->ret_type_name);
+    free(fn->param_contracts); /* contracts are owned by AST, just free the array */
     free(fn);
 }

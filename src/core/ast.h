@@ -132,6 +132,8 @@ typedef enum {
 
     NODE_INLINE_C,
     NODE_TAG_DECL,
+    NODE_BIND,
+    NODE_ADAPT_FN,
 
     NODE_PROGRAM,
 } NodeTag;
@@ -170,6 +172,7 @@ typedef struct {
     int          variadic;
     int          keyword_only;
     TypeExpr    *type_ann;   /* may be NULL */
+    Node        *contract;   /* where clause, may be NULL */
     Span         span;
 } Param;
 
@@ -351,9 +354,10 @@ struct Node {
             Node        *value;
             int          mutable;
             TypeExpr    *type_ann;
+            Node        *contract;   /* where clause, may be NULL */
         } let;
 
-        struct { char *name; Node *value; TypeExpr *type_ann; } const_;
+        struct { char *name; Node *value; TypeExpr *type_ann; Node *contract; } const_;
         struct { Node *expr; int has_semicolon; } expr_stmt;
 
         struct {
@@ -541,6 +545,21 @@ struct Node {
             Node      *body;
             int        is_pub;
         } tag_decl;
+
+        struct {
+            char *name;
+            Node *expr;
+        } bind_decl;
+
+        struct {
+            char      *name;
+            ParamList  params;
+            TypeExpr  *ret_type;
+            int        is_pub;
+            char     **targets;     /* "native", "js", "wasm" */
+            Node     **bodies;      /* parallel block nodes */
+            int        nbranches;
+        } adapt_fn;
 
         struct { NodeList stmts; } program;
     };
