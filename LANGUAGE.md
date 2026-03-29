@@ -55,6 +55,75 @@ var name: str = "XS"
 
 `const` is identical to `let` at runtime.
 
+### Reactive Bindings
+
+`bind` creates a variable that automatically recomputes when its dependencies change.
+
+```xs
+var price = 10
+var qty = 3
+bind total = price * qty
+println(total)                   -- 30
+
+price = 20
+println(total)                   -- 60 (auto-updated)
+
+qty = 5
+println(total)                   -- 100
+
+-- bindings can depend on other bindings (cascading)
+bind doubled = total * 2
+println(doubled)                 -- 200
+
+price = 1
+println(total)                   -- 5
+println(doubled)                 -- 10
+
+-- works with strings too
+var name = "world"
+bind greeting = "hello " ++ name
+println(greeting)                -- hello world
+name = "xs"
+println(greeting)                -- hello xs
+```
+
+`bind` tracks which variables are read when the expression is first evaluated. When any of those variables are reassigned, the binding automatically recomputes. Cascading works: if binding A depends on binding B, and B's dependency changes, both B and A update in order.
+
+In the VM and transpilers, `bind` acts as a regular `let` (no reactivity). Reactive updates only happen in the interpreter.
+
+### Contracts (where clauses)
+
+Add `where` after a type annotation to enforce a condition on the value. The condition is checked at runtime.
+
+```xs
+let age: int where age > 0 and age < 150 = 25
+let name: str where name.len > 0 = "xs"
+let score: int where score >= 0 and score <= 100 = 85
+```
+
+If the condition fails, a catchable error is thrown:
+
+```xs
+try {
+    let bad: int where bad > 100 = 5
+} catch e {
+    println(e)                   -- contract violation
+}
+```
+
+Contracts work on function parameters too:
+
+```xs
+fn divide(a: int, b: int where b != 0) {
+    return a / b
+}
+
+println(divide(10, 2))           -- 5
+divide(10, 0)                    -- throws: contract violation
+```
+
+Contracts are gradual: no `where` clause means no checking. Add them where you want enforcement. They're checked at runtime in the interpreter. In the VM and transpilers, contracts on function params are not yet enforced (variables are).
+
 ### Destructuring
 
 ```xs
@@ -1861,6 +1930,60 @@ fn fast_hash(data) {
 Use `xs transpile --target c` to compile code that uses inline C. The raw C code has access to the enclosing function's arguments via an `args[]` array and can return values using helper macros.
 
 This is useful for performance-critical inner loops, FFI glue, or leveraging C libraries directly without writing a full native plugin.
+
+---
+
+## Adapt Functions
+
+`adapt fn` defines a function with different implementations for different compilation targets. The interpreter always picks the `native` branch. The JS transpiler picks `js`. The C transpiler picks `native`. The WASM transpiler picks `wasm`.
+
+```xs
+adapt fn greet(name: str) -> str {
+    when native {
+        return "hello from native, " ++ name
+    }
+    when js {
+        return "hello from js, " ++ name
+    }
+    when wasm {
+        return "hello from wasm, " ++ name
+    }
+}
+
+println(greet("world"))          -- hello from native, world (in interpreter)
+```
+
+If the current target doesn't have a matching branch, it falls back to `native`, then to the first branch defined.
+
+```xs
+-- only need native and js? that's fine
+adapt fn fast_hash(data: str) -> int {
+    when native {
+        var h = 0
+        for ch in data { h = h * 31 + type(ch) }
+        return h
+    }
+    when js {
+        return data.len * 37
+    }
+}
+```
+
+Adapt functions support all the same features as regular functions: type annotations, contracts, default params. The branches are just blocks, so any XS code works inside them.
+
+```xs
+-- combine with contracts
+adapt fn validate(n: int where n > 0) -> int {
+    when native {
+        return n * 2
+    }
+    when js {
+        return n
+    }
+}
+```
+
+This makes multi-target code a language-level concept instead of just a build flag. Write your platform-specific code inline, and the right branch gets selected automatically.
 
 ---
 

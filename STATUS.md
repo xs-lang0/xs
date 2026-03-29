@@ -1,6 +1,6 @@
 # XS Status
 
-What works, what's partial, and what's planned. Updated for v0.2.2.
+What works, what's partial, and what's planned. Updated for v0.2.3.
 
 ## Tree-Walk Interpreter
 
@@ -17,6 +17,9 @@ The default backend. Handles the full language.
 | Functions, closures, default params, variadic, arrow lambdas | works |
 | Function overloading (dispatch by arity) | works |
 | Tagged blocks (user-defined control structures) | works |
+| Reactive bindings (bind) | works |
+| Gradual contracts (where clauses) | works |
+| Adapt functions (multi-target) | works |
 | Inline C blocks (for C transpiler) | works |
 | Generators (fn*/yield) | works |
 | Structs, impl, traits | works |
@@ -33,11 +36,11 @@ The default backend. Handles the full language.
 | Standard library (14 modules) | works |
 | HTTPS via embedded BearSSL | works |
 
-All 15 test suites pass on Linux, macOS, and Windows.
+All 17 test suites pass on Linux, macOS, and Windows.
 
 ## Bytecode VM
 
-Use `--vm` flag. Full feature parity with the interpreter.
+Use `--vm` flag. Full feature parity with the interpreter (except reactive bindings, which evaluate once).
 
 | Feature | Status |
 |---------|--------|
@@ -69,7 +72,7 @@ Use `--vm` flag. Full feature parity with the interpreter.
 | Range indexing (arr[1..3]) | works |
 | All builtins matching interpreter | works |
 
-All 15 test suites pass. Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
+All 17 test suites pass. Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
 
 ## JIT Compiler
 
@@ -149,7 +152,17 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 | macOS (x86-64, ARM) | works, CI tested |
 | Windows (MinGW) | works, CI tested, static linked |
 
-## Recent Changes (v0.2.2)
+## Recent Changes (v0.2.3)
+
+- Added: reactive bindings (`bind x = expr`) - variables that auto-update when dependencies change
+- Added: gradual contracts (`where` clauses) - runtime-checked conditions on type annotations
+- Added: adapt functions (`adapt fn`) - multi-target function bodies with `when native/js/wasm` branches
+- Added: `bind` and `adapt` as new keywords, `where` as contextual keyword after type annotations
+- Updated: LSP server with completions, hover, and document symbols for bind and adapt
+- Updated: all backends (VM, JS transpiler, C transpiler) handle new node types
+- Test suite now at 17 test files, all passing
+
+## Changes in v0.2.2
 
 - Added: function overloading - multiple functions with the same name, dispatched by argument count
 - Added: tagged blocks (`tag`) - user-defined control structures with `yield` to execute caller's block
@@ -163,7 +176,6 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 - Updated: VSCode extension with syntax highlighting for new keywords, tag declarations, and string interpolation colors
 - Updated: LSP server with completions, hover, and document symbols for tags
 - Fixed: parser `no_arrow_lambda` flag not initialized, causing flaky test failures
-- Test suite now at 15 test files, all passing
 
 ## Known Limitations
 
