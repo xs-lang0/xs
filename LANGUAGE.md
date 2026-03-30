@@ -3291,6 +3291,37 @@ Both the interpreter and VM produce identical results for correct programs. The 
 
 The `build` command compiles to a `.xsc` file that can be distributed and run without the source.
 
+### WebAssembly (WASM)
+
+XS can be compiled to WebAssembly using Emscripten, allowing the full interpreter to run in the browser or any WASM runtime.
+
+```bash
+make wasm    # produces xs_wasm.js + xs_wasm.wasm
+```
+
+The WASM build includes the interpreter, VM, semantic analysis, type checking, effects, pattern matching, generators, closures, enums, structs, classes, universal literals, temporal primitives, and the JS/C transpiler. It passes 14 out of 15 test suites with output identical to the native binary.
+
+Not available in WASM:
+- Networking (HTTP, sockets, TLS) - no raw sockets in browser
+- File system - uses Emscripten's virtual FS, not real disk
+- Native plugins (.so/.dll) - no dlopen in WASM
+- JIT compilation - can't map executable memory
+- REPL - needs terminal stdin
+- LSP/DAP - needs stdio/socket communication
+- Profiler sampling (SIGPROF) - no signals in WASM
+- `input()` - no stdin in browser context
+
+The WASM binary is ~650KB and loads in under a second. It powers the playground at xslang.org/playground.
+
+### Transpilation
+
+```bash
+xs --emit js script.xs     # transpile to JavaScript
+xs --emit c script.xs      # transpile to C
+```
+
+The JS transpiler maps XS constructs to idiomatic JavaScript: classes become JS classes, pattern matching becomes if/else chains, channels become array-backed queues, and builtins like `str()`, `len()`, `type()` map to their JS equivalents. The output runs in any browser or Node.js.
+
 ---
 
 ## CLI Commands
