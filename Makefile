@@ -190,15 +190,22 @@ install: release
 WASM_SRCS = src/wasm_main.c \
             $(CORE_SRCS) $(RUNTIME_SRCS) $(TYPES_EXTRA_SRCS) $(EMBED_SRCS) \
             $(DIAG_SRCS) $(SEMA_SRCS) \
-            src/fmt/fmt.c src/doc/docgen.c \
+            src/fmt/fmt.c src/doc/docgen.c src/lint/lint.c \
+            src/pkg/pkg.c src/coverage/coverage.c \
+            src/optimizer/optimizer.c src/ir/ir.c src/profiler/profiler.c \
             $(wildcard src/vm/*.c) \
             $(wildcard src/effects/*.c) \
             $(wildcard src/transpiler/*.c) \
+            $(wildcard src/plugins/*.c) \
+            $(wildcard src/tracer/*.c) \
             src/wasm_stubs.c
 
 WASM_FLAGS = -O2 -std=c11 -Isrc \
              -DXSC_ENABLE_VM -DXSC_ENABLE_EFFECTS -DXSC_ENABLE_TRANSPILER \
-             -DXSC_ENABLE_FMT -DXSC_ENABLE_DOC \
+             -DXSC_ENABLE_FMT -DXSC_ENABLE_DOC -DXSC_ENABLE_PKG \
+             -DXSC_ENABLE_PLUGINS -DXSC_ENABLE_SANDBOX \
+             -DXSC_ENABLE_PROFILER -DXSC_ENABLE_COVERAGE \
+             -DXSC_ENABLE_TRACER \
              -s WASM=1 \
              -s EXPORTED_FUNCTIONS='["_main"]' \
              -s EXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
