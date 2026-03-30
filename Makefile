@@ -213,7 +213,8 @@ WASM_FLAGS = -O2 -std=c11 -Isrc \
              -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=67108864 \
              -s STACK_SIZE=1048576 \
              -s INVOKE_RUN=0 -s EXIT_RUNTIME=0 -s FORCE_FILESYSTEM=1 \
-             -s ERROR_ON_UNDEFINED_SYMBOLS=0
+             -s ERROR_ON_UNDEFINED_SYMBOLS=0 \
+             -s ASYNCIFY
 
 wasm:
 	emcc $(WASM_FLAGS) -o xs_wasm.js $(WASM_SRCS)
