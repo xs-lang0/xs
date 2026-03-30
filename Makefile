@@ -187,11 +187,32 @@ test: $(TARGET)
 install: release
 	install -m 755 $(TARGET) /usr/local/bin/xs
 
+WASM_SRCS = src/wasm_main.c \
+            $(CORE_SRCS) $(RUNTIME_SRCS) $(TYPES_EXTRA_SRCS) $(EMBED_SRCS) \
+            $(DIAG_SRCS) $(SEMA_SRCS) \
+            src/fmt/fmt.c src/doc/docgen.c \
+            $(wildcard src/vm/*.c) \
+            $(wildcard src/effects/*.c) \
+            $(wildcard src/transpiler/*.c) \
+            src/wasm_stubs.c
+
+WASM_FLAGS = -O2 -std=c11 -Isrc \
+             -DXSC_ENABLE_VM -DXSC_ENABLE_EFFECTS -DXSC_ENABLE_TRANSPILER \
+             -DXSC_ENABLE_FMT -DXSC_ENABLE_DOC \
+             -s WASM=1 \
+             -s EXPORTED_FUNCTIONS='["_main"]' \
+             -s EXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
+             -s MODULARIZE=1 -s EXPORT_NAME='createXS' \
+             -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=33554432 \
+             -s INVOKE_RUN=0 -s EXIT_RUNTIME=0 -s FORCE_FILESYSTEM=1 \
+             -s ERROR_ON_UNDEFINED_SYMBOLS=0
+
 wasm:
-	@echo "WASM target not yet implemented (see Phase N)"
+	emcc $(WASM_FLAGS) -o xs_wasm.js $(WASM_SRCS)
+	@echo "built xs_wasm.js + xs_wasm.wasm"
 
 wasi:
-	@echo "WASI target not yet implemented (see Phase N)"
+	@echo "WASI target not yet implemented"
 
 clean:
 	rm -f $(OBJS) $(TARGET)
