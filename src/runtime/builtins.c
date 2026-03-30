@@ -670,45 +670,18 @@ static Value *builtin_format(Interp *i, Value **args, int argc) {
 /* global stdin override for WASM playground */
 FILE *g_xs_stdin_override = NULL;
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-
-EM_ASYNC_JS(char*, xs_wasm_wait_input, (const char *unused_prompt), {
-    if (typeof Module.asyncInput === 'function') {
-        var result = await Module.asyncInput();
-        if (result === null || result === undefined) result = "";
-        var len = lengthBytesUTF8(result) + 1;
-        var buf = _malloc(len);
-        stringToUTF8(result, buf, len);
-        return buf;
-    }
-    var buf = _malloc(1);
-    HEAPU8[buf] = 0;
-    return buf;
-});
-#endif
-
 static Value *builtin_input(Interp *i, Value **args, int argc) {
-#ifdef __EMSCRIPTEN__
-    if (argc > 0) {
-        char *s = value_str(args[0]); printf("%s", s); free(s); fflush(stdout);
-    }
-    char *result = xs_wasm_wait_input(NULL);
-    Value *v = xs_str(result ? result : "");
-    if (result) free(result);
-    return v;
-#else
     (void)i;
+    FILE *in = g_xs_stdin_override ? g_xs_stdin_override : stdin;
     if (argc>0) {
         char *s=value_str(args[0]); printf("%s",s); free(s); fflush(stdout);
     }
     char buf[4096]; buf[0]='\0';
-    if (fgets(buf,sizeof(buf),stdin)) {
+    if (fgets(buf,sizeof(buf),in)) {
         int n=(int)strlen(buf);
         if (n>0&&buf[n-1]=='\n') buf[n-1]='\0';
     }
     return xs_str(buf);
-#endif
 }
 
 static Value *builtin_exit(Interp *i, Value **args, int argc) {
