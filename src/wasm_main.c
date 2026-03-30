@@ -57,11 +57,10 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* redirect stdin from file if --stdin given */
+    /* redirect input() reads from file if --stdin given */
+    extern FILE *g_xs_stdin_override;
     if (stdin_file) {
-        if (!freopen(stdin_file, "r", stdin)) {
-            fprintf(stderr, "error: could not open stdin file %s\n", stdin_file);
-        }
+        g_xs_stdin_override = fopen(stdin_file, "r");
     }
 
     FILE *f = fopen(filename, "r");

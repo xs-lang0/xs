@@ -667,13 +667,17 @@ static Value *builtin_format(Interp *i, Value **args, int argc) {
     Value *v=xs_str(result); free(result); return v;
 }
 
+/* global stdin override for WASM playground */
+FILE *g_xs_stdin_override = NULL;
+
 static Value *builtin_input(Interp *i, Value **args, int argc) {
     (void)i;
+    FILE *in = g_xs_stdin_override ? g_xs_stdin_override : stdin;
     if (argc>0) {
         char *s=value_str(args[0]); printf("%s",s); free(s); fflush(stdout);
     }
     char buf[4096]; buf[0]='\0';
-    if (fgets(buf,sizeof(buf),stdin)) {
+    if (fgets(buf,sizeof(buf),in)) {
         int n=(int)strlen(buf);
         if (n>0&&buf[n-1]=='\n') buf[n-1]='\0';
     }
