@@ -671,16 +671,21 @@ static Value *builtin_format(Interp *i, Value **args, int argc) {
 FILE *g_xs_stdin_override = NULL;
 
 static Value *builtin_input(Interp *i, Value **args, int argc) {
-    (void)i;
     FILE *in = g_xs_stdin_override ? g_xs_stdin_override : stdin;
     if (argc>0) {
         char *s=value_str(args[0]); printf("%s",s); free(s); fflush(stdout);
     }
     char buf[4096]; buf[0]='\0';
-    if (fgets(buf,sizeof(buf),in)) {
-        int n=(int)strlen(buf);
-        if (n>0&&buf[n-1]=='\n') buf[n-1]='\0';
+    char *got = fgets(buf, sizeof(buf), in);
+    if (!got && g_xs_stdin_override) {
+        fprintf(stderr, "error: input() needs data. add input to the stdin box (one line per input call).\n");
+        i->cf.signal = CF_PANIC;
+        i->cf.value = xs_str("no stdin data");
+        return xs_str("");
     }
+    if (!got) return xs_str("");
+    int n=(int)strlen(buf);
+    if (n>0&&buf[n-1]=='\n') buf[n-1]='\0';
     return xs_str(buf);
 }
 
