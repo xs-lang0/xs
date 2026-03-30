@@ -470,7 +470,8 @@ xs install              # install all from xs.toml
 xs install http-client  # install a specific package
 ```
 
-Packages are installed to `xs_lib/`.
+Packages are installed to `.xs_lib/` in the project directory. Global packages
+(installed via `xsi get -g`) go to `~/.xs/lib/`.
 
 ### `xs remove <pkg>`
 

@@ -69,7 +69,24 @@ retry(3) { http_get("https://api.example.com") }
 
 ## Install
 
-Download a prebuilt binary from [releases](https://github.com/xs-lang0/xs/releases), or build from source:
+Install with a single command:
+
+```bash
+curl -fsSL xslang.org/install | sh        # linux/macos
+irm xslang.org/install.ps1 | iex          # windows (powershell)
+```
+
+This downloads the XS installer (xsi), which sets up `~/.xs/` with the compiler, VM, and all built-in tools. After install:
+
+```
+~/.xs/
+  bin/     xs, xsi (added to PATH)
+  lib/     globally installed packages
+  cache/   download cache
+  env      shell environment setup
+```
+
+Or build from source:
 
 ```bash
 make            # produces ./xs
