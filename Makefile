@@ -210,7 +210,8 @@ WASM_FLAGS = -O2 -std=c11 -Isrc \
              -s EXPORTED_FUNCTIONS='["_main"]' \
              -s EXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
              -s MODULARIZE=1 -s EXPORT_NAME='createXS' \
-             -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=33554432 \
+             -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=67108864 \
+             -s STACK_SIZE=1048576 \
              -s INVOKE_RUN=0 -s EXIT_RUNTIME=0 -s FORCE_FILESYSTEM=1 \
              -s ERROR_ON_UNDEFINED_SYMBOLS=0
 
