@@ -34,12 +34,15 @@ int main(int argc, char **argv) {
 
     const char *filename = NULL;
     const char *emit_target = NULL;
+    const char *stdin_file = NULL;
     int check_only = 0;
     int strict = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--emit") == 0 && i + 1 < argc) {
             emit_target = argv[++i];
+        } else if (strcmp(argv[i], "--stdin") == 0 && i + 1 < argc) {
+            stdin_file = argv[++i];
         } else if (strcmp(argv[i], "--check") == 0) {
             check_only = 1;
         } else if (strcmp(argv[i], "--strict") == 0) {
@@ -52,6 +55,13 @@ int main(int argc, char **argv) {
     if (!filename) {
         fprintf(stderr, "error: no input file\n");
         return 1;
+    }
+
+    /* redirect stdin from file if --stdin given */
+    if (stdin_file) {
+        if (!freopen(stdin_file, "r", stdin)) {
+            fprintf(stderr, "error: could not open stdin file %s\n", stdin_file);
+        }
     }
 
     FILE *f = fopen(filename, "r");
