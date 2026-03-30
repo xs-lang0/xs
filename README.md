@@ -76,11 +76,11 @@ curl -fsSL xslang.org/install | sh        # linux/macos
 irm xslang.org/install.ps1 | iex          # windows (powershell)
 ```
 
-This downloads the XS installer (xsi), which sets up `~/.xs/` with the compiler, VM, and all built-in tools. After install:
+This downloads the XS installer (xsi), which sets up `/usr/local/xs/` (or `C:\xs\` on Windows) with the compiler, VM, and all built-in tools. Requires sudo/admin. After install:
 
 ```
-~/.xs/
-  bin/     xs, xsi (added to PATH)
+/usr/local/xs/
+  bin/     xs, xsi (added to system PATH)
   lib/     globally installed packages
   cache/   download cache
   env      shell environment setup
