@@ -72,8 +72,8 @@ retry(3) { http_get("https://api.example.com") }
 Install with a single command:
 
 ```bash
-curl -fsSL xslang.org/install | sh        # linux/macos
-irm xslang.org/install.ps1 | iex          # windows (powershell)
+curl -fsSL https://xslang.org/install | sh        # linux/macos
+irm https://xslang.org/install.ps1 | iex          # windows (powershell)
 ```
 
 This downloads the XS installer (xsi), which sets up `/usr/local/xs/` (or `C:\xs\` on Windows) with the compiler, VM, and all built-in tools. Requires sudo/admin. After install:
