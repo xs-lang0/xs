@@ -98,10 +98,24 @@ jobs:
         shell: bash
         run: mv xs.exe ${{ matrix.name }}
 
-      - name: Upload to release
+      - name: Zip Windows binary
+        if: runner.os == 'Windows'
+        shell: bash
+        run: zip xs-windows-x86_64.zip ${{ matrix.name }}
+
+      - name: Upload to release (Unix)
+        if: runner.os != 'Windows'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.name }}
+
+      - name: Upload to release (Windows)
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.name }}
+            xs-windows-x86_64.zip
 
   wasm:
     if: startsWith(github.ref, 'refs/tags/v')
