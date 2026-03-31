@@ -41,8 +41,8 @@ check_output() {
 }
 
 # version and help
-check_output "--version" "xs 0.2" ./xs --version
-check_output "-V" "xs 0.2" ./xs -V
+check_output "--version" "xs 0.3" ./xs --version
+check_output "-V" "xs 0.3" ./xs -V
 check_output "--help" "Usage:" ./xs --help
 check_output "-h" "Usage:" ./xs -h
 
