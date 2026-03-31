@@ -100,8 +100,8 @@ jobs:
 
       - name: Zip Windows binary
         if: runner.os == 'Windows'
-        shell: bash
-        run: zip xs-windows-x86_64.zip ${{ matrix.name }}
+        shell: pwsh
+        run: Compress-Archive -Path ${{ matrix.name }} -DestinationPath xs-windows-x86_64.zip
 
       - name: Upload to release (Unix)
         if: runner.os != 'Windows'
