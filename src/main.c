@@ -1275,10 +1275,10 @@ int main(int argc, char **argv) {
                 for (int i = 0; i < fl->count - 1; i++)
                     for (int j = i + 1; j < fl->count; j++)
                         if (strcmp(fl->paths[i], fl->paths[j]) > 0) {
-                            char tmp[512];
-                            memcpy(tmp, fl->paths[i], 512);
-                            memcpy(fl->paths[i], fl->paths[j], 512);
-                            memcpy(fl->paths[j], tmp, 512);
+                            char tmp[PATH_MAX];
+                            memcpy(tmp, fl->paths[i], PATH_MAX);
+                            memcpy(fl->paths[i], fl->paths[j], PATH_MAX);
+                            memcpy(fl->paths[j], tmp, PATH_MAX);
                         }
 
                 for (int ti = 0; ti < fl->count; ti++) {

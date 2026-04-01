@@ -1064,12 +1064,13 @@ static int call_frame_push(VM *vm, Value *closure_val, int argc) {
         /* collect variadic args into an array */
         int n_extra = argc - arity;
         Value *varargs = xs_array_new();
-        Value *tmp_extra[256];
+        Value *te_s[256], **tmp_extra = n_extra <= 256 ? te_s : malloc(n_extra * sizeof(Value*));
         for (int i = n_extra - 1; i >= 0; i--) tmp_extra[i] = POP();
         for (int i = 0; i < n_extra; i++) {
             array_push(varargs->arr, tmp_extra[i]);
             value_decref(tmp_extra[i]);
         }
+        if (tmp_extra != te_s) free(tmp_extra);
         PUSH(varargs);
         argc = arity + 1; /* required + 1 varargs array */
     } else {
@@ -1379,23 +1380,25 @@ static int vm_dispatch(VM *vm, int stop_frame) {
         case OP_MAKE_ARRAY: {
             int n = (int)INSTR_C(instr);
             Value *arr = xs_array_new();
-            Value *tmp[256];
+            Value *tmp_s[256], **tmp = n <= 256 ? tmp_s : malloc(n * sizeof(Value*));
             for (int i = n-1; i >= 0; i--) tmp[i] = POP();
             for (int i = 0; i < n; i++) {
                 array_push(arr->arr, tmp[i]);
                 value_decref(tmp[i]);
             }
+            if (tmp != tmp_s) free(tmp);
             PUSH(arr); break;
         }
         case OP_MAKE_TUPLE: {
             int n = (int)INSTR_C(instr);
             Value *tup = xs_tuple_new();
-            Value *tmp[256];
+            Value *tmp_s[256], **tmp = n <= 256 ? tmp_s : malloc(n * sizeof(Value*));
             for (int i = n-1; i >= 0; i--) tmp[i] = POP();
             for (int i = 0; i < n; i++) {
                 array_push(tup->arr, tmp[i]);
                 value_decref(tmp[i]);
             }
+            if (tmp != tmp_s) free(tmp);
             PUSH(tup); break;
         }
         case OP_INDEX_GET: {
@@ -1508,13 +1511,14 @@ static int vm_dispatch(VM *vm, int stop_frame) {
         case OP_MAKE_MAP: {
             int n = (int)INSTR_C(instr); /* n key-value pairs */
             Value *m = xs_map_new();
-            Value *tmp[512];
+            Value *tmp_s[512], **tmp = n*2 <= 512 ? tmp_s : malloc(n * 2 * sizeof(Value*));
             for (int i = n*2-1; i >= 0; i--) tmp[i] = POP();
             for (int i = 0; i < n; i++) {
                 Value *k = tmp[i*2], *v = tmp[i*2+1];
                 if (k->tag == XS_STR) map_set(m->map, k->s, v);
                 value_decref(k); value_decref(v);
             }
+            if (tmp != tmp_s) free(tmp);
             PUSH(m); break;
         }
 
@@ -1615,8 +1619,8 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                                         value_incref(vm->sp[-argc + fi++]));
                     }
                     Value *init_fn = map_get(inst->map, "init");
-                    Value *ctor_args[256];
-                    for (int j = 0; j < argc && j < 256; j++)
+                    Value *ca_s[256], **ctor_args = argc <= 256 ? ca_s : malloc(argc * sizeof(Value*));
+                    for (int j = 0; j < argc; j++)
                         ctor_args[j] = value_incref(vm->sp[-argc + j]);
                     for (int j = 0; j < argc; j++) value_decref(POP());
                     value_decref(POP()); /* callee */
@@ -1628,11 +1632,13 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                         Value *ir = init_fn->native(NULL, init_call_args, argc + 1);
                         if (ir) value_decref(ir);
                         for (int j = 0; j < argc; j++) value_decref(ctor_args[j]);
+                        if (ctor_args != ca_s) free(ctor_args);
                         PUSH(inst);
                     } else if (init_fn && init_fn->tag == XS_CLOSURE && argc > 0) {
                         PUSH(inst);
                         PUSH(value_incref(inst));
                         for (int j = 0; j < argc; j++) PUSH(ctor_args[j]);
+                        if (ctor_args != ca_s) free(ctor_args);
                         value_incref(init_fn);
                         if (call_frame_push(vm, init_fn, argc + 1) == 0) {
                             value_decref(init_fn);
@@ -1644,6 +1650,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                         }
                     } else {
                         for (int j = 0; j < argc; j++) value_decref(ctor_args[j]);
+                        if (ctor_args != ca_s) free(ctor_args);
                         PUSH(inst);
                     }
                 } else {
@@ -1687,7 +1694,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                 fprintf(stderr, "tail call arity mismatch\n");
                 return 1;
             }
-            Value *new_args[256];
+            Value *na_s[256], **new_args = argc <= 256 ? na_s : malloc(argc * sizeof(Value*));
             for (int i = argc-1; i >= 0; i--) new_args[i] = POP();
             value_decref(POP());
             upvalue_close_all(&vm->open_upvalues, frame->base);
@@ -1698,6 +1705,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             frame->base        = vm->sp;
             value_decref(old_cv);
             for (int i = 0; i < argc; i++) PUSH(new_args[i]);
+            if (new_args != na_s) free(new_args);
             for (int i = argc; i < new_cl->proto->nlocals; i++) PUSH(xs_null());
             break;
         }
@@ -3700,13 +3708,15 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             { Value *nv = xs_str(cls_name); map_set(cls->map, "__name", nv); value_decref(nv); }
             { Value *nv = xs_str(cls_name); map_set(cls->map, "__type", nv); value_decref(nv); }
             Value *fields = xs_map_new();
-            Value *tmp[512];
-            for (int i = nfields*2-1; i >= 0; i--) tmp[i] = POP();
+            int ntmp = nfields*2;
+            Value *tmp_s[512], **tmp = ntmp <= 512 ? tmp_s : malloc(ntmp * sizeof(Value*));
+            for (int i = ntmp-1; i >= 0; i--) tmp[i] = POP();
             for (int i = 0; i < nfields; i++) {
                 Value *k = tmp[i*2], *v = tmp[i*2+1];
                 if (k->tag == XS_STR) map_set(fields->map, k->s, v);
                 value_decref(k); value_decref(v);
             }
+            if (tmp != tmp_s) free(tmp);
             map_set(cls->map, "__fields", fields);
             value_decref(fields);
             Value *methods = xs_map_new();
@@ -3832,13 +3842,15 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             int nvariants = (int)INSTR_A(instr);
             const char *enum_name = PROTO->chunk.consts[INSTR_Bx(instr)]->s;
             Value *enum_map = xs_map_new();
-            Value *tmp_e[512];
-            for (int i = nvariants * 2 - 1; i >= 0; i--) tmp_e[i] = POP();
+            int ne = nvariants * 2;
+            Value *te_s[512], **tmp_e = ne <= 512 ? te_s : malloc(ne * sizeof(Value*));
+            for (int i = ne - 1; i >= 0; i--) tmp_e[i] = POP();
             for (int i = 0; i < nvariants; i++) {
                 Value *k = tmp_e[i * 2], *v = tmp_e[i * 2 + 1];
                 if (k->tag == XS_STR) map_set(enum_map->map, k->s, v);
                 value_decref(k); value_decref(v);
             }
+            if (tmp_e != te_s) free(tmp_e);
             { Value *nv = xs_str(enum_name); map_set(enum_map->map, "__type", nv); value_decref(nv); }
             { Value *nv = xs_str(enum_name); map_set(enum_map->map, "__name", nv); value_decref(nv); }
             PUSH(enum_map);
@@ -3848,7 +3860,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
         case OP_MAKE_INST: {
             int nargs = (int)INSTR_A(instr);
             const char *cls_name = PROTO->chunk.consts[INSTR_Bx(instr)]->s;
-            Value *inst_args[256];
+            Value *ia_s[256], **inst_args = nargs <= 256 ? ia_s : malloc(nargs * sizeof(Value*));
             for (int i = nargs - 1; i >= 0; i--) inst_args[i] = POP();
             Value *cls_val = POP();
             Value *inst = xs_map_new();
@@ -3881,6 +3893,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     Value *ir = mi_init->native(NULL, mi_call_args, nargs + 1);
                     if (ir) value_decref(ir);
                     for (int i = 0; i < nargs; i++) value_decref(inst_args[i]);
+                    if (inst_args != ia_s) free(inst_args);
                     value_decref(cls_val);
                     PUSH(inst);
                 } else if (mi_init && mi_init->tag == XS_CLOSURE && nargs > 0) {
@@ -3888,6 +3901,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     PUSH(inst);
                     PUSH(value_incref(inst));
                     for (int i = 0; i < nargs; i++) PUSH(inst_args[i]);
+                    if (inst_args != ia_s) free(inst_args);
                     value_incref(mi_init);
                     if (call_frame_push(vm, mi_init, nargs + 1) == 0) {
                         value_decref(mi_init);
@@ -3899,6 +3913,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                     }
                 } else {
                     for (int i = 0; i < nargs; i++) value_decref(inst_args[i]);
+                    if (inst_args != ia_s) free(inst_args);
                     value_decref(cls_val);
                     PUSH(inst);
                 }
@@ -3978,8 +3993,9 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             int nstate = (int)INSTR_A(instr);
             const char *actor_name = PROTO->chunk.consts[INSTR_Bx(instr)]->s;
             Value *methods_map = POP();
-            Value *state_tmp[512];
-            for (int i = nstate * 2 - 1; i >= 0; i--) state_tmp[i] = POP();
+            int ns2 = nstate * 2;
+            Value *st_s[512], **state_tmp = ns2 <= 512 ? st_s : malloc(ns2 * sizeof(Value*));
+            for (int i = ns2 - 1; i >= 0; i--) state_tmp[i] = POP();
             Value *actor = xs_map_new();
             { Value *nv = xs_str(actor_name); map_set(actor->map, "__actor_name", nv); value_decref(nv); }
             Value *state = xs_map_new();
@@ -3988,6 +4004,7 @@ static int vm_dispatch(VM *vm, int stop_frame) {
                 if (k->tag == XS_STR) map_set(state->map, k->s, v);
                 value_decref(k); value_decref(v);
             }
+            if (state_tmp != st_s) free(state_tmp);
             map_set(actor->map, "__state", state);
             value_decref(state);
             map_set(actor->map, "__methods", methods_map);

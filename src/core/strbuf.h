@@ -13,7 +13,9 @@ static inline void sb_init(SB *s) { s->data = NULL; s->len = s->cap = 0; }
 static inline void sb_ensure(SB *s, int need) {
     if (s->len + need + 1 <= s->cap) return;
     s->cap = (s->len + need + 1) * 2;
-    s->data = (char *)realloc(s->data, (size_t)s->cap); /* FIXME: old ptr lost if this fails */
+    char *p = (char *)realloc(s->data, (size_t)s->cap);
+    if (!p) { fprintf(stderr, "out of memory\n"); abort(); }
+    s->data = p;
 }
 
 static inline void sb_add(SB *s, const char *t) {
