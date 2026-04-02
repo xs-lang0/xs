@@ -2,7 +2,7 @@
 #define _DEFAULT_SOURCE
 #endif
 
-#define XS_VERSION "0.3.8"
+#define XS_VERSION "0.3.9"
 #define XS_VERSION_TAG "xs " XS_VERSION
 
 #include "core/xs_compat.h"
