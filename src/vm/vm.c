@@ -10,7 +10,10 @@
 #include <ctype.h>
 #include <time.h>
 
-#define PUSH(v)  (*vm->sp++ = (v))
+#define PUSH(v)  do { \
+    if (vm->sp - vm->stack >= vm->stack_cap) vm_grow_stack(vm); \
+    *vm->sp++ = (v); \
+} while(0)
 #define POP()    (*--vm->sp)
 #define PEEK(n)  (vm->sp[-(n)-1])
 #define FRAME    (&vm->frames[vm->frame_count - 1])
@@ -998,9 +1001,15 @@ VM *vm_new(void) {
     value_init_singletons();
     VM *vm = xs_malloc(sizeof *vm);
     memset(vm, 0, sizeof *vm);
-    vm->sp      = vm->stack;
-    vm->globals = map_new();
-    vm->n_tasks = 0;
+    vm->stack_cap  = VM_STACK_INIT;
+    vm->stack      = xs_malloc(vm->stack_cap * sizeof(Value *));
+    memset(vm->stack, 0, vm->stack_cap * sizeof(Value *));
+    vm->sp         = vm->stack;
+    vm->frames_cap = VM_FRAMES_INIT;
+    vm->frames     = xs_malloc(vm->frames_cap * sizeof(CallFrame));
+    memset(vm->frames, 0, vm->frames_cap * sizeof(CallFrame));
+    vm->globals    = map_new();
+    vm->n_tasks    = 0;
     vm_register_stdlib(vm);
     return vm;
 }
@@ -1008,35 +1017,49 @@ VM *vm_new(void) {
 void vm_free(VM *vm) {
     if (!vm) return;
     vm->eff_cont.valid = 0;
-    /* skip detailed cleanup to avoid segfaults from complex state */
+    free(vm->eff_cont.frames);
     if (vm->globals) { map_free(vm->globals); vm->globals = NULL; }
+    free(vm->stack);
+    free(vm->frames);
     free(vm);
-    return;
-#if 0
-    upvalue_close_all(&vm->open_upvalues, vm->stack);
-    while (vm->sp > vm->stack) { Value *v = *--vm->sp; if (v) value_decref(v); }
+}
+
+static void vm_grow_stack(VM *vm) {
+    int sp_off = (int)(vm->sp - vm->stack);
+    /* save frame base offsets before realloc */
+    int base_offs[vm->frame_count];
     for (int i = 0; i < vm->frame_count; i++)
-        if (vm->frames[i].closure_val)
-            value_decref(vm->frames[i].closure_val);
-    Upvalue *u = vm->open_upvalues;
-    while (u) {
-        Upvalue *nxt = u->next;
-        if (u->refcount <= 0) free(u);
-        u = nxt;
+        base_offs[i] = (int)(vm->frames[i].base - vm->stack);
+    int new_cap = vm->stack_cap * 2;
+    ptrdiff_t old_base = (ptrdiff_t)vm->stack;
+    vm->stack = realloc(vm->stack, new_cap * sizeof(Value *));
+    memset(vm->stack + vm->stack_cap, 0, (new_cap - vm->stack_cap) * sizeof(Value *));
+    vm->sp = vm->stack + sp_off;
+    /* fix frame base pointers */
+    for (int i = 0; i < vm->frame_count; i++)
+        vm->frames[i].base = vm->stack + base_offs[i];
+    /* fix open upvalue pointers if realloc moved the buffer */
+    if ((ptrdiff_t)vm->stack != old_base) {
+        for (Upvalue *u = vm->open_upvalues; u; u = u->next) {
+            if (u->is_open) {
+                ptrdiff_t off = (ptrdiff_t)u->ptr - old_base;
+                u->ptr = (Value **)((char *)vm->stack + off);
+            }
+        }
     }
-    for (int i = 0; i < vm->n_tasks; i++) {
-        vm->tasks[i].fn = NULL;
-        vm->tasks[i].result = NULL;
-    }
-    vm->n_tasks = 0;
-    if (vm->globals) map_free(vm->globals);
-    free(vm);
-#endif
+    vm->stack_cap = new_cap;
+}
+
+static void vm_grow_frames(VM *vm) {
+    int new_cap = vm->frames_cap * 2;
+    vm->frames = realloc(vm->frames, new_cap * sizeof(CallFrame));
+    memset(vm->frames + vm->frames_cap, 0, (new_cap - vm->frames_cap) * sizeof(CallFrame));
+    vm->frames_cap = new_cap;
 }
 
 static int call_frame_push(VM *vm, Value *closure_val, int argc) {
-    if (vm->frame_count >= VM_FRAMES_MAX) {
-        fprintf(stderr, "stack overflow\n"); return 1;
+    if (vm->frame_count >= vm->frames_cap) {
+        vm_grow_frames(vm);
     }
     XSClosure *cl = closure_val->cl;
     int raw_arity = cl->proto->arity;
@@ -3441,9 +3464,14 @@ static int vm_dispatch(VM *vm, int stop_frame) {
 
             /* save full continuation (frames + stack pointer) */
             vm->eff_cont.frame_count = vm->frame_count;
+            if (vm->eff_cont.frames_cap < vm->frame_count) {
+                vm->eff_cont.frames_cap = vm->frame_count;
+                vm->eff_cont.frames = realloc(vm->eff_cont.frames,
+                    vm->eff_cont.frames_cap * sizeof(CallFrame));
+            }
             memcpy(vm->eff_cont.frames, vm->frames,
                    sizeof(CallFrame) * (size_t)vm->frame_count);
-            vm->eff_cont.sp_offset = vm->sp;
+            vm->eff_cont.sp_off = (int)(vm->sp - vm->stack);
             vm->eff_cont.valid = 1;
 
             Value *eff_val = (argc_eff > 0) ? eff_args[0] : value_incref(XS_NULL_VAL);
@@ -3477,10 +3505,15 @@ static int vm_dispatch(VM *vm, int stop_frame) {
             Value *resume_val = POP();
             if (vm->eff_cont.valid) {
                 /* restore continuation: all frames and stack pointer */
+                if (vm->frames_cap < vm->eff_cont.frame_count) {
+                    vm->frames_cap = vm->eff_cont.frame_count;
+                    vm->frames = realloc(vm->frames,
+                        vm->frames_cap * sizeof(CallFrame));
+                }
                 memcpy(vm->frames, vm->eff_cont.frames,
                        sizeof(CallFrame) * (size_t)vm->eff_cont.frame_count);
                 vm->frame_count = vm->eff_cont.frame_count;
-                vm->sp = vm->eff_cont.sp_offset;
+                vm->sp = vm->stack + vm->eff_cont.sp_off;
                 frame = FRAME;
                 vm->eff_cont.valid = 0;
                 /* push resume value as result of the perform expression */

@@ -7,8 +7,8 @@
 #include "tracer/tracer.h"
 #endif
 
-#define VM_STACK_SIZE    4096 /* TODO: make these growable instead of fixed */
-#define VM_FRAMES_MAX    256
+#define VM_STACK_INIT    4096
+#define VM_FRAMES_INIT    256
 #define VM_TRY_STACK_MAX 64
 #define VM_DEFER_MAX     64
 #define VM_YIELD_MAX     1024
@@ -54,16 +54,19 @@ typedef struct {
 } CallFrame;
 
 typedef struct {
-    CallFrame   frames[VM_FRAMES_MAX];
+    CallFrame  *frames;
+    int         frames_cap;
     int         frame_count;
-    Value     **sp_offset; /* relative to stack base */
+    int         sp_off; /* offset from stack base */
     int         valid;
 } EffectCont;
 
 typedef struct VM {
-    Value      *stack[VM_STACK_SIZE];
+    Value     **stack;
+    int         stack_cap;
     Value     **sp;
-    CallFrame   frames[VM_FRAMES_MAX];
+    CallFrame  *frames;
+    int         frames_cap;
     int         frame_count;
     Upvalue    *open_upvalues;
     XSMap      *globals;

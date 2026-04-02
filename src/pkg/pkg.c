@@ -312,17 +312,32 @@ int pkg_install(const char *package_name) {
     const char *source = package_name;
     int is_local = 0;
     int is_git = 0;
+    char expanded_url[2048];
 
-    if (strncmp(package_name, "file://", 7) == 0) {
+    /* GitHub shorthand: "user/repo" -> "https://github.com/user/repo.git" */
+    if (strchr(package_name, '/') && !strchr(package_name, ':') &&
+        strncmp(package_name, ".", 1) != 0 && !is_directory(package_name)) {
+        const char *slash = strchr(package_name, '/');
+        /* must have exactly one slash and no dots before it (not a path) */
+        if (slash && !strchr(slash + 1, '/')) {
+            snprintf(expanded_url, sizeof(expanded_url),
+                     "https://github.com/%s.git", package_name);
+            source = expanded_url;
+            is_git = 1;
+            pkg_name = strip_git_suffix(slash + 1);
+        }
+    }
+
+    if (!is_git && strncmp(package_name, "file://", 7) == 0) {
         is_local = 1;
         source = package_name + 7;
         pkg_name = basename_of(source);
-    } else if (is_directory(package_name)) {
+    } else if (!is_git && is_directory(package_name)) {
         is_local = 1;
         source = package_name;
         pkg_name = basename_of(source);
-    } else if (strstr(package_name, ".git") || strncmp(package_name, "git://", 6) == 0 ||
-               strncmp(package_name, "https://", 8) == 0 || strncmp(package_name, "http://", 7) == 0) {
+    } else if (!is_git && (strstr(package_name, ".git") || strncmp(package_name, "git://", 6) == 0 ||
+               strncmp(package_name, "https://", 8) == 0 || strncmp(package_name, "http://", 7) == 0)) {
         is_git = 1;
         pkg_name = strip_git_suffix(basename_of(package_name));
     }
@@ -431,6 +446,101 @@ int pkg_remove(const char *package_name) {
         return 1;
     }
     printf("removed %s\n", package_name);
+    return 0;
+}
+
+/* xs add: install + write to xs.toml */
+int pkg_add(const char *package_name) {
+    if (!package_name || !package_name[0]) {
+        fprintf(stderr, "xs add: missing package name\n");
+        return 1;
+    }
+
+    /* figure out the actual package name and source URL */
+    const char *pkg_name = package_name;
+    char source_url[2048];
+    source_url[0] = '\0';
+
+    /* GitHub shorthand: user/repo */
+    if (strchr(package_name, '/') && !strchr(package_name, ':') &&
+        strncmp(package_name, ".", 1) != 0 && !is_directory(package_name)) {
+        const char *slash = strchr(package_name, '/');
+        if (slash && !strchr(slash + 1, '/')) {
+            snprintf(source_url, sizeof(source_url),
+                     "https://github.com/%s.git", package_name);
+            pkg_name = strip_git_suffix(slash + 1);
+        }
+    } else if (strstr(package_name, ".git") || strncmp(package_name, "https://", 8) == 0 ||
+               strncmp(package_name, "http://", 7) == 0 || strncmp(package_name, "git://", 6) == 0) {
+        snprintf(source_url, sizeof(source_url), "%s", package_name);
+        pkg_name = strip_git_suffix(basename_of(package_name));
+    } else if (is_directory(package_name)) {
+        snprintf(source_url, sizeof(source_url), "file://%s", package_name);
+        pkg_name = basename_of(package_name);
+    }
+
+    /* install the package */
+    int rc = pkg_install(package_name);
+    if (rc != 0) return rc;
+
+    /* write to xs.toml */
+    FILE *f = fopen("xs.toml", "r");
+    if (!f) {
+        /* create xs.toml if it doesn't exist */
+        f = fopen("xs.toml", "w");
+        if (f) {
+            fprintf(f, "[package]\nname = \"project\"\nversion = \"0.1.0\"\n\n[dependencies]\n%s = \"%s\"\n",
+                    pkg_name, source_url[0] ? source_url : "0.1.0");
+            fclose(f);
+            printf("added %s to xs.toml\n", pkg_name);
+            return 0;
+        }
+        fprintf(stderr, "xs add: cannot create xs.toml\n");
+        return 1;
+    }
+
+    /* read existing xs.toml */
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *content = malloc((size_t)(sz + 1));
+    if (fread(content, 1, (size_t)sz, f) != (size_t)sz) { free(content); fclose(f); return 1; }
+    content[sz] = '\0';
+    fclose(f);
+
+    /* check if already in dependencies */
+    char needle[512];
+    snprintf(needle, sizeof(needle), "%s", pkg_name);
+    if (strstr(content, needle)) {
+        printf("%s already in xs.toml\n", pkg_name);
+        free(content);
+        return 0;
+    }
+
+    /* find [dependencies] section and append */
+    char *deps = strstr(content, "[dependencies]");
+    if (deps) {
+        char *after = deps + strlen("[dependencies]");
+        while (*after == '\n' || *after == '\r') after++;
+        size_t before_len = (size_t)(after - content);
+        f = fopen("xs.toml", "w");
+        if (f) {
+            fwrite(content, 1, before_len, f);
+            fprintf(f, "%s = \"%s\"\n", pkg_name, source_url[0] ? source_url : "0.1.0");
+            fprintf(f, "%s", after);
+            fclose(f);
+        }
+    } else {
+        /* no [dependencies] section, append one */
+        f = fopen("xs.toml", "a");
+        if (f) {
+            fprintf(f, "\n[dependencies]\n%s = \"%s\"\n",
+                    pkg_name, source_url[0] ? source_url : "0.1.0");
+            fclose(f);
+        }
+    }
+    free(content);
+    printf("added %s to xs.toml\n", pkg_name);
     return 0;
 }
 

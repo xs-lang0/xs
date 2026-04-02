@@ -1,6 +1,6 @@
 # XS Status
 
-What works, what's partial, and what's planned. Updated for v0.2.3.
+What works, what's partial, and what's planned. Updated for v0.3.7.
 
 ## Tree-Walk Interpreter
 
@@ -38,7 +38,13 @@ The default backend. Handles the full language.
 | Universal literals (duration, color, date, size, angle) | works |
 | Temporal primitives (every, after, timeout, debounce) | works |
 
-All 17 test suites pass on Linux, macOS, and Windows.
+| Multi-line strings (triple-quote) | works |
+| `do` expressions | works |
+| `with` resource management | works |
+| Named arguments | works |
+| Enum methods via impl | works |
+
+All 18 test suites pass on Linux, macOS, and Windows.
 
 ## Bytecode VM
 
@@ -74,7 +80,9 @@ Use `--vm` flag. Full feature parity with the interpreter (except reactive bindi
 | Range indexing (arr[1..3]) | works |
 | All builtins matching interpreter | works |
 
-All 17 test suites pass. Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
+| Growable stack and frames (no fixed limits) | works |
+
+All 18 test suites pass. Use `xs build file.xs` to compile, `xs run file.xsc` to execute.
 
 ## JIT Compiler
 
@@ -154,32 +162,35 @@ x86-64 only. Early stage, handles basic arithmetic and function calls.
 | macOS (x86-64, ARM) | works, CI tested |
 | Windows (MinGW) | works, CI tested, static linked |
 
-## Recent Changes (v0.2.3)
+## Recent Changes (v0.3.7)
 
-- Added: universal literals via `use literals` pragma - duration (5s, 200ms, 2m30s), color (#ff6600), date (2024-03-15), size (10kb, 2mb), angle (90deg, 3.14rad)
-- Added: temporal primitives - `every`, `after`, `timeout`, `debounce` for scheduling constructs
-- Added: reactive bindings (`bind x = expr`) - variables that auto-update when dependencies change
-- Added: gradual contracts (`where` clauses) - runtime-checked conditions on type annotations
-- Added: adapt functions (`adapt fn`) - multi-target function bodies with `when native/js/wasm` branches
-- Added: `bind` and `adapt` as new keywords, `where` as contextual keyword after type annotations
-- Updated: LSP server with completions, hover, and document symbols for bind and adapt
-- Updated: all backends (VM, JS transpiler, C transpiler) handle new node types
-- Test suite now at 17 test files, all passing
+- Added: multi-line string literals with triple-quote syntax (`"""..."""`)
+- Added: `do` expressions for block-scoped computation (`let x = do { ... }`)
+- Added: `with` resource management (`with expr as name { ... }` calls `.close()` on exit)
+- Added: named arguments at call sites (`connect(host: "localhost", port: 8080)`)
+- Added: enum methods via `impl` blocks
+- Added: `.chars()` and `.bytes()` string methods, `.entries()` map method
+- Added: tuple destructuring in `for` loops over arrays
+- Added: growable VM stacks and frame arrays (no fixed limits)
+- Added: REPL `:test` command to run test files
+- Added: `xs init` for initializing projects in existing directories
+- Added: `xs test --watch` for auto-re-running tests on changes
+- Added: benchmark suite (fibonacci, sorting, string ops)
+- Added: negative test suite (error validation)
+- Added: transpiler integration tests (C backend)
+- Improved: JS transpiler (generators, structs/classes, pattern matching)
+- Improved: parser error suggestions (semicolons, `console.log`, `===`, etc.)
+- Updated: STATUS.md to current version
 
-## Changes in v0.2.2
+## Changes in v0.3.0-v0.3.5
 
-- Added: function overloading - multiple functions with the same name, dispatched by argument count
-- Added: tagged blocks (`tag`) - user-defined control structures with `yield` to execute caller's block
-- Added: trailing block syntax - `name(args) { block }` passes the block as a lambda argument
-- Added: `inline c { ... }` blocks for embedding raw C code (used by the C transpiler)
-- Added: `tag` and `inline` as new keywords
-- Added: regex as a first-class type (`re`) with `/pattern/` literal syntax
-- Added: regex methods: `.test()`, `.match()`, `.replace()`, `.source()`
-- Added: regex patterns in `match` expressions
+- Added: WASM playground build
+- Added: universal literals, temporal primitives, reactive bindings
+- Added: gradual contracts, adapt functions
+- Added: function overloading, tagged blocks, regex type
 - Added: execution tracer, HM type inference, bigint auto-promotion
-- Updated: VSCode extension with syntax highlighting for new keywords, tag declarations, and string interpolation colors
-- Updated: LSP server with completions, hover, and document symbols for tags
-- Fixed: parser `no_arrow_lambda` flag not initialized, causing flaky test failures
+- Fixed: JS transpiler classes, builtins, dedup returns
+- Fixed: VM buffer overflows and strbuf realloc leak
 
 ## Known Limitations
 

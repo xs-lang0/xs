@@ -609,6 +609,7 @@ static void cmd_help(void) {
         "  :tour             Print a guided language tour\n"
         "  :theme dark|light Switch color theme\n"
         "  :modules          List available standard library modules\n"
+        "  :test [pattern]   Run test files (optionally filtered)\n"
         "  :quit / :exit     Exit the REPL\n",
         ANSI_BOLD, ANSI_RESET
     );
@@ -1169,6 +1170,43 @@ static int handle_command(const char *line, Interp **interp_ptr, History *hist) 
             fprintf(stderr, "%susage: :load <file>%s\n",
                     g_theme->error, ANSI_RESET);
         }
+        return 1;
+    }
+    if (strcmp(line, ":test") == 0 || strncmp(line, ":test ", 6) == 0) {
+        const char *pattern = (strlen(line) > 6) ? line + 6 : NULL;
+        if (pattern) while (*pattern == ' ') pattern++;
+        if (pattern && !*pattern) pattern = NULL;
+        int pass = 0, fail = 0;
+        char cmd[1024];
+        if (pattern) {
+            snprintf(cmd, sizeof cmd, "ls tests/test_*%s*.xs 2>/dev/null", pattern);
+        } else {
+            snprintf(cmd, sizeof cmd, "ls tests/test_*.xs 2>/dev/null");
+        }
+        FILE *fp = popen(cmd, "r");
+        if (!fp) {
+            fprintf(stderr, "%sno test directory found%s\n", g_theme->error, ANSI_RESET);
+            return 1;
+        }
+        char path[512];
+        while (fgets(path, sizeof path, fp)) {
+            path[strcspn(path, "\n")] = '\0';
+            if (!path[0]) continue;
+            char run_cmd[1024];
+            snprintf(run_cmd, sizeof run_cmd, "./xs \"%s\" 2>&1", path);
+            int rc = system(run_cmd);
+            const char *name = strrchr(path, '/');
+            name = name ? name + 1 : path;
+            if (rc == 0) {
+                printf("  %sok%s    %s\n", g_theme->result, ANSI_RESET, name);
+                pass++;
+            } else {
+                printf("  %sFAIL%s  %s\n", g_theme->error, ANSI_RESET, name);
+                fail++;
+            }
+        }
+        pclose(fp);
+        printf("\n%d passed, %d failed\n", pass, fail);
         return 1;
     }
     fprintf(stderr, "%sunknown command: %s (:help for list)%s\n",

@@ -4800,6 +4800,41 @@ Value *interp_eval(Interp *i, Node *n) {
             }
         }
 do_call: ;
+        /* named arguments: merge kwargs into positional args */
+        if (n->call.kwargs.len > 0) {
+            Value *fn_val = callee;
+            if (fn_val->tag == XS_OVERLOAD && fn_val->overload->len > 0)
+                fn_val = fn_val->overload->items[0];
+            if (fn_val->tag == XS_FUNC && fn_val->fn->nparams > 0) {
+                XSFunc *fn = fn_val->fn;
+                int total = fn->nparams;
+                Value **merged = xs_malloc(total * sizeof(Value*));
+                for (int j = 0; j < total; j++) merged[j] = NULL;
+                /* place positional args */
+                for (int j = 0; j < argc && j < total; j++) merged[j] = args[j];
+                /* place named args by matching param names */
+                for (int j = 0; j < n->call.kwargs.len; j++) {
+                    const char *kname = n->call.kwargs.items[j].key;
+                    Node *kval = n->call.kwargs.items[j].val;
+                    for (int p = 0; p < fn->nparams; p++) {
+                        Node *param = fn->params[p];
+                        const char *pname = (param->tag == NODE_PAT_IDENT)
+                            ? param->pat_ident.name : NULL;
+                        if (pname && strcmp(pname, kname) == 0) {
+                            if (merged[p]) value_decref(merged[p]);
+                            merged[p] = EVAL(i, kval);
+                            break;
+                        }
+                    }
+                }
+                /* fill remaining with null */
+                for (int j = 0; j < total; j++)
+                    if (!merged[j]) merged[j] = value_incref(XS_NULL_VAL);
+                free(args);
+                args = merged;
+                argc = total;
+            }
+        }
         i->current_span = n->span;
         Value *result = call_value(i, callee, args, argc, NULL);
         value_decref(callee);
@@ -4881,6 +4916,17 @@ do_call: ;
                 int ai=(int)idx->i; int slen=(int)strlen(obj->s);
                 if (ai<0) ai=slen+ai;
                 result=(ai>=0&&ai<slen)?xs_str_n(obj->s+ai,1):value_incref(XS_NULL_VAL);
+            } else if (idx->tag == XS_RANGE) {
+                int slen = (int)strlen(obj->s);
+                int64_t start = idx->range->start;
+                int64_t end = idx->range->end;
+                if (start < 0) start = slen + start;
+                if (end < 0) end = slen + end;
+                if (idx->range->inclusive) end++;
+                if (start < 0) start = 0;
+                if (end > slen) end = slen;
+                if (start >= end) result = xs_str("");
+                else result = xs_str_n(obj->s + start, (int)(end - start));
             } else result = value_incref(XS_NULL_VAL);
         } else if (obj->tag == XS_RANGE) {
             /* range[int] → range.start + int */
@@ -5935,6 +5981,37 @@ do_call: ;
         return EVAL(i, n->debounce_.body);
     }
 
+    case NODE_DO_EXPR: {
+        return EVAL(i, n->do_expr.body);
+    }
+
+    case NODE_WITH: {
+        Value *resource = EVAL(i, n->with_.expr);
+        if (i->cf.signal) { value_decref(resource); return value_incref(XS_NULL_VAL); }
+        if (n->with_.name) {
+            env_define(i->env, n->with_.name, resource, 0);
+        }
+        Value *result = EVAL(i, n->with_.body);
+        /* call .close() on resource if it has one */
+        if (resource->tag == XS_STRUCT_VAL || resource->tag == XS_INST ||
+            resource->tag == XS_MAP) {
+            Value *close_args[1] = { resource };
+            Value *close_fn = NULL;
+            if (resource->tag == XS_STRUCT_VAL && resource->map)
+                close_fn = map_get(resource->map, "close");
+            else if (resource->tag == XS_INST && resource->inst->fields)
+                close_fn = map_get(resource->inst->fields, "close");
+            else if (resource->tag == XS_MAP)
+                close_fn = map_get(resource->map, "close");
+            if (close_fn && (close_fn->tag == XS_FUNC || close_fn->tag == XS_NATIVE)) {
+                Value *cr = call_value(i, close_fn, close_args, 1, "close");
+                value_decref(cr);
+            }
+        }
+        value_decref(resource);
+        return result;
+    }
+
     default:
         /* Delegate to exec for statement nodes used in expression context */
         interp_exec(i, n);
@@ -6001,21 +6078,19 @@ static Value *try_load_xs_module(Interp *i, const char *modname) {
     char path[2048];
     struct stat st;
 
-    /* try xs_lib/<name>/main.xs */
-    snprintf(path, sizeof(path), "xs_lib/%s/main.xs", modname);
-    if (stat(path, &st) == 0) return load_xs_module_file(i, path);
+    /* search both .xs_lib/ and xs_lib/ */
+    static const char *lib_dirs[] = { ".xs_lib", "xs_lib", NULL };
+    static const char *entry_files[] = { "main.xs", "lib.xs", "src/lib.xs", "src/main.xs", NULL };
 
-    /* try xs_lib/<name>/lib.xs */
-    snprintf(path, sizeof(path), "xs_lib/%s/lib.xs", modname);
-    if (stat(path, &st) == 0) return load_xs_module_file(i, path);
-
-    /* try xs_lib/<name>/src/lib.xs */
-    snprintf(path, sizeof(path), "xs_lib/%s/src/lib.xs", modname);
-    if (stat(path, &st) == 0) return load_xs_module_file(i, path);
-
-    /* try xs_lib/<name>/<name>.xs */
-    snprintf(path, sizeof(path), "xs_lib/%s/%s.xs", modname, modname);
-    if (stat(path, &st) == 0) return load_xs_module_file(i, path);
+    for (int d = 0; lib_dirs[d]; d++) {
+        for (int e = 0; entry_files[e]; e++) {
+            snprintf(path, sizeof(path), "%s/%s/%s", lib_dirs[d], modname, entry_files[e]);
+            if (stat(path, &st) == 0) return load_xs_module_file(i, path);
+        }
+        /* try <lib>/<name>/<name>.xs */
+        snprintf(path, sizeof(path), "%s/%s/%s.xs", lib_dirs[d], modname, modname);
+        if (stat(path, &st) == 0) return load_xs_module_file(i, path);
+    }
 
     return NULL;
 }
@@ -6401,6 +6476,8 @@ static const char *node_tag_to_string(NodeTag tag) {
     case NODE_AFTER:      return "after";
     case NODE_TIMEOUT:    return "timeout";
     case NODE_DEBOUNCE:   return "debounce";
+    case NODE_DO_EXPR:    return "do";
+    case NODE_WITH:       return "with";
     default:              return "unknown";
     }
 }
@@ -8413,17 +8490,20 @@ void interp_exec(Interp *i, Node *stmt) {
 
         if (stmt->use_.is_plugin) {
             struct stat pst;
-            /* if file doesn't exist, try xs_lib/<name>/plugin.xs */
+            /* if file doesn't exist, try .xs_lib/<name> and xs_lib/<name> */
             if (stat(resolved, &pst) != 0) {
                 char lib_try[PATH_MAX];
-                snprintf(lib_try, sizeof(lib_try), "xs_lib/%s/plugin.xs", use_path);
-                if (stat(lib_try, &pst) == 0) {
-                    snprintf(resolved, sizeof(resolved), "%s", lib_try);
-                } else {
-                    /* try xs_lib/<name>/main.xs */
-                    snprintf(lib_try, sizeof(lib_try), "xs_lib/%s/main.xs", use_path);
-                    if (stat(lib_try, &pst) == 0)
-                        snprintf(resolved, sizeof(resolved), "%s", lib_try);
+                static const char *pdirs[] = { ".xs_lib", "xs_lib", NULL };
+                static const char *pentries[] = { "plugin.xs", "main.xs", "lib.xs", NULL };
+                int found = 0;
+                for (int pd = 0; pdirs[pd] && !found; pd++) {
+                    for (int pe = 0; pentries[pe] && !found; pe++) {
+                        snprintf(lib_try, sizeof(lib_try), "%s/%s/%s", pdirs[pd], use_path, pentries[pe]);
+                        if (stat(lib_try, &pst) == 0) {
+                            snprintf(resolved, sizeof(resolved), "%s", lib_try);
+                            found = 1;
+                        }
+                    }
                 }
             }
             exec_plugin_load(i, stmt, resolved);
@@ -8455,6 +8535,18 @@ void interp_exec(Interp *i, Node *stmt) {
         }
 
         Value *mod = load_xs_module_file(i, resolved);
+        /* fallback: try .xs_lib/ and xs_lib/ as package directories */
+        if (!mod) {
+            const char *bare = use_path;
+            /* strip .xs extension if present */
+            char bare_buf[PATH_MAX];
+            size_t blen = strlen(bare);
+            if (blen > 3 && strcmp(bare + blen - 3, ".xs") == 0) {
+                snprintf(bare_buf, sizeof(bare_buf), "%.*s", (int)(blen - 3), bare);
+                bare = bare_buf;
+            }
+            mod = try_load_xs_module(i, bare);
+        }
         if (!mod) {
             xs_runtime_error(stmt->span, "failed to load module", NULL,
                 "could not load '%s'", resolved);

@@ -626,6 +626,51 @@ static void emit_expr(SB *s, Node *n, int depth) {
         emit_expr(s, n->spawn_.expr, depth);
         sb_add(s, ")()");
         break;
+    case NODE_DO_EXPR:
+        sb_add(s, "(function() {\n");
+        if (n->do_expr.body && n->do_expr.body->tag == NODE_BLOCK) {
+            emit_block_body(s, n->do_expr.body, depth + 1);
+            if (n->do_expr.body->block.expr) {
+                sb_indent(s, depth + 1);
+                sb_add(s, "return ");
+                emit_expr(s, n->do_expr.body->block.expr, depth + 1);
+                sb_add(s, ";\n");
+            }
+        }
+        sb_indent(s, depth);
+        sb_add(s, "})()");
+        break;
+    case NODE_WITH:
+        sb_add(s, "(function() {\n");
+        sb_indent(s, depth + 1);
+        sb_add(s, "const ");
+        sb_add(s, n->with_.name ? n->with_.name : "__resource");
+        sb_add(s, " = ");
+        emit_expr(s, n->with_.expr, depth + 1);
+        sb_add(s, ";\n");
+        sb_indent(s, depth + 1);
+        sb_add(s, "try {\n");
+        if (n->with_.body && n->with_.body->tag == NODE_BLOCK) {
+            emit_block_body(s, n->with_.body, depth + 2);
+            if (n->with_.body->block.expr) {
+                sb_indent(s, depth + 2);
+                sb_add(s, "return ");
+                emit_expr(s, n->with_.body->block.expr, depth + 2);
+                sb_add(s, ";\n");
+            }
+        }
+        sb_indent(s, depth + 1);
+        sb_add(s, "} finally {\n");
+        sb_indent(s, depth + 2);
+        sb_printf(s, "if (%s && typeof %s.close === 'function') %s.close();\n",
+                  n->with_.name ? n->with_.name : "__resource",
+                  n->with_.name ? n->with_.name : "__resource",
+                  n->with_.name ? n->with_.name : "__resource");
+        sb_indent(s, depth + 1);
+        sb_add(s, "}\n");
+        sb_indent(s, depth);
+        sb_add(s, "})()");
+        break;
     case NODE_ACTOR_DECL: {
         /* Emit a JS class for the actor */
         sb_add(s, "(function() {\n");
@@ -1611,8 +1656,10 @@ static void emit_stmt(SB *s, Node *n, int depth) {
                 if (m->fn_decl.is_async) sb_add(s, "/* async */ ");
                 sb_printf(s, "%s.prototype.%s = function",
                           n->impl_decl.type_name, m->fn_decl.name);
-                emit_params(s, &m->fn_decl.params);
+                emit_params_ex(s, &m->fn_decl.params, 1);
                 sb_add(s, " {\n");
+                int save_cm = in_class_method;
+                in_class_method = 1;
                 if (m->fn_decl.body && m->fn_decl.body->tag == NODE_BLOCK) {
                     emit_block_body(s, m->fn_decl.body, depth + 1);
                     if (m->fn_decl.body->block.expr) {
@@ -1622,6 +1669,7 @@ static void emit_stmt(SB *s, Node *n, int depth) {
                         sb_add(s, ";\n");
                     }
                 }
+                in_class_method = save_cm;
                 sb_indent(s, depth);
                 sb_add(s, "};\n");
             } else if (m) {

@@ -145,6 +145,9 @@ typedef enum {
     NODE_TIMEOUT,
     NODE_DEBOUNCE,
 
+    NODE_DO_EXPR,   /* do { block } expression */
+    NODE_WITH,      /* with expr as name { block } */
+
     NODE_PROGRAM,
 } NodeTag;
 
@@ -581,6 +584,9 @@ struct Node {
         struct { Node *delay; Node *body; } after_;
         struct { Node *duration; Node *body; Node *fallback; } timeout_;
         struct { Node *delay; Node *body; } debounce_;
+
+        struct { Node *body; } do_expr;
+        struct { Node *expr; char *name; Node *body; } with_;
 
         struct { NodeList stmts; } program;
     };

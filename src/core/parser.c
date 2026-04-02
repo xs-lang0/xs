@@ -26,6 +26,28 @@ static const TypoEntry KEYWORD_TYPOS[] = {
     {"switch",    "match"},
     {"foreach",   "for"},
     {"void",      "fn (XS functions return unit by default)"},
+    {"puts",      "println"},
+    {"echo",      "println"},
+    {"printf",    "println (or use fmt module)"},
+    {"string",    "str"},
+    {"boolean",   "bool"},
+    {"case",      "match"},
+    {"lambda",    "fn (XS uses fn for lambdas too)"},
+    {"nil",       "null"},
+    {"none",      "null"},
+    {"undefined", "null"},
+    {"extends",   ": (use class Foo : Bar)"},
+    {"interface", "trait"},
+    {"abstract",  "trait"},
+    {"require",   "import or use"},
+    {"include",   "import or use"},
+    {"raise",     "throw"},
+    {"except",    "catch"},
+    {"rescue",    "catch"},
+    {"ensure",    "finally"},
+    {"unless",    "if ! (XS has no unless)"},
+    {"until",     "while ! (XS has no until)"},
+    {"then",      "{ (XS uses braces, not then)"},
     {NULL, NULL}
 };
 
@@ -1584,6 +1606,33 @@ static Node *parse_prefix(Parser *p) {
         return n;
     }
 
+    /* do { block } expression */
+    if (tok->kind == TK_DO) {
+        pp_advance(p);
+        Node *body = parse_block(p);
+        Node *n = node_new(NODE_DO_EXPR, span);
+        n->do_expr.body = body;
+        return n;
+    }
+
+    /* with expr as name { block } */
+    if (tok->kind == TK_WITH) {
+        pp_advance(p);
+        Node *expr = parse_prefix(p);
+        char *name = NULL;
+        if (pp_check(p, TK_AS)) {
+            pp_advance(p);
+            Token *nt = pp_expect(p, TK_IDENT, "expected name after 'as'");
+            name = xs_strdup(nt->sval ? nt->sval : "_");
+        }
+        Node *body = parse_block(p);
+        Node *n = node_new(NODE_WITH, span);
+        n->with_.expr = expr;
+        n->with_.name = name;
+        n->with_.body = body;
+        return n;
+    }
+
     if (tok->kind == TK_HANDLE) {
         return parse_handle(p);
     }
@@ -2029,9 +2078,47 @@ static Node *parse_pattern(Parser *p) {
         return n;
     }
 
-    /* Expression pattern: ident.field.field ... */
-    if (tok->kind == TK_IDENT && pp_peek(p, 1)->kind == TK_DOT) {
-        Node *expr = parse_expr(p, 8); /* stop before | (prec 8) */
+    /* Enum pattern with dot syntax: Shape.Circle(r) or Shape.Circle */
+    if (tok->kind == TK_IDENT && pp_peek(p, 1)->kind == TK_DOT &&
+        pp_peek(p, 2)->kind == TK_IDENT) {
+        /* check if this is Name.Variant or Name.Variant(args) */
+        Token *t2 = pp_peek(p, 2);
+        int is_enum_pat = (t2->sval && t2->sval[0] >= 'A' && t2->sval[0] <= 'Z') ||
+                          pp_peek(p, 3)->kind == TK_LPAREN ||
+                          pp_peek(p, 3)->kind == TK_FAT_ARROW ||
+                          pp_peek(p, 3)->kind == TK_COMMA ||
+                          pp_peek(p, 3)->kind == TK_RPAREN ||
+                          pp_peek(p, 3)->kind == TK_PIPE;
+        if (is_enum_pat) {
+            pp_advance(p); /* consume Name */
+            char *ename = xs_strdup(tok->sval ? tok->sval : "");
+            pp_advance(p); /* consume . */
+            Token *vt = pp_advance(p); /* consume Variant */
+            char path_buf[512];
+            snprintf(path_buf, sizeof path_buf, "%s::%s", ename,
+                     vt->sval ? vt->sval : "");
+            free(ename);
+            if (pp_match(p, TK_LPAREN)) {
+                NodeList args = nodelist_new();
+                while (!pp_check2(p, TK_RPAREN, TK_EOF)) {
+                    Node *sub = parse_pattern(p);
+                    if (sub) nodelist_push(&args, sub);
+                    if (!pp_match(p, TK_COMMA)) break;
+                }
+                pp_expect(p, TK_RPAREN, "expected ')'");
+                Node *n = node_new(NODE_PAT_ENUM, span);
+                n->pat_enum.path = xs_strdup(path_buf);
+                n->pat_enum.args = args;
+                return n;
+            }
+            /* no parens: simple enum variant pattern */
+            Node *n = node_new(NODE_PAT_ENUM, span);
+            n->pat_enum.path = xs_strdup(path_buf);
+            n->pat_enum.args = nodelist_new();
+            return n;
+        }
+        /* fallback: expression pattern */
+        Node *expr = parse_expr(p, 8);
         Node *n = node_new(NODE_PAT_EXPR, span);
         n->pat_expr.expr = expr;
         return n;
@@ -3333,13 +3420,34 @@ static Node *parse_import(Parser *p) {
     int from_style = 0;
     if (pp_check(p, TK_FROM)) { pp_advance(p); from_style = 1; }
 
-    /* Collect path parts */
+    /* Collect path parts (allow hyphens in names: math-utils -> "math-utils") */
     char **path = NULL; int nparts = 0;
     Token *pt = pp_peek(p, 0);
-    if (pt->kind == TK_IDENT) {
-        path = xs_malloc(sizeof(char*));
-        path[0] = xs_strdup(pt->sval ? pt->sval : "");
-        nparts = 1; pp_advance(p);
+    if (pt->kind == TK_IDENT || pt->kind == TK_STRING) {
+        if (pt->kind == TK_STRING) {
+            /* import "math-utils" */
+            path = xs_malloc(sizeof(char*));
+            path[0] = xs_strdup(pt->sval ? pt->sval : "");
+            nparts = 1; pp_advance(p);
+        } else {
+            /* import math or import math-utils */
+            char namebuf[512];
+            snprintf(namebuf, sizeof(namebuf), "%s", pt->sval ? pt->sval : "");
+            pp_advance(p);
+            /* absorb hyphen-ident sequences: math-utils, my-cool-lib */
+            while (pp_peek(p, 0)->kind == TK_MINUS &&
+                   pp_peek(p, 1)->kind == TK_IDENT &&
+                   pp_peek(p, 0)->span.line == pt->span.line) {
+                pp_advance(p); /* consume - */
+                Token *next = pp_advance(p); /* consume ident */
+                size_t cur = strlen(namebuf);
+                snprintf(namebuf + cur, sizeof(namebuf) - cur, "-%s",
+                         next->sval ? next->sval : "");
+            }
+            path = xs_malloc(sizeof(char*));
+            path[0] = xs_strdup(namebuf);
+            nparts = 1;
+        }
         while (pp_check2(p, TK_COLON_COLON, TK_DOT)) {
             pp_advance(p);
             Token *part = pp_peek(p, 0);
@@ -3377,6 +3485,14 @@ static Node *parse_import(Parser *p) {
         alias = xs_strdup(al->sval ? al->sval : "");
     }
     pp_match(p, TK_SEMICOLON);
+
+    /* auto-alias hyphenated names: math-utils -> math_utils */
+    if (!alias && nitems == 0 && nparts > 0 && strchr(path[0], '-')) {
+        alias = xs_strdup(path[0]);
+        for (char *c = alias; *c; c++) {
+            if (*c == '-') *c = '_';
+        }
+    }
 
     Node *n = node_new(NODE_IMPORT, span);
     n->import.path   = path;
@@ -3714,10 +3830,28 @@ static Node *parse_stmt(Parser *p) {
         /* Collect module path (e.g. "math", "std.io", "std::io") */
         char **path = NULL; int nparts = 0;
         Token *pt2 = pp_peek(p, 0);
-        if (pt2->kind == TK_IDENT) {
-            path = xs_malloc(sizeof(char*));
-            path[0] = xs_strdup(pt2->sval ? pt2->sval : "");
-            nparts = 1; pp_advance(p);
+        if (pt2->kind == TK_IDENT || pt2->kind == TK_STRING) {
+            if (pt2->kind == TK_STRING) {
+                path = xs_malloc(sizeof(char*));
+                path[0] = xs_strdup(pt2->sval ? pt2->sval : "");
+                nparts = 1; pp_advance(p);
+            } else {
+                char namebuf2[512];
+                snprintf(namebuf2, sizeof(namebuf2), "%s", pt2->sval ? pt2->sval : "");
+                pp_advance(p);
+                while (pp_peek(p, 0)->kind == TK_MINUS &&
+                       pp_peek(p, 1)->kind == TK_IDENT &&
+                       pp_peek(p, 0)->span.line == pt2->span.line) {
+                    pp_advance(p);
+                    Token *nx = pp_advance(p);
+                    size_t cur = strlen(namebuf2);
+                    snprintf(namebuf2 + cur, sizeof(namebuf2) - cur, "-%s",
+                             nx->sval ? nx->sval : "");
+                }
+                path = xs_malloc(sizeof(char*));
+                path[0] = xs_strdup(namebuf2);
+                nparts = 1;
+            }
             while (pp_check2(p, TK_COLON_COLON, TK_DOT)) {
                 pp_advance(p);
                 Token *part = pp_peek(p, 0);
