@@ -49,8 +49,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+      - name: Install wasi-sdk
+        run: |
+          WASI_VERSION=25
+          WASI_VERSION_FULL=${WASI_VERSION}.0
+          wget -q https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_VERSION}/wasi-sdk-${WASI_VERSION_FULL}-x86_64-linux.tar.gz
+          tar xf wasi-sdk-${WASI_VERSION_FULL}-x86_64-linux.tar.gz
+          sudo mv wasi-sdk-${WASI_VERSION_FULL}-x86_64-linux /opt/wasi-sdk
 
       - name: Build WASM
         run: make wasm
@@ -125,8 +130,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+      - name: Install wasi-sdk
+        run: |
+          WASI_VERSION=25
+          WASI_VERSION_FULL=${WASI_VERSION}.0
+          wget -q https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_VERSION}/wasi-sdk-${WASI_VERSION_FULL}-x86_64-linux.tar.gz
+          tar xf wasi-sdk-${WASI_VERSION_FULL}-x86_64-linux.tar.gz
+          sudo mv wasi-sdk-${WASI_VERSION_FULL}-x86_64-linux /opt/wasi-sdk
 
       - name: Build WASM
         run: make wasm
@@ -134,6 +144,4 @@ jobs:
       - name: Upload WASM to release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            xs_wasm.js
-            xs_wasm.wasm
+          files: xs.wasm

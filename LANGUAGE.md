@@ -3293,17 +3293,17 @@ The `build` command compiles to a `.xsc` file that can be distributed and run wi
 
 ### WebAssembly (WASM)
 
-XS can be compiled to WebAssembly using Emscripten, allowing the full interpreter to run in the browser or any WASM runtime.
+XS can be compiled to WebAssembly using wasi-sdk, allowing the full interpreter to run in the browser or any WASM runtime.
 
 ```bash
-make wasm    # produces xs_wasm.js + xs_wasm.wasm
+make wasm    # produces xs.wasm
 ```
 
 The WASM build includes the interpreter, VM, semantic analysis, type checking, effects, pattern matching, generators, closures, enums, structs, classes, universal literals, temporal primitives, and the JS/C transpiler. It passes 14 out of 15 test suites with output identical to the native binary.
 
 Not available in WASM:
 - Networking (HTTP, sockets, TLS) - no raw sockets in browser
-- File system - uses Emscripten's virtual FS, not real disk
+- File system - uses a custom virtual FS in the browser, not real disk
 - Native plugins (.so/.dll) - no dlopen in WASM
 - JIT compilation - can't map executable memory
 - REPL - needs terminal stdin

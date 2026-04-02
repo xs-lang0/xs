@@ -24,15 +24,19 @@ void xs_set_argv(int argc, char **argv) {
     g_xs_argc = argc;
     g_xs_argv = argv;
 }
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
 #  include <unistd.h>
-#  include <sys/select.h>
+#  if !defined(__wasi__)
+#    include <sys/select.h>
+#  endif
 #endif
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
 #  include <sys/time.h>
 #  include <sys/stat.h>
-#  include <dirent.h>
-#  include <glob.h>
+#  if !defined(__wasi__)
+#    include <dirent.h>
+#    include <glob.h>
+#  endif
 #else
 #  include <sys/stat.h>
 #  include <errno.h>
@@ -2089,7 +2093,10 @@ static Value *native_io_get_key_nowait(Interp *ig, Value **args, int argc) {
     (void)ig;
     int timeout_ms = 0;
     if (argc >= 1 && args[0]->tag == XS_INT) timeout_ms = (int)args[0]->i;
-#ifdef __MINGW32__
+#if defined(__wasi__)
+    (void)timeout_ms;
+    return value_incref(XS_NULL_VAL);
+#elif defined(__MINGW32__)
     /* Windows: poll with kbhit in a loop */
     #include <conio.h>
     DWORD deadline = GetTickCount() + (DWORD)timeout_ms;
@@ -2329,7 +2336,7 @@ static Value *native_io_temp_file(Interp *ig, Value **a, int n) {
     if (!tmpdir) tmpdir = "/tmp";
     char tmpl[4096];
     snprintf(tmpl,sizeof(tmpl),"%s/%sXXXXXX%s",tmpdir,prefix,suffix);
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     int fd;
     if (suffix[0]) {
         #ifdef __APPLE__
@@ -2359,7 +2366,7 @@ static Value *native_io_temp_dir(Interp *ig, Value **a, int n) {
     if (!tmpdir) tmpdir = "/tmp";
     char tmpl[4096];
     snprintf(tmpl,sizeof(tmpl),"%s/%sXXXXXX",tmpdir,prefix);
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     #ifdef __APPLE__
     extern char *mkdtemp(char *);
 #endif
@@ -2408,7 +2415,7 @@ static Value *native_io_stdin_lines(Interp *ig, Value **a, int n) {
 static Value *native_io_glob(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<1||a[0]->tag!=XS_STR) return xs_array_new();
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     glob_t g; memset(&g,0,sizeof(g));
     Value *arr=xs_array_new();
     if (glob(a[0]->s,0,NULL,&g)==0) {
@@ -2424,7 +2431,7 @@ static Value *native_io_glob(Interp *ig, Value **a, int n) {
 static Value *native_io_symlink(Interp *ig, Value **a, int n) {
     (void)ig;
     if (n<2||a[0]->tag!=XS_STR||a[1]->tag!=XS_STR) return value_incref(XS_FALSE_VAL);
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     return (symlink(a[0]->s,a[1]->s)==0)?value_incref(XS_TRUE_VAL):value_incref(XS_FALSE_VAL);
 #else
     return value_incref(XS_FALSE_VAL);
@@ -4100,7 +4107,9 @@ static Value *native_async_sleep(Interp *ig, Value **a, int n) {
     double secs = 0.0;
     if (a[0]->tag == XS_FLOAT) secs = a[0]->f;
     else if (a[0]->tag == XS_INT) secs = (double)a[0]->i;
-#ifndef __MINGW32__
+#if defined(__wasi__)
+    (void)secs; /* no sleep in WASI */
+#elif !defined(__MINGW32__)
     struct timespec ts;
     ts.tv_sec  = (time_t)secs;
     ts.tv_nsec = (long)((secs - (double)ts.tv_sec) * 1e9);
@@ -4279,7 +4288,7 @@ Value *make_async_module(void) {
 }
 
 /* net */
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -4289,7 +4298,7 @@ Value *make_async_module(void) {
 
 static Value *native_net_tcp_connect(Interp *ig, Value **a, int n) {
     (void)ig;
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     if (n < 2 || a[0]->tag != XS_STR) return value_incref(XS_NULL_VAL);
     const char *host = a[0]->s;
     int port = (a[1]->tag == XS_INT) ? (int)a[1]->i : 0;
@@ -4321,7 +4330,7 @@ static Value *native_net_tcp_connect(Interp *ig, Value **a, int n) {
 
 static Value *native_net_tcp_listen(Interp *ig, Value **a, int n) {
     (void)ig;
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     if (n < 1) return value_incref(XS_NULL_VAL);
     int port = (a[0]->tag == XS_INT) ? (int)a[0]->i : 0;
 
@@ -4353,7 +4362,7 @@ static Value *native_net_tcp_listen(Interp *ig, Value **a, int n) {
 
 static Value *native_net_resolve(Interp *ig, Value **a, int n) {
     (void)ig;
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     if (n < 1 || a[0]->tag != XS_STR) return xs_array_new();
     struct addrinfo hints, *res, *p;
     memset(&hints, 0, sizeof hints);
@@ -4435,7 +4444,7 @@ static Value *native_net_url_parse(Interp *ig, Value **a, int n) {
 
 /* HTTP client helpers */
 
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
 
 /* Parse a URL into host, port, path. Returns 0 on success, -1 on error. */
 static int http_parse_url(const char *url, char *host, int hostlen,
@@ -4783,7 +4792,7 @@ static Value *http_do_request(const char *method, const char *url,
 /* net.http_get(url) */
 static Value *native_net_http_get(Interp *ig, Value **a, int n) {
     (void)ig;
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     if (n < 1 || a[0]->tag != XS_STR) return value_incref(XS_NULL_VAL);
     return http_do_request("GET", a[0]->s, NULL, NULL, 0);
 #else
@@ -4795,7 +4804,7 @@ static Value *native_net_http_get(Interp *ig, Value **a, int n) {
 /* net.http_post(url, body, content_type) */
 static Value *native_net_http_post(Interp *ig, Value **a, int n) {
     (void)ig;
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     if (n < 3 || a[0]->tag != XS_STR || a[1]->tag != XS_STR || a[2]->tag != XS_STR)
         return value_incref(XS_NULL_VAL);
 
@@ -4817,7 +4826,7 @@ static Value *native_net_http_post(Interp *ig, Value **a, int n) {
 /* net.http(method, url, headers_map, body) */
 static Value *native_net_http(Interp *ig, Value **a, int n) {
     (void)ig;
-#ifndef __MINGW32__
+#if !defined(__MINGW32__) && !defined(__wasi__)
     if (n < 2 || a[0]->tag != XS_STR || a[1]->tag != XS_STR)
         return value_incref(XS_NULL_VAL);
 
@@ -5006,7 +5015,9 @@ static Value *native_crypto_random_bytes(Interp *ig, Value **a, int n) {
     int count = (int)a[0]->i;
     if (count <= 0 || count > 65536) return xs_str("");
     uint8_t *buf = xs_malloc((size_t)count);
-#ifndef __MINGW32__
+#if defined(__wasi__)
+    for (int i=0;i<count;i++) buf[i]=(uint8_t)(rand()&0xff);
+#elif !defined(__MINGW32__)
     FILE *f = fopen("/dev/urandom", "rb");
     if (f) { if (fread(buf, 1, (size_t)count, f) < (size_t)count) { /* partial read ok */ } fclose(f); }
     else { for (int i=0;i<count;i++) buf[i]=(uint8_t)(rand()&0xff); }
@@ -5022,7 +5033,6 @@ static Value *native_crypto_random_bytes(Interp *ig, Value **a, int n) {
             FreeLibrary(advapi);
         }
         if (!filled) {
-            /* Fallback: seed with time + pid for better entropy than raw rand() */
             srand((unsigned)(time(NULL) ^ GetCurrentProcessId() ^ GetTickCount()));
             for (int i=0;i<count;i++) buf[i]=(uint8_t)(rand()&0xff);
         }
@@ -5044,9 +5054,10 @@ static Value *native_crypto_random_int(Interp *ig, Value **a, int n) {
     int64_t lo = (a[0]->tag == XS_INT) ? a[0]->i : 0;
     int64_t hi = (a[1]->tag == XS_INT) ? a[1]->i : 0;
     if (hi <= lo) return xs_int(lo);
-    /* use /dev/urandom for better randomness */
     uint64_t r;
-#ifndef __MINGW32__
+#if defined(__wasi__)
+    r = (uint64_t)rand();
+#elif !defined(__MINGW32__)
     FILE *f = fopen("/dev/urandom", "rb");
     if (f) { if (fread(&r, sizeof r, 1, f) < 1) { r = (uint64_t)rand(); } fclose(f); }
     else { r = (uint64_t)rand(); }
@@ -5072,7 +5083,9 @@ static Value *native_crypto_random_int(Interp *ig, Value **a, int n) {
 static Value *native_crypto_uuid4(Interp *ig, Value **a, int n) {
     (void)ig; (void)a; (void)n;
     uint8_t bytes[16];
-#ifndef __MINGW32__
+#if defined(__wasi__)
+    for (int i=0;i<16;i++) bytes[i]=(uint8_t)(rand()&0xff);
+#elif !defined(__MINGW32__)
     FILE *f = fopen("/dev/urandom", "rb");
     if (f) { if (fread(bytes, 1, 16, f) < 16) { /* partial read ok */ } fclose(f); }
     else { for (int i=0;i<16;i++) bytes[i]=(uint8_t)(rand()&0xff); }

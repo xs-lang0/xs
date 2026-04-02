@@ -2,7 +2,7 @@
 #define _DEFAULT_SOURCE
 #endif
 
-#define XS_VERSION "0.3.5"
+#define XS_VERSION "0.3.8"
 #define XS_VERSION_TAG "xs " XS_VERSION
 
 #include "core/xs_compat.h"
@@ -1124,7 +1124,13 @@ int main(int argc, char **argv) {
 #endif
 
         } else if (strcmp(sub, "test") == 0) {
-            const char *pattern = (sub_argc >= 1) ? sub_arg(0) : "test";
+            int test_watch = 0;
+            const char *pattern = "test";
+            for (int si = 0; si < sub_argc; si++) {
+                if (strcmp(sub_arg(si), "--watch") == 0) test_watch = 1;
+                else pattern = sub_arg(si);
+            }
+test_again: ;
             int passed = 0, failed = 0, total = 0;
             double total_elapsed = 0.0;
 
@@ -1397,6 +1403,14 @@ int main(int argc, char **argv) {
             printf("\nResults: %d passed, %d failed, %d total (%.3fs)\n",
                    passed, failed, total, total_elapsed);
             cache_free(g_sema_cache);
+            g_sema_cache = NULL;
+            if (test_watch) {
+                printf("\nWatching for changes... (Ctrl+C to stop)\n");
+                struct timespec ts = {0, 500000000}; /* 500ms */
+                nanosleep(&ts, NULL);
+                printf("\033[2J\033[H"); /* clear screen */
+                goto test_again;
+            }
             return (failed > 0) ? 1 : 0;
 
         } else if (strcmp(sub, "bench") == 0) {
@@ -1587,11 +1601,56 @@ int main(int argc, char **argv) {
             }
 #endif
 
+        } else if (strcmp(sub, "init") == 0) {
+            /* init project in current directory */
+            {
+                const char *dirname = ".";
+                char cwd[1024];
+                if (getcwd(cwd, sizeof cwd)) {
+                    const char *slash = strrchr(cwd, '/');
+                    dirname = slash ? slash + 1 : cwd;
+                }
+                FILE *f;
+                struct stat st;
+                if (stat("xs.toml", &st) == 0) {
+                    fprintf(stderr, "xs init: xs.toml already exists\n");
+                    return 1;
+                }
+                f = fopen("xs.toml", "w");
+                if (!f) { fprintf(stderr, "xs init: cannot write xs.toml\n"); return 1; }
+                fprintf(f, "[package]\nname = \"%s\"\nversion = \"0.1.0\"\nxs_version = \">=1.0\"\n\n[dependencies]\n\n[build]\nentry = \"src/main.xs\"\n", dirname);
+                fclose(f);
+                if (stat("src", &st) != 0) mkdir("src", 0755);
+                if (stat("src/main.xs", &st) != 0) {
+                    f = fopen("src/main.xs", "w");
+                    if (f) {
+                        fprintf(f, "fn main() {\n    println(\"Hello from %s!\")\n}\n", dirname);
+                        fclose(f);
+                    }
+                }
+                if (stat("tests", &st) != 0) mkdir("tests", 0755);
+                if (stat(".gitignore", &st) != 0) {
+                    f = fopen(".gitignore", "w");
+                    if (f) { fprintf(f, "xs_lib/\n*.xsc\n.xs_cache/\nbuild/\n"); fclose(f); }
+                }
+                printf("Initialized XS project in current directory\n");
+                return 0;
+            }
+
         } else if (strcmp(sub, "install") == 0) {
 #ifdef XSC_ENABLE_PKG
             return sub_argc >= 1 ? pkg_install(sub_arg(0)) : pkg_install(NULL);
 #else
             fprintf(stderr, "xs install: not enabled in this build (rebuild with XSC_ENABLE_PKG=1)\n");
+            return 1;
+#endif
+
+        } else if (strcmp(sub, "add") == 0) {
+#ifdef XSC_ENABLE_PKG
+            if (sub_argc < 1) { fprintf(stderr, "xs add: missing package name\n  usage: xs add <name>  or  xs add user/repo\n"); return 1; }
+            return pkg_add(sub_arg(0));
+#else
+            fprintf(stderr, "xs add: not enabled in this build (rebuild with XSC_ENABLE_PKG=1)\n");
             return 1;
 #endif
 
@@ -1635,6 +1694,7 @@ int main(int argc, char **argv) {
             else if (strcmp(sub_arg(0), "install") == 0) return sub_argc >= 2 ? pkg_install(sub_arg(1)) : pkg_install(NULL);
             else if (strcmp(sub_arg(0), "remove")  == 0) { if (sub_argc < 2) { fprintf(stderr, "xs pkg remove: missing package\n"); return 1; } return pkg_remove(sub_arg(1)); }
             else if (strcmp(sub_arg(0), "update")  == 0) return sub_argc >= 2 ? pkg_update(sub_arg(1)) : pkg_update(NULL);
+            else if (strcmp(sub_arg(0), "add")     == 0) { if (sub_argc < 2) { fprintf(stderr, "xs pkg add: missing package\n"); return 1; } return pkg_add(sub_arg(1)); }
             else { fprintf(stderr, "xs pkg: unknown subcommand '%s'\n", sub_arg(0)); return 1; }
 #else
             fprintf(stderr, "xs pkg: not enabled in this build (rebuild with XSC_ENABLE_PKG=1)\n");

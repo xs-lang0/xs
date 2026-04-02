@@ -159,7 +159,7 @@ endif
 OBJS = $(SRCS:.c=.o)
 
 # Targets
-.PHONY: all clean debug release test install wasm wasi
+.PHONY: all clean debug release test install wasm
 
 all: $(TARGET)
 
@@ -200,27 +200,28 @@ WASM_SRCS = src/wasm_main.c \
             $(wildcard src/tracer/*.c) \
             src/wasm_stubs.c
 
+WASI_SDK ?= /opt/wasi-sdk
+WASI_CC = $(WASI_SDK)/bin/clang
+WASI_SYSROOT = $(WASI_SDK)/share/wasi-sysroot
+
 WASM_FLAGS = -O2 -std=c11 -Isrc \
+             --target=wasm32-wasi \
+             --sysroot=$(WASI_SYSROOT) \
+             -mllvm -wasm-enable-sjlj \
+             -D_WASI_EMULATED_SIGNAL \
+             -D_WASI_EMULATED_PTHREAD \
              -DXSC_ENABLE_VM -DXSC_ENABLE_EFFECTS -DXSC_ENABLE_TRANSPILER \
              -DXSC_ENABLE_FMT -DXSC_ENABLE_DOC -DXSC_ENABLE_PKG \
              -DXSC_ENABLE_PLUGINS -DXSC_ENABLE_SANDBOX \
              -DXSC_ENABLE_PROFILER -DXSC_ENABLE_COVERAGE \
              -DXSC_ENABLE_TRACER \
-             -s WASM=1 \
-             -s EXPORTED_FUNCTIONS='["_main"]' \
-             -s EXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
-             -s MODULARIZE=1 -s EXPORT_NAME='createXS' \
-             -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=67108864 \
-             -s STACK_SIZE=1048576 \
-             -s INVOKE_RUN=0 -s EXIT_RUNTIME=0 -s FORCE_FILESYSTEM=1 \
-             -s ERROR_ON_UNDEFINED_SYMBOLS=0
+             -Wno-incompatible-library-redeclaration \
+             -Wno-implicit-function-declaration \
+             -Wno-int-conversion
 
 wasm:
-	emcc $(WASM_FLAGS) -o xs_wasm.js $(WASM_SRCS)
-	@echo "built xs_wasm.js + xs_wasm.wasm"
-
-wasi:
-	@echo "WASI target not yet implemented"
+	$(WASI_CC) $(WASM_FLAGS) -lwasi-emulated-signal -lwasi-emulated-pthread -o xs.wasm $(WASM_SRCS)
+	@echo "built xs.wasm"
 
 clean:
 	rm -f $(OBJS) $(TARGET)

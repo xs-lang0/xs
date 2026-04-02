@@ -4,8 +4,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#if !defined(__wasi__)
 #include <signal.h>
 #include <sys/time.h>
+#endif
 #include <time.h>
 
 #define MAX_SAMPLES 65536
@@ -37,7 +39,7 @@ static unsigned int xorshift32(void) {
     return x;
 }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__wasi__)
 static void sigprof_handler(int sig) {
     (void)sig;
     if (g_profiler && g_profiler->running) {
@@ -79,7 +81,7 @@ void profiler_start(XSProfiler *p) {
     clock_gettime(CLOCK_MONOTONIC, &p->start_time);
 
     g_profiler = p;
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__wasi__)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigprof_handler;
@@ -99,7 +101,7 @@ void profiler_start(XSProfiler *p) {
 void profiler_stop(XSProfiler *p) {
     if (!p) return;
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__wasi__)
     struct itimerval timer;
     memset(&timer, 0, sizeof(timer));
     setitimer(ITIMER_PROF, &timer, NULL);
