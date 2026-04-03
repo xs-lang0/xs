@@ -968,7 +968,14 @@ static Node *parse_primary(Parser *p) {
         Node *val = NULL;
         Token *nt = pp_peek(p, 0);
         if (nt->kind != TK_NEWLINE && nt->kind != TK_SEMICOLON &&
-            nt->kind != TK_RBRACE && nt->kind != TK_EOF) {
+            nt->kind != TK_RBRACE && nt->kind != TK_EOF &&
+            nt->kind != TK_RETURN && nt->kind != TK_LET &&
+            nt->kind != TK_VAR && nt->kind != TK_CONST &&
+            nt->kind != TK_FN && nt->kind != TK_FOR &&
+            nt->kind != TK_WHILE && nt->kind != TK_IF &&
+            nt->kind != TK_BREAK && nt->kind != TK_CONTINUE &&
+            nt->kind != TK_THROW &&
+            !(nt->span.line > span.line)) {
             val = parse_expr(p, 0);
         }
         Node *n = node_new(NODE_YIELD, span);
@@ -3941,7 +3948,7 @@ static Node *parse_stmt(Parser *p) {
                 }
             }
         }
-        pp_match(p, TK_SEMICOLON);
+        if (!pp_match(p, TK_SEMICOLON)) pp_match(p, TK_NEWLINE);
         Node *n = node_new(NODE_LET, span);
         n->let.pattern  = pat;
         n->let.name     = (pat->tag == NODE_PAT_IDENT) ?
@@ -3971,7 +3978,7 @@ static Node *parse_stmt(Parser *p) {
                 val = parse_expr(p, 0);
             }
         }
-        pp_match(p, TK_SEMICOLON);
+        if (!pp_match(p, TK_SEMICOLON)) pp_match(p, TK_NEWLINE);
         Node *n = node_new(NODE_VAR, span);
         n->let.pattern  = pat;
         n->let.name     = (pat->tag == NODE_PAT_IDENT) ?
@@ -4000,7 +4007,7 @@ static Node *parse_stmt(Parser *p) {
         } else if (!p->panic_mode) {
             val = parse_expr(p, 0);
         }
-        pp_match(p, TK_SEMICOLON);
+        if (!pp_match(p, TK_SEMICOLON)) pp_match(p, TK_NEWLINE);
         Node *n = node_new(NODE_CONST, span);
         n->const_.name     = xs_strdup(name_tok3->sval ? name_tok3->sval : "");
         n->const_.value    = val;

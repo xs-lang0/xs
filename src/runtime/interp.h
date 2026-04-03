@@ -44,6 +44,7 @@ struct Interp {
 
     struct { Node **items; int len, cap; } defers;
     Value  *yield_collect;
+    int     yield_limit;     /* max yields before stopping, 0 = unlimited */
 
     /* effects */
     EffectFrame *effect_stack;

@@ -1184,12 +1184,15 @@ tail_call_entry: ;
             if (fn->is_generator) {
                 Value *collector = xs_array_new();
                 Value *saved_collector = i->yield_collect;
+                int saved_limit = i->yield_limit;
                 i->yield_collect = collector;
+                if (i->yield_limit == 0) i->yield_limit = 100000;
 
                 Value *body_val = interp_eval(i, fn->body);
                 value_decref(body_val);
 
                 i->yield_collect = saved_collector;
+                i->yield_limit = saved_limit;
 
                 if (i->cf.signal == CF_RETURN || i->cf.signal == CF_YIELD)
                     CF_CLEAR(i);
@@ -5335,6 +5338,10 @@ do_call: ;
         if (i->yield_collect) {
             /* generator collect mode: push value into collector array */
             array_push(i->yield_collect->arr, val); /* array_push takes ownership */
+            if (i->yield_limit > 0 && i->yield_collect->arr->len >= i->yield_limit) {
+                i->cf.signal = CF_RETURN;
+                i->cf.value = value_incref(XS_NULL_VAL);
+            }
         } else {
             /* standalone yield outside generator context: set CF_YIELD */
             if (i->cf.value) value_decref(i->cf.value);
@@ -8683,6 +8690,10 @@ void interp_exec(Interp *i, Node *stmt) {
         if (i->cf.signal) { value_decref(val); break; }
         if (i->yield_collect) {
             array_push(i->yield_collect->arr, val);
+            if (i->yield_limit > 0 && i->yield_collect->arr->len >= i->yield_limit) {
+                i->cf.signal = CF_RETURN;
+                i->cf.value = value_incref(XS_NULL_VAL);
+            }
         } else {
             if (i->cf.value) value_decref(i->cf.value);
             i->cf.signal = CF_YIELD;
