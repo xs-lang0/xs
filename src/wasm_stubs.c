@@ -81,28 +81,22 @@ int pipe(int fds[2]) { (void)fds; return -1; }
 int fork(void) { return -1; }
 int waitpid(int pid, int *status, int opts) { (void)pid; (void)status; (void)opts; return -1; }
 int kill(int pid, int sig) { (void)pid; (void)sig; return -1; }
-/* busy-wait sleep using WASI clock - runs in web worker so won't block page */
+/* sleep via host-provided import (Atomics.wait in browser, busy-wait fallback) */
 #include <time.h>
-static long long _wasm_clock_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-}
+extern void __xs_sleep_ms(int ms) __attribute__((import_module("env"), import_name("__xs_sleep_ms")));
+
 unsigned int sleep(unsigned int secs) {
-    long long end = _wasm_clock_ns() + (long long)secs * 1000000000LL;
-    while (_wasm_clock_ns() < end) {}
+    __xs_sleep_ms((int)(secs * 1000));
     return 0;
 }
 int usleep(unsigned int usec) {
-    long long end = _wasm_clock_ns() + (long long)usec * 1000LL;
-    while (_wasm_clock_ns() < end) {}
+    __xs_sleep_ms((int)(usec / 1000));
     return 0;
 }
 int nanosleep(const struct timespec *req, struct timespec *rem) {
     (void)rem;
-    long long ns = (long long)req->tv_sec * 1000000000LL + req->tv_nsec;
-    long long end = _wasm_clock_ns() + ns;
-    while (_wasm_clock_ns() < end) {}
+    int ms = (int)(req->tv_sec * 1000) + (int)(req->tv_nsec / 1000000);
+    __xs_sleep_ms(ms);
     return 0;
 }
 
