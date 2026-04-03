@@ -5988,6 +5988,26 @@ do_call: ;
         return EVAL(i, n->debounce_.body);
     }
 
+    case NODE_PAUSE: {
+        Value *dur = EVAL(i, n->pause_.duration);
+        if (i->cf.signal) { value_decref(dur); return value_incref(XS_NULL_VAL); }
+        double ms = 0;
+        if (dur->tag == XS_INT) ms = (double)dur->i;
+        else if (dur->tag == XS_FLOAT) ms = dur->f;
+        value_decref(dur);
+        if (ms > 0) {
+#ifdef _WIN32
+            Sleep((DWORD)ms);
+#else
+            struct timespec ts;
+            ts.tv_sec = (time_t)(ms / 1000.0);
+            ts.tv_nsec = (long)((ms - ts.tv_sec * 1000.0) * 1000000.0);
+            nanosleep(&ts, NULL);
+#endif
+        }
+        return value_incref(XS_NULL_VAL);
+    }
+
     case NODE_DO_EXPR: {
         return EVAL(i, n->do_expr.body);
     }
@@ -6483,6 +6503,7 @@ static const char *node_tag_to_string(NodeTag tag) {
     case NODE_AFTER:      return "after";
     case NODE_TIMEOUT:    return "timeout";
     case NODE_DEBOUNCE:   return "debounce";
+    case NODE_PAUSE:      return "pause";
     case NODE_DO_EXPR:    return "do";
     case NODE_WITH:       return "with";
     default:              return "unknown";
@@ -6539,6 +6560,7 @@ static int node_tag_from_string(const char *s) {
     if (strcmp(s, "after") == 0) return NODE_AFTER;
     if (strcmp(s, "timeout") == 0) return NODE_TIMEOUT;
     if (strcmp(s, "debounce") == 0) return NODE_DEBOUNCE;
+    if (strcmp(s, "pause") == 0) return NODE_PAUSE;
     return -1;
 }
 
@@ -6675,6 +6697,9 @@ static Value *node_to_xs_map(Node *n) {
     case NODE_DEBOUNCE:
         map_set(m->map, "delay", node_to_xs_map(n->debounce_.delay));
         map_set(m->map, "body", node_to_xs_map(n->debounce_.body));
+        break;
+    case NODE_PAUSE:
+        map_set(m->map, "duration", node_to_xs_map(n->pause_.duration));
         break;
     default:
         break;

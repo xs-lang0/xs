@@ -144,6 +144,7 @@ typedef enum {
     NODE_AFTER,
     NODE_TIMEOUT,
     NODE_DEBOUNCE,
+    NODE_PAUSE,
 
     NODE_DO_EXPR,   /* do { block } expression */
     NODE_WITH,      /* with expr as name { block } */
@@ -584,6 +585,7 @@ struct Node {
         struct { Node *delay; Node *body; } after_;
         struct { Node *duration; Node *body; Node *fallback; } timeout_;
         struct { Node *delay; Node *body; } debounce_;
+        struct { Node *duration; } pause_;
 
         struct { Node *body; } do_expr;
         struct { Node *expr; char *name; Node *body; } with_;

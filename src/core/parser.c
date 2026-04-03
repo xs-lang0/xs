@@ -3804,6 +3804,14 @@ static Node *parse_stmt(Parser *p) {
     if (tok->kind == TK_AFTER) return parse_after(p);
     if (tok->kind == TK_TIMEOUT) return parse_timeout(p);
     if (tok->kind == TK_DEBOUNCE) return parse_debounce(p);
+    if (tok->kind == TK_PAUSE) {
+        pp_advance(p);
+        Node *dur = parse_expr(p, 0);
+        if (!pp_match(p, TK_SEMICOLON)) pp_match(p, TK_NEWLINE);
+        Node *n = node_new(NODE_PAUSE, tok->span);
+        n->pause_.duration = dur;
+        return n;
+    }
     if (tok->kind == TK_EFFECT) return parse_effect_decl(p);
 
     if (tok->kind == TK_MODULE) {
