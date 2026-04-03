@@ -4311,6 +4311,55 @@ static void interp_for_each(Interp *i, Value *iter,
     }
 }
 
+/* recursive list comprehension: nest for clauses */
+static void list_comp_recurse(Interp *i, Node *n, Value *result, int cl) {
+    int nclauses = n->list_comp.clause_pats.len;
+    if (cl >= nclauses) {
+        Value *elem = interp_eval(i, n->list_comp.element);
+        if (!i->cf.signal) array_push(result->arr, elem);
+        else value_decref(elem);
+        return;
+    }
+    Node *pat = n->list_comp.clause_pats.items[cl];
+    Node *iter_expr = n->list_comp.clause_iters.items[cl];
+    Node *cond = (cl < n->list_comp.clause_conds.len)
+                 ? n->list_comp.clause_conds.items[cl] : NULL;
+    Value *iter_val = interp_eval(i, iter_expr);
+    if (i->cf.signal) { value_decref(iter_val); return; }
+
+    int iter_len = 0;
+    Value **iter_items = NULL;
+    Value *range_arr = NULL;
+    if (iter_val->tag == XS_ARRAY || iter_val->tag == XS_TUPLE) {
+        iter_len = iter_val->arr->len;
+        iter_items = iter_val->arr->items;
+    } else if (iter_val->tag == XS_RANGE) {
+        range_arr = xs_array_new();
+        int64_t start = iter_val->range->start;
+        int64_t end = iter_val->range->end;
+        if (iter_val->range->inclusive) end++;
+        for (int64_t ri = start; ri < end; ri++)
+            array_push(range_arr->arr, xs_int(ri));
+        iter_len = range_arr->arr->len;
+        iter_items = range_arr->arr->items;
+    }
+
+    push_env(i);
+    for (int idx = 0; idx < iter_len && !i->cf.signal; idx++) {
+        bind_pattern(i, pat, iter_items[idx], i->env, 1);
+        if (cond) {
+            Value *cv = interp_eval(i, cond);
+            int ok = value_truthy(cv);
+            value_decref(cv);
+            if (!ok) continue;
+        }
+        list_comp_recurse(i, n, result, cl + 1);
+    }
+    pop_env(i);
+    if (range_arr) value_decref(range_arr);
+    value_decref(iter_val);
+}
+
 Value *interp_eval(Interp *i, Node *n) {
     if (!n) return value_incref(XS_NULL_VAL);
     if (i->cf.signal) return value_incref(XS_NULL_VAL);
@@ -4406,55 +4455,9 @@ Value *interp_eval(Interp *i, Node *n) {
     }
 
     case NODE_LIST_COMP: {
-        /* [expr for pat in iter] */
+        /* [expr for pat in iter (for pat in iter)* (if cond)?] */
         Value *result = xs_array_new();
-        for (int cl = 0; cl < n->list_comp.clause_pats.len; cl++) {
-            Node *pat  = n->list_comp.clause_pats.items[cl];
-            Node *iter_expr = n->list_comp.clause_iters.items[cl];
-            Node *cond = (cl < n->list_comp.clause_conds.len)
-                         ? n->list_comp.clause_conds.items[cl] : NULL;
-            Value *iter_val = EVAL(i, iter_expr);
-            if (i->cf.signal) { value_decref(iter_val); return result; }
-
-            /* Iterate over the value */
-            int iter_len = 0;
-            Value **iter_items = NULL;
-            Value *range_arr = NULL; /* temp if range */
-            if (iter_val->tag == XS_ARRAY || iter_val->tag == XS_TUPLE) {
-                iter_len = iter_val->arr->len;
-                iter_items = iter_val->arr->items;
-            } else if (iter_val->tag == XS_RANGE) {
-                /* Expand range to array */
-                range_arr = xs_array_new();
-                int64_t start = iter_val->range->start;
-                int64_t end   = iter_val->range->end;
-                if (iter_val->range->inclusive) end++;
-                for (int64_t ri = start; ri < end; ri++)
-                    array_push(range_arr->arr, xs_int(ri));
-                iter_len = range_arr->arr->len;
-                iter_items = range_arr->arr->items;
-            }
-
-            push_env(i);
-            for (int idx = 0; idx < iter_len && !i->cf.signal; idx++) {
-                /* Bind pattern */
-                bind_pattern(i, pat, iter_items[idx], i->env, 1);
-                /* Check guard */
-                if (cond) {
-                    Value *cv = EVAL(i, cond);
-                    int ok = value_truthy(cv);
-                    value_decref(cv);
-                    if (!ok) continue;
-                }
-                /* Evaluate element expression */
-                Value *elem = EVAL(i, n->list_comp.element);
-                if (!i->cf.signal) array_push(result->arr, elem);
-                else value_decref(elem);
-            }
-            pop_env(i);
-            if (range_arr) value_decref(range_arr);
-            value_decref(iter_val);
-        }
+        list_comp_recurse(i, n, result, 0);
         return result;
     }
 

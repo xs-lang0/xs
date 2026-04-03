@@ -1096,7 +1096,7 @@ static Node *parse_primary(Parser *p) {
             if (cnt_expr) node_free(cnt_expr);
             return n;
         }
-        /* [expr for ident in iter] list comprehension */
+        /* [expr for ident in iter (for ident in iter)* (if cond)?] list comprehension */
         if (first && pp_check(p, TK_FOR)) {
             pp_advance(p); /* consume 'for' */
             Node *n = node_new(NODE_LIST_COMP, span);
@@ -1110,12 +1110,23 @@ static Node *parse_primary(Parser *p) {
             Node *iter = parse_expr(p, 0);
             nodelist_push(&n->list_comp.clause_pats, pat);
             nodelist_push(&n->list_comp.clause_iters, iter);
-            /* Optional if guard */
+            nodelist_push(&n->list_comp.clause_conds, NULL);
+            /* Parse additional for clauses */
+            while (pp_check(p, TK_FOR)) {
+                pp_advance(p);
+                Node *pat2 = parse_pattern(p);
+                pp_expect(p, TK_IN, "expected 'in' in list comprehension");
+                Node *iter2 = parse_expr(p, 0);
+                nodelist_push(&n->list_comp.clause_pats, pat2);
+                nodelist_push(&n->list_comp.clause_iters, iter2);
+                nodelist_push(&n->list_comp.clause_conds, NULL);
+            }
+            /* Optional if guard (applies to innermost clause) */
             if (pp_match(p, TK_IF)) {
                 Node *cond = parse_expr(p, 0);
-                nodelist_push(&n->list_comp.clause_conds, cond);
-            } else {
-                nodelist_push(&n->list_comp.clause_conds, NULL);
+                /* Replace last NULL cond with the actual condition */
+                int last = n->list_comp.clause_conds.len - 1;
+                n->list_comp.clause_conds.items[last] = cond;
             }
             pp_expect(p, TK_RBRACKET, "expected ']' after list comprehension");
             return n;
