@@ -1900,13 +1900,17 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             emit_null(code);
         break;
 
-    /* ---- Loops as expressions ---- */
+    /* ---- Loops as expressions: compile via stmt path, push null result ---- */
 
     case NODE_WHILE:
     case NODE_FOR:
     case NODE_LOOP:
+        compile_stmt(node, code, locals, ctx);
+        emit_null(code);
+        break;
     case NODE_BREAK:
     case NODE_CONTINUE:
+        compile_stmt(node, code, locals, ctx);
         emit_null(code);
         break;
 
