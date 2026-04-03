@@ -1078,9 +1078,9 @@ static void prescan_literals(Lexer *l) {
             if (strncmp(s, "literals", 8) == 0 && (s[8] == ' ' || s[8] == '\t' || s[8] == '\n' || s[8] == '\0')) {
                 s += 8;
                 /* parse literal names */
-                while (*s && *s != '\n') {
+                while (*s && *s != '\n' && *s != ';') {
                     while (*s == ' ' || *s == '\t' || *s == ',') s++;
-                    if (*s == '\n' || *s == '\0') break;
+                    if (*s == '\n' || *s == '\0' || *s == ';') break;
                     const char *start = s;
                     while (*s && *s != ' ' && *s != '\t' && *s != ',' && *s != '\n' && *s != ';') s++;
                     int len = (int)(s - start);
