@@ -81,8 +81,30 @@ int pipe(int fds[2]) { (void)fds; return -1; }
 int fork(void) { return -1; }
 int waitpid(int pid, int *status, int opts) { (void)pid; (void)status; (void)opts; return -1; }
 int kill(int pid, int sig) { (void)pid; (void)sig; return -1; }
-unsigned int sleep(unsigned int secs) { (void)secs; return 0; }
-int usleep(unsigned int usec) { (void)usec; return 0; }
+/* busy-wait sleep using WASI clock - runs in web worker so won't block page */
+#include <time.h>
+static long long _wasm_clock_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+unsigned int sleep(unsigned int secs) {
+    long long end = _wasm_clock_ns() + (long long)secs * 1000000000LL;
+    while (_wasm_clock_ns() < end) {}
+    return 0;
+}
+int usleep(unsigned int usec) {
+    long long end = _wasm_clock_ns() + (long long)usec * 1000LL;
+    while (_wasm_clock_ns() < end) {}
+    return 0;
+}
+int nanosleep(const struct timespec *req, struct timespec *rem) {
+    (void)rem;
+    long long ns = (long long)req->tv_sec * 1000000000LL + req->tv_nsec;
+    long long end = _wasm_clock_ns() + ns;
+    while (_wasm_clock_ns() < end) {}
+    return 0;
+}
 
 /* chown - not in wasi-libc (readlink, chmod are provided by wasi-libc) */
 int chown(const char *path, unsigned int uid, unsigned int gid) { (void)path; (void)uid; (void)gid; return -1; }
