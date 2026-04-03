@@ -496,6 +496,9 @@ void node_free(Node *n) {
     case NODE_PAUSE:
         node_free(n->pause_.duration);
         break;
+    case NODE_DEL:
+        free(n->del_.name);
+        break;
     case NODE_PROGRAM:
         nodelist_free(&n->program.stmts);
         break;

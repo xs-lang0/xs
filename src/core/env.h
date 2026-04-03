@@ -40,6 +40,7 @@ void    env_define(Env *e, const char *name, Value *val, int mutable);
 Value  *env_get(Env *e, const char *name);
 int     env_set(Env *e, const char *name, Value *val);
 int     env_has_local(Env *e, const char *name);
+int     env_delete(Env *e, const char *name);
 
 /* reactive binding support */
 void env_add_reactive(Env *e, const char *name, Node *expr, Env *eval_env,

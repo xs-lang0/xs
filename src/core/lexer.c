@@ -78,6 +78,7 @@ static const KWEntry KEYWORDS[] = {
     {"timeout",  TK_TIMEOUT},
     {"debounce", TK_DEBOUNCE},
     {"pause",    TK_PAUSE},
+    {"del",      TK_DEL},
     {"do",       TK_DO},
     {"with",     TK_WITH},
     {NULL,       TK_UNKNOWN},
@@ -1185,6 +1186,7 @@ const char *token_kind_name(TokenKind k) {
     case TK_TIMEOUT: return "timeout";
     case TK_DEBOUNCE: return "debounce";
     case TK_PAUSE: return "pause";
+    case TK_DEL: return "del";
     case TK_DO: return "do";
     case TK_WITH: return "with";
     default: return "?";

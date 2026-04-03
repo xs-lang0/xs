@@ -95,6 +95,21 @@ int env_has_local(Env *e, const char *name) {
     return 0;
 }
 
+int env_delete(Env *e, const char *name) {
+    for (Env *cur = e; cur; cur = cur->parent) {
+        for (int i = 0; i < cur->len; i++) {
+            if (strcmp(cur->bindings[i].name, name) == 0) {
+                free(cur->bindings[i].name);
+                value_decref(cur->bindings[i].value);
+                cur->bindings[i] = cur->bindings[cur->len - 1];
+                cur->len--;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* find root env (walk up parents) */
 static Env *env_root(Env *e) {
     while (e->parent) e = e->parent;

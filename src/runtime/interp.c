@@ -6008,6 +6008,16 @@ do_call: ;
         return value_incref(XS_NULL_VAL);
     }
 
+    case NODE_DEL: {
+        if (!env_delete(i->env, n->del_.name)) {
+            i->current_span = n->span;
+            xs_runtime_error(n->span, "del failed", NULL,
+                "cannot delete '%s': not found", n->del_.name);
+            i->cf.signal = CF_ERROR;
+        }
+        return value_incref(XS_NULL_VAL);
+    }
+
     case NODE_DO_EXPR: {
         return EVAL(i, n->do_expr.body);
     }
@@ -6504,6 +6514,7 @@ static const char *node_tag_to_string(NodeTag tag) {
     case NODE_TIMEOUT:    return "timeout";
     case NODE_DEBOUNCE:   return "debounce";
     case NODE_PAUSE:      return "pause";
+    case NODE_DEL:        return "del";
     case NODE_DO_EXPR:    return "do";
     case NODE_WITH:       return "with";
     default:              return "unknown";
@@ -6561,6 +6572,7 @@ static int node_tag_from_string(const char *s) {
     if (strcmp(s, "timeout") == 0) return NODE_TIMEOUT;
     if (strcmp(s, "debounce") == 0) return NODE_DEBOUNCE;
     if (strcmp(s, "pause") == 0) return NODE_PAUSE;
+    if (strcmp(s, "del") == 0) return NODE_DEL;
     return -1;
 }
 
@@ -6700,6 +6712,9 @@ static Value *node_to_xs_map(Node *n) {
         break;
     case NODE_PAUSE:
         map_set(m->map, "duration", node_to_xs_map(n->pause_.duration));
+        break;
+    case NODE_DEL:
+        map_set(m->map, "name", xs_str(n->del_.name));
         break;
     default:
         break;

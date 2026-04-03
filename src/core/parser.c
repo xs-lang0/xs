@@ -3812,6 +3812,14 @@ static Node *parse_stmt(Parser *p) {
         n->pause_.duration = dur;
         return n;
     }
+    if (tok->kind == TK_DEL) {
+        pp_advance(p);
+        Token *name = pp_expect(p, TK_IDENT, "expected variable name after 'del'");
+        if (!pp_match(p, TK_SEMICOLON)) pp_match(p, TK_NEWLINE);
+        Node *n = node_new(NODE_DEL, tok->span);
+        n->del_.name = xs_strdup(name->sval ? name->sval : "");
+        return n;
+    }
     if (tok->kind == TK_EFFECT) return parse_effect_decl(p);
 
     if (tok->kind == TK_MODULE) {
