@@ -461,6 +461,15 @@ static void locals_free(LocalMap *l) {
    ======================================================================== */
 
 #define MAX_FUNCS 512
+#define MAX_CAPTURES 32
+
+/* Forward declaration for closure support */
+typedef struct {
+    Node *node;
+    int n_params;
+    char *captures[MAX_CAPTURES];
+    int n_captures;
+} FuncInfo;
 
 typedef struct {
     char *names[MAX_FUNCS];
@@ -565,6 +574,8 @@ typedef struct {
     int              in_loop;       /* whether we are inside a loop */
     int              break_depth;   /* br depth for break (from body) */
     int              continue_depth; /* br depth for continue (from body) */
+    void            *fn_infos;      /* FuncInfo array for closure capture info */
+    int              cur_fn_idx;    /* index of function being compiled (-1 for main) */
 } CompilerCtx;
 
 /* ========================================================================
@@ -898,8 +909,30 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
                 /* Wrap function index as a func value */
                 emit_val_new(code, TAG_FUNC, NUM_RT_FUNCS + fidx);
             } else {
-                /* Unknown variable - return null */
-                emit_null(code);
+                /* Check if it's a captured variable in a closure */
+                int found_capture = 0;
+                if (ctx->fn_infos && ctx->cur_fn_idx >= 0) {
+                    FuncInfo *fi = &((FuncInfo*)ctx->fn_infos)[ctx->cur_fn_idx];
+                    for (int ci = 0; ci < fi->n_captures; ci++) {
+                        if (strcmp(fi->captures[ci], node->ident.name) == 0) {
+                            /* Load from __env map */
+                            int env_idx = locals_find(locals, "__env");
+                            if (env_idx >= 0) {
+                                emit_local_get(code, env_idx);
+                                int kl = 0;
+                                int koff = strtab_add_with_len(ctx->strtab, node->ident.name, &kl);
+                                emit_str_val(code, koff, kl);
+                                emit_call(code, RT_MAP_GET);
+                                found_capture = 1;
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (!found_capture) {
+                    /* Unknown variable - return null */
+                    emit_null(code);
+                }
             }
         }
         break;
@@ -1232,15 +1265,38 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             /* Check if it is a local variable holding a func value */
             int local_idx = locals_find(locals, name);
             if (local_idx >= 0) {
-                /* Indirect call through table */
+                /* Check for closure: if extra field (offset 8) is non-zero, it's a closure env */
+                int env_local = locals_add(locals, "__callenv");
+                emit_local_get(code, local_idx);
+                emit_i32(code, 8);
+                buf_byte(code, OP_I32_ADD);
+                buf_byte(code, OP_I32_LOAD);
+                buf_leb128_u(code, 2);
+                buf_leb128_u(code, 0);
+                emit_local_set(code, env_local);
+
+                emit_local_get(code, env_local);
+                buf_byte(code, OP_IF);
+                buf_byte(code, WASM_TYPE_I32);
+                /* Closure call: pass env as first arg, then user args */
+                emit_local_get(code, env_local);
                 for (int i = 0; i < nargs; i++)
                     compile_expr(node->call.args.items[i], code, locals, ctx);
-                /* Get the func table index from the value */
+                emit_local_get(code, local_idx);
+                emit_call(code, RT_VAL_I32);
+                buf_byte(code, OP_CALL_INDIRECT);
+                buf_leb128_u(code, (uint32_t)arity_to_type(nargs + 1));
+                buf_leb128_u(code, 0);
+                buf_byte(code, OP_ELSE);
+                /* Regular function call */
+                for (int i = 0; i < nargs; i++)
+                    compile_expr(node->call.args.items[i], code, locals, ctx);
                 emit_local_get(code, local_idx);
                 emit_call(code, RT_VAL_I32);
                 buf_byte(code, OP_CALL_INDIRECT);
                 buf_leb128_u(code, (uint32_t)arity_to_type(nargs));
-                buf_leb128_u(code, 0); /* table index */
+                buf_leb128_u(code, 0);
+                buf_byte(code, OP_END);
                 break;
             }
 
@@ -1646,10 +1702,58 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
     /* ---- Lambda ---- */
 
     case NODE_LAMBDA: {
-        /* Lambda was collected during the function pass. Retrieve the func index
-           from the is_generator field (high bits store the fn_infos index). */
         int fn_info_idx = (node->lambda.is_generator >> 16) & 0xFFFF;
-        emit_val_new(code, TAG_FUNC, NUM_RT_FUNCS + fn_info_idx);
+        /* Check if this lambda has captures */
+        FuncInfo *_fis = (FuncInfo*)ctx->fn_infos;
+        if (fn_info_idx < MAX_FUNCS && _fis && _fis[fn_info_idx].n_captures > 0) {
+            FuncInfo *fi = &_fis[fn_info_idx];
+            /* Create an environment map with captured values */
+            emit_call(code, RT_MAP_NEW);
+            int env_tmp = locals_add(locals, "__cenv");
+            emit_local_set(code, env_tmp);
+            for (int ci = 0; ci < fi->n_captures; ci++) {
+                emit_local_get(code, env_tmp);
+                int kl = 0;
+                int koff = strtab_add_with_len(ctx->strtab, fi->captures[ci], &kl);
+                emit_str_val(code, koff, kl);
+                /* Get the captured variable's current value */
+                int var_idx = locals_find(locals, fi->captures[ci]);
+                if (var_idx >= 0)
+                    emit_local_get(code, var_idx);
+                else
+                    emit_null(code);
+                emit_call(code, RT_MAP_SET);
+            }
+            /* Create closure: store [func_idx, env_ptr] as a 2-element array */
+            emit_call(code, RT_ARR_NEW);
+            int clos_tmp = locals_add(locals, "__clos");
+            emit_local_set(code, clos_tmp);
+            emit_local_get(code, clos_tmp);
+            emit_val_new(code, TAG_FUNC, NUM_RT_FUNCS + fn_info_idx);
+            emit_call(code, RT_ARR_PUSH);
+            emit_local_get(code, clos_tmp);
+            emit_local_get(code, env_tmp);
+            emit_call(code, RT_ARR_PUSH);
+            /* Tag as func but with env info in extra field */
+            emit_i32(code, TAG_FUNC);
+            emit_local_get(code, clos_tmp);
+            emit_call(code, RT_VAL_I32); /* data ptr */
+            emit_call(code, RT_VAL_NEW);
+            /* Store env ptr in extra field */
+            {
+                int cv = locals_add(locals, "__cvtmp");
+                emit_local_tee(code, cv);
+                emit_i32(code, 8);
+                buf_byte(code, OP_I32_ADD);
+                emit_local_get(code, env_tmp);
+                buf_byte(code, OP_I32_STORE);
+                buf_leb128_u(code, 2);
+                buf_leb128_u(code, 0);
+                emit_local_get(code, cv);
+            }
+        } else {
+            emit_val_new(code, TAG_FUNC, NUM_RT_FUNCS + fn_info_idx);
+        }
         break;
     }
 
@@ -4676,10 +4780,7 @@ static void emit_rt_str_len(WasmBuf *body) {
    Collect function declarations from program
    ======================================================================== */
 
-typedef struct {
-    Node *node;
-    int n_params;
-} FuncInfo;
+/* FuncInfo defined earlier for closure support */
 
 /* Recursively collect lambdas and nested fn decls from any node */
 static int collect_nested(Node *node, FuncInfo *out, int max, FuncMap *funcs, int count);
@@ -4688,6 +4789,70 @@ static int collect_nested_list(NodeList *list, FuncInfo *out, int max, FuncMap *
     for (int i = 0; i < list->len && count < max; i++)
         count = collect_nested(list->items[i], out, max, funcs, count);
     return count;
+}
+
+/* Collect free variables in a lambda body (identifiers not in params or globals) */
+static void collect_free_vars(Node *node, ParamList *params, FuncMap *funcs,
+                              char **out, int *n, int max) {
+    if (!node || *n >= max) return;
+    if (node->tag == NODE_IDENT) {
+        const char *name = node->ident.name;
+        if (!name) return;
+        /* Skip if it's a parameter */
+        for (int i = 0; i < params->len; i++)
+            if (params->items[i].name && strcmp(params->items[i].name, name) == 0) return;
+        /* Skip if it's a known function */
+        if (funcs_find(funcs, name) >= 0) return;
+        /* Skip builtins */
+        if (strcmp(name, "println") == 0 || strcmp(name, "print") == 0 ||
+            strcmp(name, "str") == 0 || strcmp(name, "len") == 0 ||
+            strcmp(name, "true") == 0 || strcmp(name, "false") == 0 ||
+            strcmp(name, "null") == 0) return;
+        /* Skip if already in list */
+        for (int i = 0; i < *n; i++)
+            if (strcmp(out[i], name) == 0) return;
+        out[(*n)++] = strdup(name);
+        return;
+    }
+    /* Recurse into children */
+    switch (node->tag) {
+    case NODE_BINOP:
+        collect_free_vars(node->binop.left, params, funcs, out, n, max);
+        collect_free_vars(node->binop.right, params, funcs, out, n, max);
+        break;
+    case NODE_UNARY:
+        collect_free_vars(node->unary.expr, params, funcs, out, n, max);
+        break;
+    case NODE_CALL:
+        collect_free_vars(node->call.callee, params, funcs, out, n, max);
+        for (int i = 0; i < node->call.args.len; i++)
+            collect_free_vars(node->call.args.items[i], params, funcs, out, n, max);
+        break;
+    case NODE_RETURN:
+        if (node->ret.value) collect_free_vars(node->ret.value, params, funcs, out, n, max);
+        break;
+    case NODE_BLOCK:
+        for (int i = 0; i < node->block.stmts.len; i++)
+            collect_free_vars(node->block.stmts.items[i], params, funcs, out, n, max);
+        if (node->block.expr) collect_free_vars(node->block.expr, params, funcs, out, n, max);
+        break;
+    case NODE_EXPR_STMT:
+        if (node->expr_stmt.expr) collect_free_vars(node->expr_stmt.expr, params, funcs, out, n, max);
+        break;
+    case NODE_LET: case NODE_VAR:
+        if (node->let.value) collect_free_vars(node->let.value, params, funcs, out, n, max);
+        break;
+    case NODE_IF:
+        collect_free_vars(node->if_expr.cond, params, funcs, out, n, max);
+        collect_free_vars(node->if_expr.then, params, funcs, out, n, max);
+        if (node->if_expr.else_branch) collect_free_vars(node->if_expr.else_branch, params, funcs, out, n, max);
+        break;
+    case NODE_ASSIGN:
+        collect_free_vars(node->assign.target, params, funcs, out, n, max);
+        collect_free_vars(node->assign.value, params, funcs, out, n, max);
+        break;
+    default: break;
+    }
 }
 
 static int collect_nested(Node *node, FuncInfo *out, int max, FuncMap *funcs, int count) {
@@ -4699,9 +4864,16 @@ static int collect_nested(Node *node, FuncInfo *out, int max, FuncMap *funcs, in
         snprintf(lname, sizeof(lname), "__lambda_%d", count);
         funcs_add(funcs, lname);
         out[count].node = node;
-        out[count].n_params = node->lambda.params.len;
-        /* Stash the func index in node for later retrieval.
-           We abuse the is_generator field's high bits for this. */
+        /* Detect captured (free) variables */
+        out[count].n_captures = 0;
+        collect_free_vars(node->lambda.body, &node->lambda.params, funcs,
+                          out[count].captures, &out[count].n_captures, MAX_CAPTURES);
+        /* If there are captures, add __env as first hidden param */
+        if (out[count].n_captures > 0)
+            out[count].n_params = node->lambda.params.len + 1;
+        else
+            out[count].n_params = node->lambda.params.len;
+        /* Stash the func index in node for later retrieval */
         node->lambda.is_generator = (node->lambda.is_generator & 1) | ((count) << 16);
         count++;
         /* Also scan lambda body for nested lambdas */
@@ -4989,6 +5161,13 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
         ctx.in_loop = 0;
         ctx.break_depth = 1;
         ctx.continue_depth = 0;
+        ctx.fn_infos = fn_infos;
+        ctx.cur_fn_idx = i;
+
+        /* Add parameters - for closures, add __env as first param */
+        if (fn->tag == NODE_LAMBDA && fn_infos[i].n_captures > 0) {
+            locals_add(&locals, "__env");
+        }
 
         /* Add parameters */
         ParamList *params;
@@ -5053,6 +5232,8 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
         ctx.in_loop = 0;
         ctx.break_depth = 1;
         ctx.continue_depth = 0;
+        ctx.fn_infos = fn_infos;
+        ctx.cur_fn_idx = -1;
 
         if (program->tag == NODE_PROGRAM) {
             NodeList *stmts = &program->program.stmts;
