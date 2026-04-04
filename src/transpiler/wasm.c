@@ -3493,11 +3493,83 @@ static void emit_rt_val_to_str(WasmBuf *body) {
     emit_call(body, RT_STR_NEW);
     buf_byte(body, OP_ELSE);
 
+    /* TAG_ARRAY - format as [elem1, elem2, ...] */
+    emit_local_get(body, tag);
+    emit_i32(body, TAG_ARRAY);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    {
+        /* Start with "[" */
+        emit_inline_str(body, "[", 6);
+        int result = 2;
+        emit_local_set(body, result);
+        /* Get array length */
+        emit_local_get(body, 0);
+        emit_call(body, RT_ARR_LEN);
+        int len = 3;
+        emit_local_set(body, len);
+        /* Loop: i = 0; while i < len */
+        emit_i32(body, 0);
+        int idx = 4;
+        emit_local_set(body, idx);
+        buf_byte(body, OP_BLOCK); buf_byte(body, WASM_TYPE_VOID);
+        buf_byte(body, OP_LOOP); buf_byte(body, WASM_TYPE_VOID);
+        /* if i >= len, break */
+        emit_local_get(body, idx);
+        emit_local_get(body, len);
+        buf_byte(body, OP_I32_GE_S);
+        buf_byte(body, OP_BR_IF); buf_leb128_u(body, 1);
+        /* if i > 0, append ", " */
+        emit_local_get(body, idx);
+        emit_i32(body, 0);
+        buf_byte(body, OP_I32_GT_S);
+        buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_VOID);
+        emit_local_get(body, result);
+        emit_inline_str(body, ", ", 6);
+        emit_call(body, RT_STR_CAT);
+        emit_local_set(body, result);
+        buf_byte(body, OP_END);
+        /* Get element: arr data_ptr + 8 + i*4 */
+        emit_local_get(body, 0);
+        emit_call(body, RT_VAL_I32); /* data_ptr */
+        emit_i32(body, 8);
+        buf_byte(body, OP_I32_ADD);
+        emit_local_get(body, idx);
+        emit_i32(body, 4);
+        buf_byte(body, OP_I32_MUL);
+        buf_byte(body, OP_I32_ADD);
+        buf_byte(body, OP_I32_LOAD);
+        buf_leb128_u(body, 2);
+        buf_leb128_u(body, 0); /* element value ptr */
+        emit_call(body, RT_VAL_TO_STR); /* recursive */
+        int etmp = 5;
+        emit_local_set(body, etmp);
+        /* result = str_cat(result, elem_str) */
+        emit_local_get(body, result);
+        emit_local_get(body, etmp);
+        emit_call(body, RT_STR_CAT);
+        emit_local_set(body, result);
+        /* i++ */
+        emit_local_get(body, idx);
+        emit_i32(body, 1);
+        buf_byte(body, OP_I32_ADD);
+        emit_local_set(body, idx);
+        buf_byte(body, OP_BR); buf_leb128_u(body, 0);
+        buf_byte(body, OP_END); /* loop */
+        buf_byte(body, OP_END); /* block */
+        /* Append "]" */
+        emit_local_get(body, result);
+        emit_inline_str(body, "]", 6);
+        emit_call(body, RT_STR_CAT);
+    }
+    buf_byte(body, OP_ELSE);
+
     /* TAG_INT and everything else */
     emit_local_get(body, 0);
     emit_call(body, RT_VAL_I32);
     emit_call(body, RT_I32_TO_STR);
 
+    buf_byte(body, OP_END); /* array */
     buf_byte(body, OP_END); /* float */
     buf_byte(body, OP_END); /* bool */
     buf_byte(body, OP_END); /* string */
@@ -4681,7 +4753,7 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
         /* 24: $val_not */
         build_rt_func(&sec, 1, 0, emit_rt_val_not);
         /* 25: $val_to_str */
-        build_rt_func(&sec, 1, 5, emit_rt_val_to_str);
+        build_rt_func(&sec, 1, 6, emit_rt_val_to_str);
         /* 26: $map_new */
         build_rt_func(&sec, 0, 1, emit_rt_map_new);
         /* 27: $map_set (3 params, 2 extra) */
