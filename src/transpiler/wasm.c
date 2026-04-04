@@ -225,8 +225,13 @@ static void strtab_init(StringTable *st) {
 }
 
 static int strtab_add(StringTable *st, const char *s) {
-    if (st->count >= MAX_STRINGS) return 0;
+    /* Deduplicate: if this string is already in the table, return its offset */
     int len = (int)strlen(s);
+    for (int i = 0; i < st->count; i++) {
+        if (st->lengths[i] == len && memcmp(st->strs[i], s, (size_t)len) == 0)
+            return st->offsets[i];
+    }
+    if (st->count >= MAX_STRINGS) return 0;
     int off = st->total_len;
     st->strs[st->count] = s;
     st->offsets[st->count] = off;
@@ -237,8 +242,15 @@ static int strtab_add(StringTable *st, const char *s) {
 }
 
 static int strtab_add_with_len(StringTable *st, const char *s, int *out_len) {
-    if (st->count >= MAX_STRINGS) { *out_len = 0; return 0; }
     int len = (int)strlen(s);
+    /* Deduplicate */
+    for (int i = 0; i < st->count; i++) {
+        if (st->lengths[i] == len && memcmp(st->strs[i], s, (size_t)len) == 0) {
+            *out_len = len;
+            return st->offsets[i];
+        }
+    }
+    if (st->count >= MAX_STRINGS) { *out_len = 0; return 0; }
     int off = st->total_len;
     st->strs[st->count] = s;
     st->offsets[st->count] = off;
@@ -551,6 +563,8 @@ typedef struct {
     DeferList        defers;
     int              loop_depth;    /* nesting depth for break/continue */
     int              in_loop;       /* whether we are inside a loop */
+    int              break_depth;   /* br depth for break (from body) */
+    int              continue_depth; /* br depth for continue (from body) */
 } CompilerCtx;
 
 /* ========================================================================
@@ -559,6 +573,7 @@ typedef struct {
 
 static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCtx *ctx);
 static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCtx *ctx);
+static int arity_to_type(int arity);
 static void compile_block(Node *block, WasmBuf *code, LocalMap *locals, CompilerCtx *ctx);
 static void compile_pattern_cond(Node *pat, int subject_local, WasmBuf *code,
                                   LocalMap *locals, CompilerCtx *ctx);
@@ -881,7 +896,7 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             int fidx = funcs_find(ctx->funcs, node->ident.name);
             if (fidx >= 0) {
                 /* Wrap function index as a func value */
-                emit_val_new(code, TAG_FUNC, USER_FUNC_BASE + fidx);
+                emit_val_new(code, TAG_FUNC, NUM_RT_FUNCS + fidx);
             } else {
                 /* Unknown variable - return null */
                 emit_null(code);
@@ -895,17 +910,33 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
     case NODE_BINOP: {
         const char *op = node->binop.op;
 
-        /* Short-circuit: and, or */
-        if (strcmp(op, "and") == 0) {
+        /* Short-circuit: and/&&, or/|| - inlined for correctness */
+        if (strcmp(op, "and") == 0 || strcmp(op, "&&") == 0) {
+            int tmp_a = locals_add(locals, "__and_a");
             compile_expr(node->binop.left, code, locals, ctx);
+            emit_local_set(code, tmp_a);
+            emit_local_get(code, tmp_a);
+            emit_call(code, RT_VAL_TRUTHY);
+            buf_byte(code, OP_IF);
+            buf_byte(code, WASM_TYPE_I32);
             compile_expr(node->binop.right, code, locals, ctx);
-            emit_call(code, RT_VAL_AND);
+            buf_byte(code, OP_ELSE);
+            emit_local_get(code, tmp_a);
+            buf_byte(code, OP_END);
             break;
         }
-        if (strcmp(op, "or") == 0) {
+        if (strcmp(op, "or") == 0 || strcmp(op, "||") == 0) {
+            int tmp_a = locals_add(locals, "__or_a");
             compile_expr(node->binop.left, code, locals, ctx);
+            emit_local_set(code, tmp_a);
+            emit_local_get(code, tmp_a);
+            emit_call(code, RT_VAL_TRUTHY);
+            buf_byte(code, OP_IF);
+            buf_byte(code, WASM_TYPE_I32);
+            emit_local_get(code, tmp_a);
+            buf_byte(code, OP_ELSE);
             compile_expr(node->binop.right, code, locals, ctx);
-            emit_call(code, RT_VAL_OR);
+            buf_byte(code, OP_END);
             break;
         }
 
@@ -1148,14 +1179,9 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             if (name[0] >= 'A' && name[0] <= 'Z') {
                 int si = struct_layouts_find(ctx->structs, name);
                 if (si >= 0) {
-                    /* Struct constructor: fields come as kwargs usually,
-                       but may come positionally */
                     StructLayout *sl = &ctx->structs->layouts[si];
-                    int slen = 0;
-                    int name_off = strtab_add_with_len(ctx->strtab, name, &slen);
-                    emit_str_val(code, name_off, slen);
-                    emit_i32(code, sl->n_fields);
-                    emit_call(code, RT_STRUCT_NEW);
+                    /* Create a map to hold fields */
+                    emit_call(code, RT_MAP_NEW);
                     int stmp = locals_add(locals, "__sinit");
                     emit_local_set(code, stmp);
                     /* Set fields - kwargs first, then positional */
@@ -1167,7 +1193,7 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
                                                             node->call.kwargs.items[k].key, &fl);
                             emit_str_val(code, foff, fl);
                             compile_expr(node->call.kwargs.items[k].val, code, locals, ctx);
-                            emit_call(code, RT_VAL_FIELD_SET);
+                            emit_call(code, RT_MAP_SET);
                         }
                     }
                     for (int a = 0; a < nargs && a < sl->n_fields; a++) {
@@ -1176,10 +1202,30 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
                         int foff = strtab_add_with_len(ctx->strtab, sl->fields[a], &fl);
                         emit_str_val(code, foff, fl);
                         compile_expr(node->call.args.items[a], code, locals, ctx);
-                        emit_call(code, RT_VAL_FIELD_SET);
+                        emit_call(code, RT_MAP_SET);
                     }
                     emit_local_get(code, stmp);
                     break;
+                }
+                /* Check if it is a class constructor - look for init method */
+                {
+                    char init_name[256];
+                    snprintf(init_name, sizeof(init_name), "init");
+                    int init_fidx = funcs_find(ctx->funcs, init_name);
+                    if (init_fidx >= 0) {
+                        /* Create a map as the instance */
+                        emit_call(code, RT_MAP_NEW);
+                        int ctmp = locals_add(locals, "__cinst");
+                        emit_local_set(code, ctmp);
+                        /* Call init(self, args...) */
+                        emit_local_get(code, ctmp); /* self */
+                        for (int i = 0; i < nargs; i++)
+                            compile_expr(node->call.args.items[i], code, locals, ctx);
+                        emit_call(code, USER_FUNC_BASE + init_fidx);
+                        buf_byte(code, OP_DROP); /* drop init return value */
+                        emit_local_get(code, ctmp); /* return instance */
+                        break;
+                    }
                 }
             }
 
@@ -1193,7 +1239,7 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
                 emit_local_get(code, local_idx);
                 emit_call(code, RT_VAL_I32);
                 buf_byte(code, OP_CALL_INDIRECT);
-                buf_leb128_u(code, 0); /* type index 0 (generic) */
+                buf_leb128_u(code, (uint32_t)arity_to_type(nargs));
                 buf_leb128_u(code, 0); /* table index */
                 break;
             }
@@ -1213,7 +1259,7 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         compile_expr(callee, code, locals, ctx);
         emit_call(code, RT_VAL_I32); /* get table index */
         buf_byte(code, OP_CALL_INDIRECT);
-        buf_leb128_u(code, 0);
+        buf_leb128_u(code, (uint32_t)arity_to_type(nargs));
         buf_leb128_u(code, 0);
         break;
     }
@@ -1224,11 +1270,101 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         const char *method = node->method_call.method;
         int nargs = node->method_call.args.len;
 
+        /* Check user-defined methods FIRST (impl methods, class methods) */
+        {
+            int fidx = funcs_find(ctx->funcs, method);
+            if (fidx >= 0) {
+                /* Call with obj as first arg (self) */
+                compile_expr(node->method_call.obj, code, locals, ctx);
+                for (int i = 0; i < nargs; i++)
+                    compile_expr(node->method_call.args.items[i], code, locals, ctx);
+                emit_call(code, USER_FUNC_BASE + fidx);
+                break;
+            }
+        }
+
         /* Common array/string methods */
         if (strcmp(method, "push") == 0 && nargs == 1) {
             compile_expr(node->method_call.obj, code, locals, ctx);
             compile_expr(node->method_call.args.items[0], code, locals, ctx);
             emit_call(code, RT_ARR_PUSH);
+            emit_null(code); /* push returns void, need a value for expr context */
+            break;
+        }
+        if (strcmp(method, "pop") == 0) {
+            /* Pop last element: get len-1, decrement len. Simplified: return null */
+            compile_expr(node->method_call.obj, code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            emit_null(code);
+            break;
+        }
+        if (strcmp(method, "upper") == 0) {
+            /* String upper: for now, return the string as-is (no in-WASM toupper) */
+            compile_expr(node->method_call.obj, code, locals, ctx);
+            break;
+        }
+        if (strcmp(method, "lower") == 0) {
+            compile_expr(node->method_call.obj, code, locals, ctx);
+            break;
+        }
+        if (strcmp(method, "trim") == 0) {
+            compile_expr(node->method_call.obj, code, locals, ctx);
+            break;
+        }
+        if (strcmp(method, "contains") == 0 && nargs == 1) {
+            compile_expr(node->method_call.obj, code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            compile_expr(node->method_call.args.items[0], code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            emit_bool_val(code, 0); /* stub: always false */
+            break;
+        }
+        if (strcmp(method, "split") == 0 && nargs == 1) {
+            /* Stub: return array with the string itself */
+            emit_call(code, RT_ARR_NEW);
+            {
+                int stmp = locals_add(locals, "__split_r");
+                emit_local_set(code, stmp);
+                emit_local_get(code, stmp);
+                compile_expr(node->method_call.obj, code, locals, ctx);
+                emit_call(code, RT_ARR_PUSH);
+                compile_expr(node->method_call.args.items[0], code, locals, ctx);
+                buf_byte(code, OP_DROP);
+                emit_local_get(code, stmp);
+            }
+            break;
+        }
+        if (strcmp(method, "starts_with") == 0 && nargs == 1) {
+            compile_expr(node->method_call.obj, code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            compile_expr(node->method_call.args.items[0], code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            emit_bool_val(code, 0);
+            break;
+        }
+        if (strcmp(method, "ends_with") == 0 && nargs == 1) {
+            compile_expr(node->method_call.obj, code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            compile_expr(node->method_call.args.items[0], code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            emit_bool_val(code, 0);
+            break;
+        }
+        if (strcmp(method, "map") == 0 && nargs == 1) {
+            /* arr.map(fn) - simplified: return empty array */
+            compile_expr(node->method_call.obj, code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            compile_expr(node->method_call.args.items[0], code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            emit_call(code, RT_ARR_NEW);
+            break;
+        }
+        if (strcmp(method, "filter") == 0 && nargs == 1) {
+            compile_expr(node->method_call.obj, code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            compile_expr(node->method_call.args.items[0], code, locals, ctx);
+            buf_byte(code, OP_DROP);
+            emit_call(code, RT_ARR_NEW);
             break;
         }
         if (strcmp(method, "len") == 0 || strcmp(method, "length") == 0) {
@@ -1248,28 +1384,14 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             break;
         }
 
-        /* Generic method call: compile obj, look up method on the struct/class */
+        /* Unknown method - compile obj but return null */
         compile_expr(node->method_call.obj, code, locals, ctx);
-        /* For now, try to find a function named type_method */
-        {
-            char combined[256];
-            snprintf(combined, sizeof(combined), "%s", method);
-            int fidx = funcs_find(ctx->funcs, combined);
-            if (fidx >= 0) {
-                /* Pass obj as first arg, then remaining args */
-                for (int i = 0; i < nargs; i++)
-                    compile_expr(node->method_call.args.items[i], code, locals, ctx);
-                emit_call(code, USER_FUNC_BASE + fidx);
-            } else {
-                /* Unknown method - drop obj, return null */
-                buf_byte(code, OP_DROP);
-                for (int i = 0; i < nargs; i++) {
-                    compile_expr(node->method_call.args.items[i], code, locals, ctx);
-                    buf_byte(code, OP_DROP);
-                }
-                emit_null(code);
-            }
+        buf_byte(code, OP_DROP);
+        for (int i = 0; i < nargs; i++) {
+            compile_expr(node->method_call.args.items[i], code, locals, ctx);
+            buf_byte(code, OP_DROP);
         }
+        emit_null(code);
         break;
     }
 
@@ -1285,33 +1407,17 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
 
     case NODE_FIELD: {
         const char *fname = node->field.name;
-        /* Try to find field index at compile time */
-        int fidx = struct_field_index(ctx->structs, NULL, fname);
-        if (fidx >= 0) {
-            /* Direct index-based access */
+        /* Special-case .len for strings and arrays */
+        if (strcmp(fname, "len") == 0) {
             compile_expr(node->field.obj, code, locals, ctx);
-            emit_call(code, RT_VAL_I32); /* get data pointer */
-            emit_i32(code, 4 + fidx * 4);
-            buf_byte(code, OP_I32_ADD);
-            buf_byte(code, OP_I32_LOAD);
-            buf_leb128_u(code, 2);
-            buf_leb128_u(code, 0);
+            emit_call(code, RT_STR_LEN);
         } else {
-            /* String method call or unknown field - try method dispatch */
-            if (strcmp(fname, "len") == 0) {
-                compile_expr(node->field.obj, code, locals, ctx);
-                emit_call(code, RT_STR_LEN);
-            } else if (strcmp(fname, "push") == 0 || strcmp(fname, "upper") == 0) {
-                /* Method reference - just compile the object for now */
-                compile_expr(node->field.obj, code, locals, ctx);
-            } else {
-                /* Fallback: use RT_VAL_FIELD */
-                compile_expr(node->field.obj, code, locals, ctx);
-                int slen = 0;
-                int foff = strtab_add_with_len(ctx->strtab, fname, &slen);
-                emit_str_val(code, foff, slen);
-                emit_call(code, RT_VAL_FIELD);
-            }
+            /* Use map-based field access for all objects */
+            compile_expr(node->field.obj, code, locals, ctx);
+            int slen = 0;
+            int foff = strtab_add_with_len(ctx->strtab, fname, &slen);
+            emit_str_val(code, foff, slen);
+            emit_call(code, RT_VAL_FIELD);
         }
         break;
     }
@@ -1328,7 +1434,10 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             }
             int vtag = enum_variant_tag(ctx->enums, full);
             if (vtag >= 0) {
-                emit_int_val(code, vtag);
+                /* Store as string so it prints as "Color::Red" etc. */
+                int slen = 0;
+                int soff = strtab_add_with_len(ctx->strtab, full, &slen);
+                emit_str_val(code, soff, slen);
             } else {
                 /* Try as a regular identifier (last part) */
                 int idx = locals_find(locals, node->scope.parts[node->scope.nparts - 1]);
@@ -1337,7 +1446,7 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
                 } else {
                     int fidx = funcs_find(ctx->funcs, node->scope.parts[node->scope.nparts - 1]);
                     if (fidx >= 0) {
-                        emit_val_new(code, TAG_FUNC, USER_FUNC_BASE + fidx);
+                        emit_val_new(code, TAG_FUNC, NUM_RT_FUNCS + fidx);
                     } else {
                         emit_null(code);
                     }
@@ -1362,6 +1471,8 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
     /* ---- If expression ---- */
 
     case NODE_IF: {
+        ctx->break_depth++;
+        ctx->continue_depth++;
         compile_expr(node->if_expr.cond, code, locals, ctx);
         emit_call(code, RT_VAL_TRUTHY);
         buf_byte(code, OP_IF);
@@ -1373,6 +1484,8 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         /* elif chains */
         for (int i = 0; i < node->if_expr.elif_conds.len; i++) {
             buf_byte(code, OP_ELSE);
+            ctx->break_depth++;
+            ctx->continue_depth++;
             compile_expr(node->if_expr.elif_conds.items[i], code, locals, ctx);
             emit_call(code, RT_VAL_TRUTHY);
             buf_byte(code, OP_IF);
@@ -1392,7 +1505,11 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         /* Close elif chain ends */
         for (int i = 0; i < node->if_expr.elif_conds.len; i++) {
             buf_byte(code, OP_END);
+            ctx->break_depth--;
+            ctx->continue_depth--;
         }
+        ctx->break_depth--;
+        ctx->continue_depth--;
         break;
     }
 
@@ -1434,13 +1551,10 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
     /* ---- Lambda ---- */
 
     case NODE_LAMBDA: {
-        /* Lambdas need to be compiled as separate functions and stored
-           in the function table. For simplicity, we compile them inline
-           and store a func value with the table index.
-           However, WASM requires all functions to be declared at module level.
-           So for now, lambdas that are just expressions get inlined. */
-        /* Return a func value pointing to a stub */
-        emit_val_new(code, TAG_FUNC, 0);
+        /* Lambda was collected during the function pass. Retrieve the func index
+           from the is_generator field (high bits store the fn_infos index). */
+        int fn_info_idx = (node->lambda.is_generator >> 16) & 0xFFFF;
+        emit_val_new(code, TAG_FUNC, NUM_RT_FUNCS + fn_info_idx);
         break;
     }
 
@@ -1498,51 +1612,85 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         int result_arr = locals_add(locals, "__lc_arr");
         emit_local_set(code, result_arr);
 
-        /* Only handle the first clause for now (most common case).
-           Multi-clause gets nested loops. */
-        for (int c = 0; c < node->list_comp.clause_pats.len; c++) {
+        /* Track per-clause loop index locals for proper increment */
+        int clause_i_locals[16];
+        int clause_is_range[16];
+
+        for (int c = 0; c < node->list_comp.clause_pats.len && c < 16; c++) {
             Node *iter = node->list_comp.clause_iters.items[c];
             Node *pat = node->list_comp.clause_pats.items[c];
             const char *vname = "__lc_elem";
             if (pat && pat->tag == NODE_PAT_IDENT) vname = pat->pat_ident.name;
             int elem_idx = locals_ensure(locals, vname);
-            int arr_src = locals_add(locals, "__lc_src");
-            int i_idx = locals_add(locals, "__lc_i");
-            int len_idx = locals_add(locals, "__lc_len");
 
-            compile_expr(iter, code, locals, ctx);
-            emit_local_set(code, arr_src);
-            emit_local_get(code, arr_src);
-            emit_call(code, RT_ARR_LEN);
-            emit_local_set(code, len_idx);
-            emit_i32(code, 0);
-            emit_local_set(code, i_idx);
+            /* Check if iterator is a range */
+            if (iter && iter->tag == NODE_RANGE) {
+                clause_is_range[c] = 1;
+                int i_idx = locals_add(locals, "__lc_ri");
+                int end_idx = locals_add(locals, "__lc_re");
+                clause_i_locals[c] = i_idx;
 
-            buf_byte(code, OP_BLOCK);
-            buf_byte(code, WASM_TYPE_VOID);
-            buf_byte(code, OP_LOOP);
-            buf_byte(code, WASM_TYPE_VOID);
+                compile_expr(iter->range.start, code, locals, ctx);
+                emit_call(code, RT_VAL_I32);
+                emit_local_set(code, i_idx);
+                compile_expr(iter->range.end, code, locals, ctx);
+                emit_call(code, RT_VAL_I32);
+                if (iter->range.inclusive) {
+                    emit_i32(code, 1);
+                    buf_byte(code, OP_I32_ADD);
+                }
+                emit_local_set(code, end_idx);
 
-            emit_local_get(code, i_idx);
-            emit_local_get(code, len_idx);
-            buf_byte(code, OP_I32_GE_S);
-            buf_byte(code, OP_BR_IF);
-            buf_leb128_u(code, 1);
+                buf_byte(code, OP_BLOCK);
+                buf_byte(code, WASM_TYPE_VOID);
+                buf_byte(code, OP_LOOP);
+                buf_byte(code, WASM_TYPE_VOID);
 
-            /* Load element */
-            emit_local_get(code, arr_src);
-            emit_local_get(code, i_idx);
-            emit_int_val(code, 0); /* placeholder - we need i32 as val */
-            buf_byte(code, OP_DROP);
-            /* Use arr_get */
-            emit_local_get(code, arr_src);
-            {
+                emit_local_get(code, i_idx);
+                emit_local_get(code, end_idx);
+                buf_byte(code, OP_I32_GE_S);
+                buf_byte(code, OP_BR_IF);
+                buf_leb128_u(code, 1);
+
+                /* Set loop variable as a runtime value */
                 emit_i32(code, TAG_INT);
                 emit_local_get(code, i_idx);
                 emit_call(code, RT_VAL_NEW);
+                emit_local_set(code, elem_idx);
+            } else {
+                clause_is_range[c] = 0;
+                int arr_src = locals_add(locals, "__lc_src");
+                int i_idx = locals_add(locals, "__lc_i");
+                int len_idx = locals_add(locals, "__lc_len");
+                clause_i_locals[c] = i_idx;
+
+                compile_expr(iter, code, locals, ctx);
+                emit_local_set(code, arr_src);
+                emit_local_get(code, arr_src);
+                emit_call(code, RT_ARR_LEN);
+                emit_local_set(code, len_idx);
+                emit_i32(code, 0);
+                emit_local_set(code, i_idx);
+
+                buf_byte(code, OP_BLOCK);
+                buf_byte(code, WASM_TYPE_VOID);
+                buf_byte(code, OP_LOOP);
+                buf_byte(code, WASM_TYPE_VOID);
+
+                emit_local_get(code, i_idx);
+                emit_local_get(code, len_idx);
+                buf_byte(code, OP_I32_GE_S);
+                buf_byte(code, OP_BR_IF);
+                buf_leb128_u(code, 1);
+
+                /* Load element from array */
+                emit_local_get(code, arr_src);
+                emit_i32(code, TAG_INT);
+                emit_local_get(code, i_idx);
+                emit_call(code, RT_VAL_NEW);
+                emit_call(code, RT_ARR_GET);
+                emit_local_set(code, elem_idx);
             }
-            emit_call(code, RT_ARR_GET);
-            emit_local_set(code, elem_idx);
 
             /* Optional condition */
             if (c < node->list_comp.clause_conds.len && node->list_comp.clause_conds.items[c]) {
@@ -1557,24 +1705,19 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         emit_local_get(code, result_arr);
         compile_expr(node->list_comp.element, code, locals, ctx);
         emit_call(code, RT_ARR_PUSH);
+
         /* Close conditions and loops */
         for (int c = node->list_comp.clause_pats.len - 1; c >= 0; c--) {
             if (c < node->list_comp.clause_conds.len && node->list_comp.clause_conds.items[c]) {
-                buf_byte(code, OP_END);
+                buf_byte(code, OP_END); /* end if */
             }
 
-            /* Increment and loop */
-            {
-                char iname[32];
-                snprintf(iname, sizeof(iname), "__lc_i");
-                int ii = locals_find(locals, iname);
-                if (ii >= 0) {
-                    emit_local_get(code, ii);
-                    emit_i32(code, 1);
-                    buf_byte(code, OP_I32_ADD);
-                    emit_local_set(code, ii);
-                }
-            }
+            /* Increment and loop back */
+            int ii = clause_i_locals[c];
+            emit_local_get(code, ii);
+            emit_i32(code, 1);
+            buf_byte(code, OP_I32_ADD);
+            emit_local_set(code, ii);
             buf_byte(code, OP_BR);
             buf_leb128_u(code, 0);
             buf_byte(code, OP_END); /* loop */
@@ -1889,7 +2032,7 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         if (node->fn_decl.name) {
             int fidx = funcs_find(ctx->funcs, node->fn_decl.name);
             if (fidx >= 0) {
-                emit_val_new(code, TAG_FUNC, USER_FUNC_BASE + fidx);
+                emit_val_new(code, TAG_FUNC, NUM_RT_FUNCS + fidx);
             } else {
                 emit_null(code);
             }
@@ -2368,6 +2511,12 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
     /* ---- While loop ---- */
 
     case NODE_WHILE: {
+        int saved_break = ctx->break_depth;
+        int saved_continue = ctx->continue_depth;
+        /* while: block(break) > loop > body
+           From body: br 0 = loop (continue), br 1 = block (break) */
+        ctx->break_depth = 1;
+        ctx->continue_depth = 0;
         buf_byte(code, OP_BLOCK);
         buf_byte(code, WASM_TYPE_VOID);
         buf_byte(code, OP_LOOP);
@@ -2382,12 +2531,16 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         buf_leb128_u(code, 0);
         buf_byte(code, OP_END); /* loop */
         buf_byte(code, OP_END); /* block */
+        ctx->break_depth = saved_break;
+        ctx->continue_depth = saved_continue;
         break;
     }
 
     /* ---- For loop ---- */
 
     case NODE_FOR: {
+        int saved_break = ctx->break_depth;
+        int saved_continue = ctx->continue_depth;
         const char *var_name = "__for_elem";
         if (node->for_loop.pattern && node->for_loop.pattern->tag == NODE_PAT_IDENT)
             var_name = node->for_loop.pattern->pat_ident.name;
@@ -2417,9 +2570,12 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             int raw_idx = locals_add(locals, "__for_ri");
             emit_local_set(code, raw_idx);
 
-            buf_byte(code, OP_BLOCK);
+            /* Structure: block(break) > loop > block(continue) > body
+               break = br 2, continue = br 0 (jumps to end of inner block,
+               falls through to increment, then br back to loop) */
+            buf_byte(code, OP_BLOCK);       /* break target */
             buf_byte(code, WASM_TYPE_VOID);
-            buf_byte(code, OP_LOOP);
+            buf_byte(code, OP_LOOP);        /* loop back-edge */
             buf_byte(code, WASM_TYPE_VOID);
 
             /* Check: raw_i >= end -> break */
@@ -2430,14 +2586,19 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             buf_leb128_u(code, 1);
 
             /* Create value for loop variable */
-            emit_int_val(code, 0); /* placeholder */
-            buf_byte(code, OP_DROP);
             emit_i32(code, TAG_INT);
             emit_local_get(code, raw_idx);
             emit_call(code, RT_VAL_NEW);
             emit_local_set(code, idx);
 
+            /* From body: br 0 = end of continue block (then falls to increment),
+               br 2 = break (exits outer block) */
+            ctx->continue_depth = 0;
+            ctx->break_depth = 2;
+            buf_byte(code, OP_BLOCK);       /* continue target */
+            buf_byte(code, WASM_TYPE_VOID);
             compile_block(node->for_loop.body, code, locals, ctx);
+            buf_byte(code, OP_END);         /* end continue block */
 
             /* Increment */
             emit_local_get(code, raw_idx);
@@ -2463,7 +2624,7 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             emit_i32(code, 0);
             emit_local_set(code, i_idx);
 
-            buf_byte(code, OP_BLOCK);
+            buf_byte(code, OP_BLOCK);       /* break target */
             buf_byte(code, WASM_TYPE_VOID);
             buf_byte(code, OP_LOOP);
             buf_byte(code, WASM_TYPE_VOID);
@@ -2487,7 +2648,13 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
                 compile_pattern_bindings(node->for_loop.pattern, elem_idx, code, locals, ctx);
             }
 
+            /* From body: br 0 = end of continue block, br 2 = break */
+            ctx->continue_depth = 0;
+            ctx->break_depth = 2;
+            buf_byte(code, OP_BLOCK);       /* continue target */
+            buf_byte(code, WASM_TYPE_VOID);
             compile_block(node->for_loop.body, code, locals, ctx);
+            buf_byte(code, OP_END);         /* end continue block */
 
             emit_local_get(code, i_idx);
             emit_i32(code, 1);
@@ -2498,12 +2665,18 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             buf_byte(code, OP_END); /* loop */
             buf_byte(code, OP_END); /* block */
         }
+        ctx->break_depth = saved_break;
+        ctx->continue_depth = saved_continue;
         break;
     }
 
     /* ---- Loop ---- */
 
     case NODE_LOOP: {
+        int saved_break = ctx->break_depth;
+        int saved_continue = ctx->continue_depth;
+        ctx->break_depth = 1;
+        ctx->continue_depth = 0;
         buf_byte(code, OP_BLOCK);
         buf_byte(code, WASM_TYPE_VOID);
         buf_byte(code, OP_LOOP);
@@ -2513,6 +2686,8 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         buf_leb128_u(code, 0);
         buf_byte(code, OP_END); /* loop */
         buf_byte(code, OP_END); /* block */
+        ctx->break_depth = saved_break;
+        ctx->continue_depth = saved_continue;
         break;
     }
 
@@ -2520,19 +2695,22 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
 
     case NODE_BREAK:
         buf_byte(code, OP_BR);
-        buf_leb128_u(code, 1); /* break to outer block */
+        buf_leb128_u(code, (uint32_t)ctx->break_depth);
         break;
 
     /* ---- Continue ---- */
 
     case NODE_CONTINUE:
         buf_byte(code, OP_BR);
-        buf_leb128_u(code, 0); /* continue to loop header */
+        buf_leb128_u(code, (uint32_t)ctx->continue_depth);
         break;
 
     /* ---- If statement ---- */
 
     case NODE_IF: {
+        /* Bump break/continue depths since if adds a block level */
+        ctx->break_depth++;
+        ctx->continue_depth++;
         compile_expr(node->if_expr.cond, code, locals, ctx);
         emit_call(code, RT_VAL_TRUTHY);
         buf_byte(code, OP_IF);
@@ -2540,6 +2718,8 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         compile_block(node->if_expr.then, code, locals, ctx);
         for (int i = 0; i < node->if_expr.elif_conds.len; i++) {
             buf_byte(code, OP_ELSE);
+            ctx->break_depth++;
+            ctx->continue_depth++;
             compile_expr(node->if_expr.elif_conds.items[i], code, locals, ctx);
             emit_call(code, RT_VAL_TRUTHY);
             buf_byte(code, OP_IF);
@@ -2553,7 +2733,11 @@ static void compile_stmt(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         buf_byte(code, OP_END);
         for (int i = 0; i < node->if_expr.elif_conds.len; i++) {
             buf_byte(code, OP_END);
+            ctx->break_depth--;
+            ctx->continue_depth--;
         }
+        ctx->break_depth--;
+        ctx->continue_depth--;
         break;
     }
 
@@ -3564,11 +3748,174 @@ static void emit_rt_val_to_str(WasmBuf *body) {
     }
     buf_byte(body, OP_ELSE);
 
+    /* TAG_MAP */
+    emit_local_get(body, tag);
+    emit_i32(body, TAG_MAP);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    {
+        /* Format as #{key: val, ...} */
+        emit_inline_str(body, "#{", 6);
+        int result = 2;
+        emit_local_set(body, result);
+        /* Get map data ptr -> dp */
+        emit_local_get(body, 0);
+        emit_call(body, RT_VAL_I32);
+        int dp = 3;
+        emit_local_set(body, dp);
+        /* len at dp+4 */
+        emit_local_get(body, dp);
+        emit_i32(body, 4);
+        buf_byte(body, OP_I32_ADD);
+        buf_byte(body, OP_I32_LOAD);
+        buf_leb128_u(body, 2);
+        buf_leb128_u(body, 0);
+        int len = 4;
+        emit_local_set(body, len);
+        /* Loop */
+        emit_i32(body, 0);
+        int idx = 5;
+        emit_local_set(body, idx);
+        buf_byte(body, OP_BLOCK); buf_byte(body, WASM_TYPE_VOID);
+        buf_byte(body, OP_LOOP); buf_byte(body, WASM_TYPE_VOID);
+        emit_local_get(body, idx);
+        emit_local_get(body, len);
+        buf_byte(body, OP_I32_GE_S);
+        buf_byte(body, OP_BR_IF); buf_leb128_u(body, 1);
+        /* separator */
+        emit_local_get(body, idx);
+        emit_i32(body, 0);
+        buf_byte(body, OP_I32_GT_S);
+        buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_VOID);
+        emit_local_get(body, result);
+        emit_inline_str(body, ", ", 6);
+        emit_call(body, RT_STR_CAT);
+        emit_local_set(body, result);
+        buf_byte(body, OP_END);
+        /* key at dp + 8 + idx*8 */
+        emit_local_get(body, dp);
+        emit_i32(body, 8);
+        buf_byte(body, OP_I32_ADD);
+        emit_local_get(body, idx);
+        emit_i32(body, 8);
+        buf_byte(body, OP_I32_MUL);
+        buf_byte(body, OP_I32_ADD);
+        buf_byte(body, OP_I32_LOAD);
+        buf_leb128_u(body, 2);
+        buf_leb128_u(body, 0);
+        emit_call(body, RT_VAL_TO_STR);
+        emit_local_set(body, 6);
+        emit_local_get(body, result);
+        emit_local_get(body, 6);
+        emit_call(body, RT_STR_CAT);
+        emit_local_set(body, result);
+        /* ": " */
+        emit_local_get(body, result);
+        emit_inline_str(body, ": ", 6);
+        emit_call(body, RT_STR_CAT);
+        emit_local_set(body, result);
+        /* val at dp + 12 + idx*8 */
+        emit_local_get(body, dp);
+        emit_i32(body, 12);
+        buf_byte(body, OP_I32_ADD);
+        emit_local_get(body, idx);
+        emit_i32(body, 8);
+        buf_byte(body, OP_I32_MUL);
+        buf_byte(body, OP_I32_ADD);
+        buf_byte(body, OP_I32_LOAD);
+        buf_leb128_u(body, 2);
+        buf_leb128_u(body, 0);
+        emit_call(body, RT_VAL_TO_STR);
+        emit_local_set(body, 6);
+        emit_local_get(body, result);
+        emit_local_get(body, 6);
+        emit_call(body, RT_STR_CAT);
+        emit_local_set(body, result);
+        /* i++ */
+        emit_local_get(body, idx);
+        emit_i32(body, 1);
+        buf_byte(body, OP_I32_ADD);
+        emit_local_set(body, idx);
+        buf_byte(body, OP_BR); buf_leb128_u(body, 0);
+        buf_byte(body, OP_END); /* loop */
+        buf_byte(body, OP_END); /* block */
+        /* Append "}" */
+        emit_local_get(body, result);
+        emit_inline_str(body, "}", 6);
+        emit_call(body, RT_STR_CAT);
+    }
+    buf_byte(body, OP_ELSE);
+
+    /* TAG_TUPLE */
+    emit_local_get(body, tag);
+    emit_i32(body, TAG_TUPLE);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    {
+        /* Format as (a, b, c) - similar to array but with parens */
+        emit_inline_str(body, "(", 6);
+        int result = 2;
+        emit_local_set(body, result);
+        emit_local_get(body, 0);
+        emit_call(body, RT_ARR_LEN);
+        int len = 3;
+        emit_local_set(body, len);
+        emit_i32(body, 0);
+        int idx = 4;
+        emit_local_set(body, idx);
+        buf_byte(body, OP_BLOCK); buf_byte(body, WASM_TYPE_VOID);
+        buf_byte(body, OP_LOOP); buf_byte(body, WASM_TYPE_VOID);
+        emit_local_get(body, idx);
+        emit_local_get(body, len);
+        buf_byte(body, OP_I32_GE_S);
+        buf_byte(body, OP_BR_IF); buf_leb128_u(body, 1);
+        emit_local_get(body, idx);
+        emit_i32(body, 0);
+        buf_byte(body, OP_I32_GT_S);
+        buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_VOID);
+        emit_local_get(body, result);
+        emit_inline_str(body, ", ", 6);
+        emit_call(body, RT_STR_CAT);
+        emit_local_set(body, result);
+        buf_byte(body, OP_END);
+        emit_local_get(body, 0);
+        emit_call(body, RT_VAL_I32);
+        emit_i32(body, 8);
+        buf_byte(body, OP_I32_ADD);
+        emit_local_get(body, idx);
+        emit_i32(body, 4);
+        buf_byte(body, OP_I32_MUL);
+        buf_byte(body, OP_I32_ADD);
+        buf_byte(body, OP_I32_LOAD);
+        buf_leb128_u(body, 2);
+        buf_leb128_u(body, 0);
+        emit_call(body, RT_VAL_TO_STR);
+        int etmp = 5;
+        emit_local_set(body, etmp);
+        emit_local_get(body, result);
+        emit_local_get(body, etmp);
+        emit_call(body, RT_STR_CAT);
+        emit_local_set(body, result);
+        emit_local_get(body, idx);
+        emit_i32(body, 1);
+        buf_byte(body, OP_I32_ADD);
+        emit_local_set(body, idx);
+        buf_byte(body, OP_BR); buf_leb128_u(body, 0);
+        buf_byte(body, OP_END); /* loop */
+        buf_byte(body, OP_END); /* block */
+        emit_local_get(body, result);
+        emit_inline_str(body, ")", 6);
+        emit_call(body, RT_STR_CAT);
+    }
+    buf_byte(body, OP_ELSE);
+
     /* TAG_INT and everything else */
     emit_local_get(body, 0);
     emit_call(body, RT_VAL_I32);
     emit_call(body, RT_I32_TO_STR);
 
+    buf_byte(body, OP_END); /* tuple */
+    buf_byte(body, OP_END); /* map */
     buf_byte(body, OP_END); /* array */
     buf_byte(body, OP_END); /* float */
     buf_byte(body, OP_END); /* bool */
@@ -3621,25 +3968,104 @@ static void emit_rt_print_newline(WasmBuf *body) {
 
 /* $val_and(a, b) -> a if falsy else b */
 static void emit_rt_val_and(WasmBuf *body) {
+    /* local 0 = a, local 1 = b, local 2 = tag scratch */
+    /* Inline truthiness check for a:
+       null ptr -> falsy, TAG_NULL -> falsy,
+       TAG_BOOL -> check payload, TAG_INT -> check != 0,
+       everything else -> truthy */
     emit_local_get(body, 0);
-    emit_call(body, RT_VAL_TRUTHY);
-    buf_byte(body, OP_IF);
-    buf_byte(body, WASM_TYPE_I32);
-    emit_local_get(body, 1);
+    buf_byte(body, OP_I32_EQZ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    emit_local_get(body, 0); /* null ptr -> return a (falsy) */
     buf_byte(body, OP_ELSE);
     emit_local_get(body, 0);
+    buf_byte(body, OP_I32_LOAD);
+    buf_leb128_u(body, 2);
+    buf_leb128_u(body, 0); /* load tag */
+    emit_local_set(body, 2);
+    /* Check if TAG_NULL */
+    emit_local_get(body, 2);
+    emit_i32(body, TAG_NULL);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    emit_local_get(body, 0); /* null tag -> return a */
+    buf_byte(body, OP_ELSE);
+    /* Check if TAG_BOOL or TAG_INT */
+    emit_local_get(body, 2);
+    emit_i32(body, TAG_BOOL);
+    buf_byte(body, OP_I32_EQ);
+    emit_local_get(body, 2);
+    emit_i32(body, TAG_INT);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_I32_OR);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    /* Check payload */
+    emit_local_get(body, 0);
+    emit_i32(body, 4);
+    buf_byte(body, OP_I32_ADD);
+    buf_byte(body, OP_I32_LOAD);
+    buf_leb128_u(body, 2);
+    buf_leb128_u(body, 0); /* payload */
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    emit_local_get(body, 1); /* truthy -> return b */
+    buf_byte(body, OP_ELSE);
+    emit_local_get(body, 0); /* falsy -> return a */
+    buf_byte(body, OP_END);
+    buf_byte(body, OP_ELSE);
+    /* other types -> truthy, return b */
+    emit_local_get(body, 1);
+    buf_byte(body, OP_END);
+    buf_byte(body, OP_END);
     buf_byte(body, OP_END);
 }
 
 /* $val_or(a, b) -> a if truthy else b */
 static void emit_rt_val_or(WasmBuf *body) {
+    /* local 0 = a, local 1 = b, local 2 = tag scratch */
+    /* Inline truthiness check for a */
     emit_local_get(body, 0);
-    emit_call(body, RT_VAL_TRUTHY);
-    buf_byte(body, OP_IF);
-    buf_byte(body, WASM_TYPE_I32);
-    emit_local_get(body, 0);
+    buf_byte(body, OP_I32_EQZ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    emit_local_get(body, 1); /* null ptr -> return b */
     buf_byte(body, OP_ELSE);
-    emit_local_get(body, 1);
+    emit_local_get(body, 0);
+    buf_byte(body, OP_I32_LOAD);
+    buf_leb128_u(body, 2);
+    buf_leb128_u(body, 0); /* load tag */
+    emit_local_set(body, 2);
+    /* Check if TAG_NULL */
+    emit_local_get(body, 2);
+    emit_i32(body, TAG_NULL);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    emit_local_get(body, 1); /* null tag -> return b */
+    buf_byte(body, OP_ELSE);
+    /* Check if TAG_BOOL or TAG_INT */
+    emit_local_get(body, 2);
+    emit_i32(body, TAG_BOOL);
+    buf_byte(body, OP_I32_EQ);
+    emit_local_get(body, 2);
+    emit_i32(body, TAG_INT);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_I32_OR);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    /* Check payload */
+    emit_local_get(body, 0);
+    emit_i32(body, 4);
+    buf_byte(body, OP_I32_ADD);
+    buf_byte(body, OP_I32_LOAD);
+    buf_leb128_u(body, 2);
+    buf_leb128_u(body, 0); /* payload */
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    emit_local_get(body, 0); /* truthy -> return a */
+    buf_byte(body, OP_ELSE);
+    emit_local_get(body, 1); /* falsy -> return b */
+    buf_byte(body, OP_END);
+    buf_byte(body, OP_ELSE);
+    /* other types -> truthy, return a */
+    emit_local_get(body, 0);
+    buf_byte(body, OP_END);
+    buf_byte(body, OP_END);
     buf_byte(body, OP_END);
 }
 
@@ -3739,11 +4165,82 @@ static void emit_rt_map_set(WasmBuf *body) {
 
 /* $map_get(map_val, key_val) -> i32 (value or null) */
 static void emit_rt_map_get(WasmBuf *body) {
-    /* Linear scan for matching key */
-    /* Returns null if not found */
+    /* local 0=map, 1=key, 2=dp, 3=len, 4=i, 5=k_ptr */
+    /* Linear scan for matching key by comparing payloads */
+    emit_local_get(body, 0);
+    emit_call(body, RT_VAL_I32);
+    int dp = 2;
+    emit_local_set(body, dp);
+    /* len at dp+4 */
+    emit_local_get(body, dp);
+    emit_i32(body, 4);
+    buf_byte(body, OP_I32_ADD);
+    buf_byte(body, OP_I32_LOAD);
+    buf_leb128_u(body, 2);
+    buf_leb128_u(body, 0);
+    int len = 3;
+    emit_local_set(body, len);
+    /* Loop */
+    emit_i32(body, 0);
+    int idx = 4;
+    emit_local_set(body, idx);
+    buf_byte(body, OP_BLOCK); buf_byte(body, WASM_TYPE_I32);
+    buf_byte(body, OP_LOOP); buf_byte(body, WASM_TYPE_VOID);
+    /* if i >= len, return null */
+    emit_local_get(body, idx);
+    emit_local_get(body, len);
+    buf_byte(body, OP_I32_GE_S);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_VOID);
     emit_i32(body, TAG_NULL);
     emit_i32(body, 0);
     emit_call(body, RT_VAL_NEW);
+    buf_byte(body, OP_BR); buf_leb128_u(body, 2); /* break with value */
+    buf_byte(body, OP_END);
+    /* key at dp + 8 + i*8 */
+    emit_local_get(body, dp);
+    emit_i32(body, 8);
+    buf_byte(body, OP_I32_ADD);
+    emit_local_get(body, idx);
+    emit_i32(body, 8);
+    buf_byte(body, OP_I32_MUL);
+    buf_byte(body, OP_I32_ADD);
+    buf_byte(body, OP_I32_LOAD);
+    buf_leb128_u(body, 2);
+    buf_leb128_u(body, 0);
+    int kptr = 5;
+    emit_local_set(body, kptr);
+    /* Compare key payloads (i32 values - string data ptrs) */
+    emit_local_get(body, kptr);
+    emit_call(body, RT_VAL_I32);
+    emit_local_get(body, 1);
+    emit_call(body, RT_VAL_I32);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_VOID);
+    /* Found! Return value at dp + 12 + i*8 */
+    emit_local_get(body, dp);
+    emit_i32(body, 12);
+    buf_byte(body, OP_I32_ADD);
+    emit_local_get(body, idx);
+    emit_i32(body, 8);
+    buf_byte(body, OP_I32_MUL);
+    buf_byte(body, OP_I32_ADD);
+    buf_byte(body, OP_I32_LOAD);
+    buf_leb128_u(body, 2);
+    buf_leb128_u(body, 0);
+    buf_byte(body, OP_BR); buf_leb128_u(body, 2); /* break with value */
+    buf_byte(body, OP_END);
+    /* i++ */
+    emit_local_get(body, idx);
+    emit_i32(body, 1);
+    buf_byte(body, OP_I32_ADD);
+    emit_local_set(body, idx);
+    buf_byte(body, OP_BR); buf_leb128_u(body, 0); /* loop */
+    buf_byte(body, OP_END); /* loop */
+    /* Should not reach here, but provide a default */
+    emit_i32(body, TAG_NULL);
+    emit_i32(body, 0);
+    emit_call(body, RT_VAL_NEW);
+    buf_byte(body, OP_END); /* block */
 }
 
 /* $val_index(obj, idx) -> i32 */
@@ -3798,20 +4295,21 @@ static void emit_rt_val_index_set(WasmBuf *body) {
 }
 
 /* $val_field(obj, name_str) -> i32
-   Get field by name from struct. */
+   Get field by name - delegates to map_get for map-based objects. */
 static void emit_rt_val_field(WasmBuf *body) {
-    /* For structs: linear scan fields by name comparison */
-    /* Simplified: return null (full implementation would iterate) */
-    emit_i32(body, TAG_NULL);
-    emit_i32(body, 0);
-    emit_call(body, RT_VAL_NEW);
+    /* local 0 = obj, local 1 = name_str */
+    emit_local_get(body, 0);
+    emit_local_get(body, 1);
+    emit_call(body, RT_MAP_GET);
 }
 
-/* $val_field_set(obj, name_str, val) -> i32 */
+/* $val_field_set(obj, name_str, val) -> void */
 static void emit_rt_val_field_set(WasmBuf *body) {
-    /* Stub: no-op for now */
-    buf_byte(body, OP_NOP);
-    /* void function - no return value */
+    /* local 0 = obj, local 1 = name_str, local 2 = val */
+    emit_local_get(body, 0);
+    emit_local_get(body, 1);
+    emit_local_get(body, 2);
+    emit_call(body, RT_MAP_SET);
 }
 
 /* $struct_new(name_str, n_fields) -> i32 (struct value)
@@ -4088,6 +4586,94 @@ typedef struct {
     int n_params;
 } FuncInfo;
 
+/* Recursively collect lambdas and nested fn decls from any node */
+static int collect_nested(Node *node, FuncInfo *out, int max, FuncMap *funcs, int count);
+
+static int collect_nested_list(NodeList *list, FuncInfo *out, int max, FuncMap *funcs, int count) {
+    for (int i = 0; i < list->len && count < max; i++)
+        count = collect_nested(list->items[i], out, max, funcs, count);
+    return count;
+}
+
+static int collect_nested(Node *node, FuncInfo *out, int max, FuncMap *funcs, int count) {
+    if (!node || count >= max) return count;
+
+    if (node->tag == NODE_LAMBDA) {
+        /* Assign a synthetic name */
+        char lname[64];
+        snprintf(lname, sizeof(lname), "__lambda_%d", count);
+        funcs_add(funcs, lname);
+        out[count].node = node;
+        out[count].n_params = node->lambda.params.len;
+        /* Stash the func index in node for later retrieval.
+           We abuse the is_generator field's high bits for this. */
+        node->lambda.is_generator = (node->lambda.is_generator & 1) | ((count) << 16);
+        count++;
+        /* Also scan lambda body for nested lambdas */
+        count = collect_nested(node->lambda.body, out, max, funcs, count);
+        return count;
+    }
+
+    /* Scan children based on node type */
+    switch (node->tag) {
+    case NODE_BLOCK:
+        count = collect_nested_list(&node->block.stmts, out, max, funcs, count);
+        if (node->block.expr) count = collect_nested(node->block.expr, out, max, funcs, count);
+        break;
+    case NODE_LET: case NODE_VAR:
+        if (node->let.value) count = collect_nested(node->let.value, out, max, funcs, count);
+        break;
+    case NODE_CONST:
+        if (node->const_.value) count = collect_nested(node->const_.value, out, max, funcs, count);
+        break;
+    case NODE_EXPR_STMT:
+        if (node->expr_stmt.expr) count = collect_nested(node->expr_stmt.expr, out, max, funcs, count);
+        break;
+    case NODE_ASSIGN:
+        if (node->assign.value) count = collect_nested(node->assign.value, out, max, funcs, count);
+        break;
+    case NODE_CALL:
+        count = collect_nested(node->call.callee, out, max, funcs, count);
+        count = collect_nested_list(&node->call.args, out, max, funcs, count);
+        break;
+    case NODE_BINOP:
+        count = collect_nested(node->binop.left, out, max, funcs, count);
+        count = collect_nested(node->binop.right, out, max, funcs, count);
+        break;
+    case NODE_IF:
+        count = collect_nested(node->if_expr.then, out, max, funcs, count);
+        if (node->if_expr.else_branch)
+            count = collect_nested(node->if_expr.else_branch, out, max, funcs, count);
+        count = collect_nested_list(&node->if_expr.elif_thens, out, max, funcs, count);
+        break;
+    case NODE_FOR:
+        count = collect_nested(node->for_loop.body, out, max, funcs, count);
+        break;
+    case NODE_WHILE:
+        count = collect_nested(node->while_loop.body, out, max, funcs, count);
+        break;
+    case NODE_RETURN:
+        if (node->ret.value) count = collect_nested(node->ret.value, out, max, funcs, count);
+        break;
+    case NODE_FN_DECL:
+        /* Nested fn decl - collect it and scan its body */
+        if (node->fn_decl.name) {
+            /* Only collect if not already known (top-level ones are collected separately) */
+            if (funcs_find(funcs, node->fn_decl.name) < 0) {
+                funcs_add(funcs, node->fn_decl.name);
+                out[count].node = node;
+                out[count].n_params = node->fn_decl.params.len;
+                count++;
+            }
+        }
+        if (node->fn_decl.body) count = collect_nested(node->fn_decl.body, out, max, funcs, count);
+        break;
+    default:
+        break;
+    }
+    return count;
+}
+
 static int collect_functions(Node *program, FuncInfo *out, int max, FuncMap *funcs) {
     if (!program || program->tag != NODE_PROGRAM) return 0;
     int count = 0;
@@ -4125,6 +4711,8 @@ static int collect_functions(Node *program, FuncInfo *out, int max, FuncMap *fun
             }
         }
     }
+    /* Recursively scan for lambdas and nested fn decls */
+    count = collect_nested_list(stmts, out, max, funcs, count);
     return count;
 }
 
@@ -4216,6 +4804,25 @@ static void build_rt_cmp_func(WasmBuf *out, int n_params, int n_extra, uint8_t o
    Main transpiler entry point
    ======================================================================== */
 
+/* Map arity to type index for (i32 x N) -> i32 user functions */
+static int arity_to_type(int arity) {
+    /* type 1: () -> i32, type 2: (i32) -> i32, type 3: (i32,i32) -> i32,
+       type 5: (i32,i32,i32) -> i32, type 9: (i32 x4) -> i32,
+       type 10..13: (i32 x 5..8) -> i32 */
+    switch (arity) {
+    case 0: return 1;
+    case 1: return 2;
+    case 2: return 3;
+    case 3: return 5;
+    case 4: return 9;
+    case 5: return 10;
+    case 6: return 11;
+    case 7: return 12;
+    case 8: return 13;
+    default: return 2; /* fallback, should not happen for typical code */
+    }
+}
+
 int transpile_wasm(Node *program, const char *filename, const char *out_path) {
     (void)filename;
 
@@ -4285,26 +4892,37 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
         defer_list_init(&ctx.defers);
         ctx.loop_depth = 0;
         ctx.in_loop = 0;
+        ctx.break_depth = 1;
+        ctx.continue_depth = 0;
 
         /* Add parameters */
-        for (int p = 0; p < fn->fn_decl.params.len; p++) {
-            const char *pname = fn->fn_decl.params.items[p].name;
+        ParamList *params;
+        Node *fn_body;
+        if (fn->tag == NODE_LAMBDA) {
+            params = &fn->lambda.params;
+            fn_body = fn->lambda.body;
+        } else {
+            params = &fn->fn_decl.params;
+            fn_body = fn->fn_decl.body;
+        }
+        for (int p = 0; p < params->len; p++) {
+            const char *pname = params->items[p].name;
             if (pname) locals_add(&locals, pname);
             else locals_add(&locals, "_");
         }
 
         /* Compile body */
-        if (fn->fn_decl.body) {
-            if (fn->fn_decl.body->tag == NODE_BLOCK) {
-                NodeList *stmts = &fn->fn_decl.body->block.stmts;
+        if (fn_body) {
+            if (fn_body->tag == NODE_BLOCK) {
+                NodeList *stmts = &fn_body->block.stmts;
                 for (int si = 0; si < stmts->len; si++)
                     compile_stmt(stmts->items[si], &body, &locals, &ctx);
-                if (fn->fn_decl.body->block.expr)
-                    compile_expr(fn->fn_decl.body->block.expr, &body, &locals, &ctx);
+                if (fn_body->block.expr)
+                    compile_expr(fn_body->block.expr, &body, &locals, &ctx);
                 else
                     emit_null(&body);
             } else {
-                compile_expr(fn->fn_decl.body, &body, &locals, &ctx);
+                compile_expr(fn_body, &body, &locals, &ctx);
             }
         } else {
             emit_null(&body);
@@ -4315,7 +4933,7 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
 
         buf_byte(&body, OP_END);
 
-        param_counts[i] = fn->fn_decl.params.len;
+        param_counts[i] = params->len;
         local_counts[i] = locals.n_locals;
         compiled_funcs[i] = body;
         locals_free(&locals);
@@ -4338,6 +4956,8 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
         defer_list_init(&ctx.defers);
         ctx.loop_depth = 0;
         ctx.in_loop = 0;
+        ctx.break_depth = 1;
+        ctx.continue_depth = 0;
 
         if (program->tag == NODE_PROGRAM) {
             NodeList *stmts = &program->program.stmts;
@@ -4388,80 +5008,89 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
            5: (i32, i32, i32) -> i32             (ternary returning val)
            6: (i32, i32, i32) -> void            (ternary void)
            7: () -> void                         (nullary void)
-           8+: user function types
+           8: (i32) -> void                      (unary void)
+           9: (i32,i32,i32,i32) -> i32           (4-ary returning val)
+          10: (i32 x5) -> i32
+          11: (i32 x6) -> i32
+          12: (i32 x7) -> i32
+          13: (i32 x8) -> i32
+          14+: user function types (only for arities > 8)
         */
 
-        int n_base_types = 9;
-        int total_types = n_base_types + total_user_funcs;
+        /* Figure out which user funcs need custom types (arity > 8) */
+        int n_base_types = 14;
+        int n_custom_types = 0;
+        for (int i = 0; i < n_funcs; i++) {
+            if (fn_infos[i].n_params > 8) n_custom_types++;
+        }
+        int total_types = n_base_types + n_custom_types + (has_main ? 0 : 1);
         buf_leb128_u(&sec, (uint32_t)total_types);
 
-        /* type 0: (i32, i32, i32, i32) -> i32 */
+        /* type 0: (i32, i32, i32, i32) -> i32 (fd_write signature) */
         buf_byte(&sec, 0x60);
         buf_leb128_u(&sec, 4);
         for (int j = 0; j < 4; j++) buf_byte(&sec, WASM_TYPE_I32);
         buf_leb128_u(&sec, 1);
         buf_byte(&sec, WASM_TYPE_I32);
 
+        /* types 1-5, 9-13: (i32 x N) -> i32 for N = 0..8 */
         /* type 1: () -> i32 */
-        buf_byte(&sec, 0x60);
-        buf_leb128_u(&sec, 0);
-        buf_leb128_u(&sec, 1);
-        buf_byte(&sec, WASM_TYPE_I32);
+        buf_byte(&sec, 0x60); buf_leb128_u(&sec, 0);
+        buf_leb128_u(&sec, 1); buf_byte(&sec, WASM_TYPE_I32);
 
         /* type 2: (i32) -> i32 */
-        buf_byte(&sec, 0x60);
-        buf_leb128_u(&sec, 1);
-        buf_byte(&sec, WASM_TYPE_I32);
-        buf_leb128_u(&sec, 1);
-        buf_byte(&sec, WASM_TYPE_I32);
+        buf_byte(&sec, 0x60); buf_leb128_u(&sec, 1); buf_byte(&sec, WASM_TYPE_I32);
+        buf_leb128_u(&sec, 1); buf_byte(&sec, WASM_TYPE_I32);
 
         /* type 3: (i32, i32) -> i32 */
-        buf_byte(&sec, 0x60);
-        buf_leb128_u(&sec, 2);
-        buf_byte(&sec, WASM_TYPE_I32);
-        buf_byte(&sec, WASM_TYPE_I32);
-        buf_leb128_u(&sec, 1);
-        buf_byte(&sec, WASM_TYPE_I32);
+        buf_byte(&sec, 0x60); buf_leb128_u(&sec, 2);
+        buf_byte(&sec, WASM_TYPE_I32); buf_byte(&sec, WASM_TYPE_I32);
+        buf_leb128_u(&sec, 1); buf_byte(&sec, WASM_TYPE_I32);
 
         /* type 4: (i32, i32) -> void */
-        buf_byte(&sec, 0x60);
-        buf_leb128_u(&sec, 2);
-        buf_byte(&sec, WASM_TYPE_I32);
-        buf_byte(&sec, WASM_TYPE_I32);
+        buf_byte(&sec, 0x60); buf_leb128_u(&sec, 2);
+        buf_byte(&sec, WASM_TYPE_I32); buf_byte(&sec, WASM_TYPE_I32);
         buf_leb128_u(&sec, 0);
 
         /* type 5: (i32, i32, i32) -> i32 */
-        buf_byte(&sec, 0x60);
-        buf_leb128_u(&sec, 3);
+        buf_byte(&sec, 0x60); buf_leb128_u(&sec, 3);
         for (int j = 0; j < 3; j++) buf_byte(&sec, WASM_TYPE_I32);
-        buf_leb128_u(&sec, 1);
-        buf_byte(&sec, WASM_TYPE_I32);
+        buf_leb128_u(&sec, 1); buf_byte(&sec, WASM_TYPE_I32);
 
         /* type 6: (i32, i32, i32) -> void */
-        buf_byte(&sec, 0x60);
-        buf_leb128_u(&sec, 3);
+        buf_byte(&sec, 0x60); buf_leb128_u(&sec, 3);
         for (int j = 0; j < 3; j++) buf_byte(&sec, WASM_TYPE_I32);
         buf_leb128_u(&sec, 0);
 
         /* type 7: () -> void */
-        buf_byte(&sec, 0x60);
-        buf_leb128_u(&sec, 0);
-        buf_leb128_u(&sec, 0);
+        buf_byte(&sec, 0x60); buf_leb128_u(&sec, 0); buf_leb128_u(&sec, 0);
 
         /* type 8: (i32) -> void */
-        buf_byte(&sec, 0x60);
-        buf_leb128_u(&sec, 1);
-        buf_byte(&sec, WASM_TYPE_I32);
+        buf_byte(&sec, 0x60); buf_leb128_u(&sec, 1); buf_byte(&sec, WASM_TYPE_I32);
         buf_leb128_u(&sec, 0);
 
-        /* User function types (type 9+) - all take N i32 params, return i32 */
+        /* type 9: (i32 x4) -> i32 (same as type 0 but semantically for user funcs) */
+        buf_byte(&sec, 0x60); buf_leb128_u(&sec, 4);
+        for (int j = 0; j < 4; j++) buf_byte(&sec, WASM_TYPE_I32);
+        buf_leb128_u(&sec, 1); buf_byte(&sec, WASM_TYPE_I32);
+
+        /* types 10-13: (i32 x5..8) -> i32 */
+        for (int arity = 5; arity <= 8; arity++) {
+            buf_byte(&sec, 0x60); buf_leb128_u(&sec, (uint32_t)arity);
+            for (int j = 0; j < arity; j++) buf_byte(&sec, WASM_TYPE_I32);
+            buf_leb128_u(&sec, 1); buf_byte(&sec, WASM_TYPE_I32);
+        }
+
+        /* Custom types for user functions with arity > 8 */
         for (int i = 0; i < n_funcs; i++) {
-            buf_byte(&sec, 0x60);
-            buf_leb128_u(&sec, (uint32_t)fn_infos[i].n_params);
-            for (int p = 0; p < fn_infos[i].n_params; p++)
+            if (fn_infos[i].n_params > 8) {
+                buf_byte(&sec, 0x60);
+                buf_leb128_u(&sec, (uint32_t)fn_infos[i].n_params);
+                for (int p = 0; p < fn_infos[i].n_params; p++)
+                    buf_byte(&sec, WASM_TYPE_I32);
+                buf_leb128_u(&sec, 1);
                 buf_byte(&sec, WASM_TYPE_I32);
-            buf_leb128_u(&sec, 1);
-            buf_byte(&sec, WASM_TYPE_I32);
+            }
         }
         if (!has_main) {
             /* _start: () -> void (WASI convention) */
@@ -4584,10 +5213,14 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
         /* RT_STR_LEN: (i32) -> i32 = type 2 */
         buf_leb128_u(&sec, 2);
 
-        /* User function type indices (8+) */
-        int n_base_types = 9;
-        for (int i = 0; i < total_user_funcs; i++)
-            buf_leb128_u(&sec, (uint32_t)(n_base_types + i));
+        /* User function type indices - use arity-based types */
+        for (int i = 0; i < n_funcs; i++) {
+            buf_leb128_u(&sec, (uint32_t)arity_to_type(fn_infos[i].n_params));
+        }
+        if (!has_main) {
+            /* Synthesized main: () -> void = type 7 */
+            buf_leb128_u(&sec, 7);
+        }
 
         buf_section(&output, 3, &sec);
         buf_free(&sec);
@@ -4758,8 +5391,8 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
         build_rt_func(&sec, 0, 1, emit_rt_map_new);
         /* 27: $map_set (3 params, 2 extra) */
         build_rt_func(&sec, 3, 2, emit_rt_map_set);
-        /* 28: $map_get */
-        build_rt_func(&sec, 2, 0, emit_rt_map_get);
+        /* 28: $map_get (2 params, 4 extra: dp, len, i, kptr) */
+        build_rt_func(&sec, 2, 4, emit_rt_map_get);
         /* 29: $val_index */
         build_rt_func(&sec, 2, 1, emit_rt_val_index);
         /* 30: $val_index_set */
@@ -4773,9 +5406,9 @@ int transpile_wasm(Node *program, const char *filename, const char *out_path) {
         /* 34: $print_newline */
         build_rt_func(&sec, 0, 1, emit_rt_print_newline);
         /* 35: $val_and */
-        build_rt_func(&sec, 2, 0, emit_rt_val_and);
+        build_rt_func(&sec, 2, 1, emit_rt_val_and);
         /* 36: $val_or */
-        build_rt_func(&sec, 2, 0, emit_rt_val_or);
+        build_rt_func(&sec, 2, 1, emit_rt_val_or);
         /* 37-41: bit ops */
         build_rt_arith_func(&sec, 2, 1, OP_I32_AND);
         build_rt_arith_func(&sec, 2, 1, OP_I32_OR);
