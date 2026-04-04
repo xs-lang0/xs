@@ -669,6 +669,11 @@ static void compile_block(Node *block, WasmBuf *code, LocalMap *locals, Compiler
     if (block->tag == NODE_BLOCK) {
         for (int i = 0; i < block->block.stmts.len; i++)
             compile_stmt(block->block.stmts.items[i], code, locals, ctx);
+        /* Handle trailing expression (block as expression) */
+        if (block->block.expr) {
+            compile_expr(block->block.expr, code, locals, ctx);
+            buf_byte(code, OP_DROP); /* discard expression result in statement context */
+        }
     } else {
         compile_stmt(block, code, locals, ctx);
     }
