@@ -1284,12 +1284,35 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
     /* ---- Field access ---- */
 
     case NODE_FIELD: {
-        compile_expr(node->field.obj, code, locals, ctx);
         const char *fname = node->field.name;
-        int slen = 0;
-        int foff = strtab_add_with_len(ctx->strtab, fname, &slen);
-        emit_str_val(code, foff, slen);
-        emit_call(code, RT_VAL_FIELD);
+        /* Try to find field index at compile time */
+        int fidx = struct_field_index(ctx->structs, NULL, fname);
+        if (fidx >= 0) {
+            /* Direct index-based access */
+            compile_expr(node->field.obj, code, locals, ctx);
+            emit_call(code, RT_VAL_I32); /* get data pointer */
+            emit_i32(code, 4 + fidx * 4);
+            buf_byte(code, OP_I32_ADD);
+            buf_byte(code, OP_I32_LOAD);
+            buf_leb128_u(code, 2);
+            buf_leb128_u(code, 0);
+        } else {
+            /* String method call or unknown field - try method dispatch */
+            if (strcmp(fname, "len") == 0) {
+                compile_expr(node->field.obj, code, locals, ctx);
+                emit_call(code, RT_STR_LEN);
+            } else if (strcmp(fname, "push") == 0 || strcmp(fname, "upper") == 0) {
+                /* Method reference - just compile the object for now */
+                compile_expr(node->field.obj, code, locals, ctx);
+            } else {
+                /* Fallback: use RT_VAL_FIELD */
+                compile_expr(node->field.obj, code, locals, ctx);
+                int slen = 0;
+                int foff = strtab_add_with_len(ctx->strtab, fname, &slen);
+                emit_str_val(code, foff, slen);
+                emit_call(code, RT_VAL_FIELD);
+            }
+        }
         break;
     }
 
@@ -1431,24 +1454,34 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
 
     case NODE_STRUCT_INIT: {
         const char *path = node->struct_init.path ? node->struct_init.path : "Object";
-        int slen = 0;
-        int name_off = strtab_add_with_len(ctx->strtab, path, &slen);
-        emit_str_val(code, name_off, slen);
-        int si = struct_layouts_find(ctx->structs, path);
-        int nf = si >= 0 ? ctx->structs->layouts[si].n_fields : node->struct_init.fields.len;
-        emit_i32(code, nf);
-        emit_call(code, RT_STRUCT_NEW);
+        int nf = node->struct_init.fields.len;
+        /* Allocate: 4 (n_fields) + nf * 4 (value pointers) */
+        emit_i32(code, 4 + nf * 4);
+        emit_call(code, RT_ALLOC);
         int stmp = locals_add(locals, "__sinit");
-        emit_local_set(code, stmp);
-        for (int i = 0; i < node->struct_init.fields.len; i++) {
+        emit_local_tee(code, stmp);
+        /* Store n_fields */
+        emit_i32(code, nf);
+        buf_byte(code, OP_I32_STORE);
+        buf_leb128_u(code, 2);
+        buf_leb128_u(code, 0);
+        /* Store each field value at data_ptr + 4 + field_index * 4 */
+        for (int i = 0; i < nf; i++) {
+            const char *fname = node->struct_init.fields.items[i].key;
+            int fidx = struct_field_index(ctx->structs, path, fname);
+            if (fidx < 0) fidx = i; /* fallback to order */
             emit_local_get(code, stmp);
-            int fl = 0;
-            int foff = strtab_add_with_len(ctx->strtab, node->struct_init.fields.items[i].key, &fl);
-            emit_str_val(code, foff, fl);
+            emit_i32(code, 4 + fidx * 4);
+            buf_byte(code, OP_I32_ADD);
             compile_expr(node->struct_init.fields.items[i].val, code, locals, ctx);
-            emit_call(code, RT_VAL_FIELD_SET);
+            buf_byte(code, OP_I32_STORE);
+            buf_leb128_u(code, 2);
+            buf_leb128_u(code, 0);
         }
+        /* Create tagged value */
+        emit_i32(code, TAG_STRUCT);
         emit_local_get(code, stmp);
+        emit_call(code, RT_VAL_NEW);
         break;
     }
 
