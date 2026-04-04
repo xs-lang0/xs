@@ -1299,8 +1299,91 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             break;
         }
         if (strcmp(method, "upper") == 0) {
-            /* String upper: for now, return the string as-is (no in-WASM toupper) */
+            /* String upper: copy string, convert a-z to A-Z */
             compile_expr(node->method_call.obj, code, locals, ctx);
+            int sv = locals_add(locals, "__ustr");
+            emit_local_set(code, sv);
+            /* Get data ptr and length */
+            emit_local_get(code, sv);
+            emit_call(code, RT_VAL_I32);
+            int sp = locals_add(locals, "__usrc");
+            emit_local_set(code, sp);
+            emit_local_get(code, sv);
+            emit_i32(code, 8);
+            buf_byte(code, OP_I32_ADD);
+            buf_byte(code, OP_I32_LOAD);
+            buf_leb128_u(code, 2);
+            buf_leb128_u(code, 0);
+            int slen = locals_add(locals, "__ulen");
+            emit_local_set(code, slen);
+            /* Allocate new buffer */
+            emit_local_get(code, slen);
+            emit_i32(code, 1);
+            buf_byte(code, OP_I32_ADD);
+            emit_call(code, RT_ALLOC);
+            int dp = locals_add(locals, "__udst");
+            emit_local_set(code, dp);
+            /* Loop: copy and convert */
+            emit_i32(code, 0);
+            int ui = locals_add(locals, "__ui");
+            emit_local_set(code, ui);
+            buf_byte(code, OP_BLOCK); buf_byte(code, WASM_TYPE_VOID);
+            buf_byte(code, OP_LOOP); buf_byte(code, WASM_TYPE_VOID);
+            emit_local_get(code, ui);
+            emit_local_get(code, slen);
+            buf_byte(code, OP_I32_GE_S);
+            buf_byte(code, OP_BR_IF); buf_leb128_u(code, 1);
+            /* Load byte */
+            emit_local_get(code, sp);
+            emit_local_get(code, ui);
+            buf_byte(code, OP_I32_ADD);
+            buf_byte(code, OP_I32_LOAD8_U);
+            buf_leb128_u(code, 0);
+            buf_leb128_u(code, 0);
+            int ch = locals_add(locals, "__uch");
+            emit_local_set(code, ch);
+            /* If a-z, subtract 32 */
+            emit_local_get(code, ch);
+            emit_i32(code, 97); /* 'a' */
+            buf_byte(code, OP_I32_GE_S);
+            emit_local_get(code, ch);
+            emit_i32(code, 122); /* 'z' */
+            buf_byte(code, OP_I32_LE_S);
+            buf_byte(code, OP_I32_AND);
+            buf_byte(code, OP_IF); buf_byte(code, WASM_TYPE_VOID);
+            emit_local_get(code, ch);
+            emit_i32(code, 32);
+            buf_byte(code, OP_I32_SUB);
+            emit_local_set(code, ch);
+            buf_byte(code, OP_END);
+            /* Store byte */
+            emit_local_get(code, dp);
+            emit_local_get(code, ui);
+            buf_byte(code, OP_I32_ADD);
+            emit_local_get(code, ch);
+            buf_byte(code, OP_I32_STORE8);
+            buf_leb128_u(code, 0);
+            buf_leb128_u(code, 0);
+            /* i++ */
+            emit_local_get(code, ui);
+            emit_i32(code, 1);
+            buf_byte(code, OP_I32_ADD);
+            emit_local_set(code, ui);
+            buf_byte(code, OP_BR); buf_leb128_u(code, 0);
+            buf_byte(code, OP_END);
+            buf_byte(code, OP_END);
+            /* NUL terminate */
+            emit_local_get(code, dp);
+            emit_local_get(code, slen);
+            buf_byte(code, OP_I32_ADD);
+            emit_i32(code, 0);
+            buf_byte(code, OP_I32_STORE8);
+            buf_leb128_u(code, 0);
+            buf_leb128_u(code, 0);
+            /* Create string value */
+            emit_local_get(code, dp);
+            emit_local_get(code, slen);
+            emit_call(code, RT_STR_NEW);
             break;
         }
         if (strcmp(method, "lower") == 0) {
@@ -1412,12 +1495,24 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             compile_expr(node->field.obj, code, locals, ctx);
             emit_call(code, RT_STR_LEN);
         } else {
-            /* Use map-based field access for all objects */
-            compile_expr(node->field.obj, code, locals, ctx);
-            int slen = 0;
-            int foff = strtab_add_with_len(ctx->strtab, fname, &slen);
-            emit_str_val(code, foff, slen);
-            emit_call(code, RT_VAL_FIELD);
+            /* Try compile-time struct field index first */
+            int fidx = struct_field_index(ctx->structs, NULL, fname);
+            if (fidx >= 0) {
+                compile_expr(node->field.obj, code, locals, ctx);
+                emit_call(code, RT_VAL_I32); /* get data pointer */
+                emit_i32(code, 4 + fidx * 4);
+                buf_byte(code, OP_I32_ADD);
+                buf_byte(code, OP_I32_LOAD);
+                buf_leb128_u(code, 2);
+                buf_leb128_u(code, 0);
+            } else {
+                /* Map-based field access for class instances and dynamic objects */
+                compile_expr(node->field.obj, code, locals, ctx);
+                int slen = 0;
+                int foff = strtab_add_with_len(ctx->strtab, fname, &slen);
+                emit_str_val(code, foff, slen);
+                emit_call(code, RT_VAL_FIELD);
+            }
         }
         break;
     }
@@ -3754,8 +3849,8 @@ static void emit_rt_val_to_str(WasmBuf *body) {
     buf_byte(body, OP_I32_EQ);
     buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
     {
-        /* Format as #{key: val, ...} */
-        emit_inline_str(body, "#{", 6);
+        /* Format as {key: val, ...} */
+        emit_inline_str(body, "{", 6);
         int result = 2;
         emit_local_set(body, result);
         /* Get map data ptr -> dp */
