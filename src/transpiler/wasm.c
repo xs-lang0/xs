@@ -203,7 +203,7 @@ static void buf_f64(WasmBuf *b, double val) {
 #define TAG_RANGE   11
 
 /* Size of a value cell */
-#define VAL_SIZE 12
+#define VAL_SIZE 16
 
 /* ========================================================================
    String table for data segment
@@ -720,25 +720,33 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
     }
 
     case NODE_LIT_FLOAT: {
-        /* Store float bits as two i32s in the value cell.
-           payload = low 32 bits, extra = high 32 bits */
-        uint8_t raw[8];
-        memcpy(raw, &node->lit_float.fval, 8);
-        int32_t lo, hi;
-        memcpy(&lo, raw, 4);
-        memcpy(&hi, raw + 4, 4);
+        /* Store float: payload = integer part (for arithmetic),
+           extra = string table offset (for printing).
+           We pre-format the float as a string at compile time. */
+        double fval = node->lit_float.fval;
+        int32_t ipart = (int32_t)fval;
+        char fbuf[64];
+        snprintf(fbuf, sizeof(fbuf), "%g", fval);
+        int slen = 0;
+        int soff = strtab_add_with_len(ctx->strtab, fbuf, &slen);
         emit_i32(code, TAG_FLOAT);
-        emit_i32(code, lo);
+        emit_i32(code, ipart);
         emit_call(code, RT_VAL_NEW);
-        /* The extra field (bytes 8-11) gets set by val_new to 0.
-           We need to store the high bits there too.
-           val_new returns the pointer, store hi at ptr+8. */
+        /* Store string offset in extra field for val_to_str */
         {
             int tmp = locals_add(locals, "__ftmp");
             emit_local_tee(code, tmp);
             emit_i32(code, 8);
             buf_byte(code, OP_I32_ADD);
-            emit_i32(code, hi);
+            emit_i32(code, soff);
+            buf_byte(code, OP_I32_STORE);
+            buf_leb128_u(code, 2);
+            buf_leb128_u(code, 0);
+            /* Also store length at extra+4 */
+            emit_local_get(code, tmp);
+            emit_i32(code, 12);
+            buf_byte(code, OP_I32_ADD);
+            emit_i32(code, slen);
             buf_byte(code, OP_I32_STORE);
             buf_leb128_u(code, 2);
             buf_leb128_u(code, 0);
@@ -811,7 +819,6 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             emit_local_get(code, arr_tmp);
             compile_expr(node->lit_array.elems.items[i], code, locals, ctx);
             emit_call(code, RT_ARR_PUSH);
-            buf_byte(code, OP_DROP);
         }
         emit_local_get(code, arr_tmp);
         break;
@@ -827,7 +834,6 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             emit_local_get(code, arr_tmp);
             compile_expr(node->lit_array.elems.items[i], code, locals, ctx);
             emit_call(code, RT_ARR_PUSH);
-            buf_byte(code, OP_DROP);
         }
         /* retag: arr value cell tag -> TAG_TUPLE */
         emit_local_get(code, arr_tmp);
@@ -850,7 +856,6 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             compile_expr(node->lit_map.keys.items[i], code, locals, ctx);
             compile_expr(node->lit_map.vals.items[i], code, locals, ctx);
             emit_call(code, RT_MAP_SET);
-            buf_byte(code, OP_DROP);
         }
         emit_local_get(code, map_tmp);
         break;
@@ -1003,7 +1008,6 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             compile_expr(node->assign.target->index.index, code, locals, ctx);
             compile_expr(node->assign.value, code, locals, ctx);
             emit_call(code, RT_VAL_INDEX_SET);
-            buf_byte(code, OP_DROP);
             /* return the value */
             compile_expr(node->assign.value, code, locals, ctx);
         } else if (node->assign.target && node->assign.target->tag == NODE_FIELD) {
@@ -1015,7 +1019,6 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             emit_str_val(code, foff, slen);
             compile_expr(node->assign.value, code, locals, ctx);
             emit_call(code, RT_VAL_FIELD_SET);
-            buf_byte(code, OP_DROP);
             compile_expr(node->assign.value, code, locals, ctx);
         } else {
             compile_expr(node->assign.value, code, locals, ctx);
@@ -1092,8 +1095,6 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
                 compile_expr(node->call.args.items[0], code, locals, ctx);
                 compile_expr(node->call.args.items[1], code, locals, ctx);
                 emit_call(code, RT_ARR_PUSH);
-                buf_byte(code, OP_DROP);
-                emit_null(code);
                 break;
             }
             if (strcmp(name, "type") == 0 && nargs >= 1) {
@@ -1228,8 +1229,6 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
             compile_expr(node->method_call.obj, code, locals, ctx);
             compile_expr(node->method_call.args.items[0], code, locals, ctx);
             emit_call(code, RT_ARR_PUSH);
-            buf_byte(code, OP_DROP);
-            emit_null(code);
             break;
         }
         if (strcmp(method, "len") == 0 || strcmp(method, "length") == 0) {
@@ -1525,8 +1524,6 @@ static void compile_expr(Node *node, WasmBuf *code, LocalMap *locals, CompilerCt
         emit_local_get(code, result_arr);
         compile_expr(node->list_comp.element, code, locals, ctx);
         emit_call(code, RT_ARR_PUSH);
-        buf_byte(code, OP_DROP);
-
         /* Close conditions and loops */
         for (int c = node->list_comp.clause_pats.len - 1; c >= 0; c--) {
             if (c < node->list_comp.clause_conds.len && node->list_comp.clause_conds.items[c]) {
@@ -3367,110 +3364,112 @@ static void emit_rt_val_cmp(WasmBuf *body, uint8_t op) {
     emit_call(body, RT_VAL_NEW);
 }
 
+/* Helper: write a short literal string to memory and return str_new */
+static void emit_inline_str(WasmBuf *body, const char *s, int local_tmp) {
+    int len = (int)strlen(s);
+    emit_i32(body, len + 1);
+    emit_call(body, RT_ALLOC);
+    emit_local_set(body, local_tmp);
+    /* Write bytes 4 at a time, then remainder */
+    for (int i = 0; i < len; i++) {
+        emit_local_get(body, local_tmp);
+        if (i > 0) { emit_i32(body, i); buf_byte(body, OP_I32_ADD); }
+        emit_i32(body, (uint8_t)s[i]);
+        buf_byte(body, OP_I32_STORE8);
+        buf_leb128_u(body, 0);
+        buf_leb128_u(body, 0);
+    }
+    /* NUL terminator */
+    emit_local_get(body, local_tmp);
+    emit_i32(body, len);
+    buf_byte(body, OP_I32_ADD);
+    emit_i32(body, 0);
+    buf_byte(body, OP_I32_STORE8);
+    buf_leb128_u(body, 0);
+    buf_leb128_u(body, 0);
+    emit_local_get(body, local_tmp);
+    emit_i32(body, len);
+    emit_call(body, RT_STR_NEW);
+}
+
 /* $val_to_str(val: i32) -> i32 (string value)
    Convert any value to its string representation. */
 static void emit_rt_val_to_str(WasmBuf *body) {
-    /* If already a string, return as-is */
+    /* local 0 = val, local 1 = scratch */
+    /* null pointer */
     emit_local_get(body, 0);
     buf_byte(body, OP_I32_EQZ);
-    buf_byte(body, OP_IF);
-    buf_byte(body, WASM_TYPE_I32);
-    /* null pointer - return "null" string */
-    /* We need to return a string value, but we do not have the strtab here.
-       Instead, create an inline "null" by writing 4 bytes to memory. */
-    emit_i32(body, 5);
-    emit_call(body, RT_ALLOC);
-    int np = 1;
-    emit_local_tee(body, np);
-    emit_i32(body, 0x6C6C756E); /* "null" in LE: n=6E, u=75, l=6C, l=6C */
-    buf_byte(body, OP_I32_STORE);
-    buf_leb128_u(body, 2);
-    buf_leb128_u(body, 0);
-    emit_local_get(body, np);
-    emit_i32(body, 4);
-    buf_byte(body, OP_I32_ADD);
-    emit_i32(body, 0);
-    buf_byte(body, OP_I32_STORE8);
-    buf_leb128_u(body, 0);
-    buf_leb128_u(body, 0);
-    emit_local_get(body, np);
-    emit_i32(body, 4);
-    emit_call(body, RT_STR_NEW);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    emit_inline_str(body, "null", 1);
     buf_byte(body, OP_ELSE);
+
+    /* Get tag */
     emit_local_get(body, 0);
     emit_call(body, RT_VAL_TAG);
+    int tag = 1;
+    emit_local_set(body, tag);
+
+    /* TAG_NULL */
+    emit_local_get(body, tag);
+    emit_i32(body, TAG_NULL);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    emit_inline_str(body, "null", 1);
+    buf_byte(body, OP_ELSE);
+
+    /* TAG_STRING - return as is */
+    emit_local_get(body, tag);
     emit_i32(body, TAG_STRING);
     buf_byte(body, OP_I32_EQ);
-    buf_byte(body, OP_IF);
-    buf_byte(body, WASM_TYPE_I32);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
     emit_local_get(body, 0);
     buf_byte(body, OP_ELSE);
-    /* For int, bool, null - convert to string via i32_to_str */
-    emit_local_get(body, 0);
-    emit_call(body, RT_VAL_TAG);
+
+    /* TAG_BOOL */
+    emit_local_get(body, tag);
     emit_i32(body, TAG_BOOL);
     buf_byte(body, OP_I32_EQ);
-    buf_byte(body, OP_IF);
-    buf_byte(body, WASM_TYPE_I32);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
     emit_local_get(body, 0);
     emit_call(body, RT_VAL_I32);
-    buf_byte(body, OP_IF);
-    buf_byte(body, WASM_TYPE_I32);
-    /* "true" */
-    emit_i32(body, 5);
-    emit_call(body, RT_ALLOC);
-    int tp = 1;
-    emit_local_tee(body, tp);
-    emit_i32(body, 0x65757274); /* "true" LE */
-    buf_byte(body, OP_I32_STORE);
-    buf_leb128_u(body, 2);
-    buf_leb128_u(body, 0);
-    emit_local_get(body, tp);
-    emit_i32(body, 4);
-    buf_byte(body, OP_I32_ADD);
-    emit_i32(body, 0);
-    buf_byte(body, OP_I32_STORE8);
-    buf_leb128_u(body, 0);
-    buf_leb128_u(body, 0);
-    emit_local_get(body, tp);
-    emit_i32(body, 4);
-    emit_call(body, RT_STR_NEW);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    emit_inline_str(body, "true", 1);
     buf_byte(body, OP_ELSE);
-    /* "false" */
-    emit_i32(body, 6);
-    emit_call(body, RT_ALLOC);
-    int fp = 1;
-    emit_local_tee(body, fp);
-    emit_i32(body, 0x736C6166); /* "fals" LE */
-    buf_byte(body, OP_I32_STORE);
-    buf_leb128_u(body, 2);
-    buf_leb128_u(body, 0);
-    emit_local_get(body, fp);
-    emit_i32(body, 4);
-    buf_byte(body, OP_I32_ADD);
-    emit_i32(body, 0x65); /* "e" */
-    buf_byte(body, OP_I32_STORE8);
-    buf_leb128_u(body, 0);
-    buf_leb128_u(body, 0);
-    emit_local_get(body, fp);
-    emit_i32(body, 5);
-    buf_byte(body, OP_I32_ADD);
-    emit_i32(body, 0);
-    buf_byte(body, OP_I32_STORE8);
-    buf_leb128_u(body, 0);
-    buf_leb128_u(body, 0);
-    emit_local_get(body, fp);
-    emit_i32(body, 5);
-    emit_call(body, RT_STR_NEW);
+    emit_inline_str(body, "false", 1);
     buf_byte(body, OP_END);
     buf_byte(body, OP_ELSE);
-    /* Default: convert int payload to string */
+
+    /* TAG_FLOAT - read pre-formatted string from extra field */
+    emit_local_get(body, tag);
+    emit_i32(body, TAG_FLOAT);
+    buf_byte(body, OP_I32_EQ);
+    buf_byte(body, OP_IF); buf_byte(body, WASM_TYPE_I32);
+    /* extra field at offset 8 has string table offset, offset 12 has length */
+    emit_local_get(body, 0);
+    emit_i32(body, 8);
+    buf_byte(body, OP_I32_ADD);
+    buf_byte(body, OP_I32_LOAD);
+    buf_leb128_u(body, 2);
+    buf_leb128_u(body, 0); /* string data offset */
+    emit_local_get(body, 0);
+    emit_i32(body, 12);
+    buf_byte(body, OP_I32_ADD);
+    buf_byte(body, OP_I32_LOAD);
+    buf_leb128_u(body, 2);
+    buf_leb128_u(body, 0); /* string length */
+    emit_call(body, RT_STR_NEW);
+    buf_byte(body, OP_ELSE);
+
+    /* TAG_INT and everything else */
     emit_local_get(body, 0);
     emit_call(body, RT_VAL_I32);
     emit_call(body, RT_I32_TO_STR);
-    buf_byte(body, OP_END);
-    buf_byte(body, OP_END);
-    buf_byte(body, OP_END);
+
+    buf_byte(body, OP_END); /* float */
+    buf_byte(body, OP_END); /* bool */
+    buf_byte(body, OP_END); /* string */
+    buf_byte(body, OP_END); /* null tag */
+    buf_byte(body, OP_END); /* null ptr */
 }
 
 /* $print_newline() -> void */
