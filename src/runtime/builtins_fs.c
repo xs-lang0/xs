@@ -189,15 +189,16 @@ static Value *native_fs_join(Interp *ig, Value **a, int n) {
         if (VAL_TAG(a[j]) != XS_STR) continue;
         total += (int)strlen(a[j]->s) + 1;
     }
-    char *res = xs_malloc(total + 1); res[0] = '\0';
+    char *res = xs_malloc(total + 1);
+    char *p = res;
     for (int j = 0; j < n; j++) {
         if (VAL_TAG(a[j]) != XS_STR) continue;
-        if (j > 0 && res[0] != '\0') {
-            int rlen = (int)strlen(res);
-            if (rlen > 0 && res[rlen-1] != '/') strcat(res, "/");
-        }
-        strcat(res, a[j]->s);
+        if (p > res && p[-1] != '/') *p++ = '/';
+        size_t slen = strlen(a[j]->s);
+        memcpy(p, a[j]->s, slen);
+        p += slen;
     }
+    *p = '\0';
     Value *v = xs_str(res); free(res); return v;
 }
 
